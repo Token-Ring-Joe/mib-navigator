@@ -37,6 +37,16 @@ int main(int argc, char **argv)
     index.setFiles(parsed);
     const qint64 indexMs = indexTimer.elapsed();
 
+    // Diagnostics: SNMPB_ACCURACY_QUERIES="query1;query2" prints what the index returns for each.
+    for (const QString &query : QString::fromLocal8Bit(qgetenv("SNMPB_ACCURACY_QUERIES")).split(QLatin1Char(';'), Qt::SkipEmptyParts)) {
+        const auto found = index.search(query, 15);
+        std::cout << "QUERY " << query.toStdString() << " -> " << found.entries.size() << (found.truncated ? "+" : "") << " result(s) note=" << found.note.toStdString() << '\n';
+        for (const auto &e : found.entries)
+            std::cout << "   " << e.module.toStdString() << "::" << e.name.toStdString() << " [" << e.kind.toStdString() << "] oid="
+                      << (e.oid.isEmpty() ? "(none: " + e.unresolved.toStdString() + ")" : e.oid.toStdString()) << "  " << e.file.toStdString() << '\n';
+        std::cout << "   modules under it: " << index.modulesUnderOid(query).join(", ").toStdString() << '\n';
+    }
+
     QString searchPath;
     for (const QString &d : std::as_const(directories)) {
         QDirIterator it(d, QDir::Dirs | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);

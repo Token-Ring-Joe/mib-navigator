@@ -853,9 +853,13 @@ void Snmpb::BindToGUI(QMainWindow* mw)
                 });
             const QString identityText = tr("sysObjectID %1\nsysDescr: %2").arg(identity.sysObjectId, identity.sysDescr);
             if (match.candidates.isEmpty()) {
-                closeLog(tr("%1 No profile matched; nothing was changed.").arg(match.explanation), true, 0);
+                // Say where it looked: a vendor whose MIBs are simply not in the Library is the usual cause.
+                QSettings librarySettings;
+                const QString searched = tr("Searched %n MIB file(s) in %1.", nullptr, index->fileCount())
+                    .arg(QDir::toNativeSeparators(MibCollection::configuredRoot(librarySettings)));
+                closeLog(tr("%1 %2 No profile matched; nothing was changed.").arg(match.explanation, searched), true, 0);
                 QMessageBox::information(mw, tr("Detect profile"),
-                    tr("%1\n\n%2\n\nNothing was changed.").arg(identityText, match.explanation));
+                    tr("%1\n\n%2\n%3\n\nNothing was changed.").arg(identityText, match.explanation, searched));
                 return;
             }
             ProfileMatchCandidate chosen = match.candidates.first();
