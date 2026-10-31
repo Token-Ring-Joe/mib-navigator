@@ -10,10 +10,20 @@ Modernize the existing open-source SnmpB application into MIB Navigator:
 - Preserve SNMPv1, SNMPv2c, and SNMPv3 functionality.
 - Modernize the application using Qt 6 Widgets and CMake.
 - Maintain Windows, Linux, and macOS portability.
-- Provide strong MIB browsing, dependency handling, device management,
-  table operations, graphing, traps, and related SNMP engineering tools.
+- Provide strong MIB browsing, dependency handling, table operations, value
+  watching, traps, and related SNMP engineering tools for lab and MIB
+  engineering work. MIB Navigator is not a network management system.
 
 Do not trade away proven SnmpB compatibility merely for cleaner or newer code.
+
+## Current Direction and Build Order
+
+`docs/redesign-plan.md` is the authority for product direction, retired
+subsystems, the target layout, and the build order. Read it before starting
+feature, UI, or removal work. Where older documents in `docs/` disagree with it,
+the redesign plan wins.
+
+Work one build-order step at a time unless the user instructs otherwise.
 
 ---
 
@@ -48,13 +58,50 @@ headless, programmatic, architectural, and consistency check available.
 
 Primary development platform:
 
-- Windows x64
-- Qt 6 Widgets
-- MSVC v143
-- CMake
+- Ubuntu Linux VM, x86_64
+- Qt 6 Widgets (system Qt 6 packages)
+- GCC
+- CMake with Ninja
 - VS Code
-- GitHub
+- GitHub (`origin`), plus a backup bare repository on the Synology NAS
+  (`nas`)
 - Branch: `modernize/qt6-cmake`
+
+All development happens on the Linux VM.
+
+Working copy location:
+
+- The working copy is a git clone on the VM's local disk:
+  `~/src/snmpb-next`. Builds, tests, and git operations run there.
+- The former working tree on the NAS share is archival after Redesign Plan
+  step 2. It is at `/mnt/nas/Personal/Software/snmpb-next`. Do not develop,
+  build, or run git in it, and do not delete it. The user retires it.
+- Back up by pushing committed history to the `nas` remote, only when the user
+  asks.
+
+NAS share:
+
+- The Synology share `//172.16.20.249/AI-Projects` is mounted at `/mnt/nas`
+  by a kernel CIFS entry in `/etc/fstab` (systemd automount: it mounts on first
+  access, unmounts after 10 idle minutes, and `nofail` keeps a missing NAS from
+  blocking boot). Credentials are in the root-only
+  `/etc/samba/nas-synoptics.creds`. Never put credentials in the repository,
+  docs, prompts, or command lines.
+- The `nas` remote is `/mnt/nas/Personal/Software/git/snmpb-next.git`, a bare
+  repository. It is the only NAS location git should touch.
+- Use `/mnt/nas`, never the GNOME gvfs path under `/run/user/1001/gvfs/`. The
+  gvfs mount is slow, does not support chmod, and some git commands fail there.
+  Do not build or run tests on any NAS path.
+- If `/mnt/nas` looks empty, run `ls /mnt/nas/Personal` to trigger the
+  automount. If it still fails, check `systemctl status mnt-nas.automount` and
+  `sudo dmesg | grep -i cifs`.
+- The VM is on an isolated AI VLAN that can reach only the NAS and the internet.
+  The NAS account is limited to the folder AI may change. No real SNMP devices
+  are reachable from the VM, which matches the SNMP / Network Safety rules.
+
+Windows and macOS remain supported targets. They are built and tested by GitHub
+Actions CI, not locally. Do not introduce Linux-only behavior; keep platform
+differences behind portable Qt or CMake abstractions.
 
 Use the actual configured toolchain from the current CMake/build environment
 rather than relying on stale hard-coded compiler minor versions.
@@ -106,6 +153,21 @@ Never modify or track generated deployment output under `manual-validation/`
 unless explicitly authorized.
 
 If any single operation expands scope by more than 25 unexpected files, STOP.
+
+One-time exception: the line-ending normalization step in
+`docs/redesign-plan.md` (step 2) may change the git-reported state of many
+files. It does not count against the 50-file limit, provided that no file
+content other than line endings changes and this is verified and reported.
+The exception does not cover any other change made in the same task.
+
+## Line Endings
+
+Text files use LF unless `.gitattributes` says otherwise. Preserve each file's
+existing line-ending style when editing. Never introduce mixed CRLF/LF line
+endings into a file.
+
+Never change the bytes of MIB files (including line endings) as a side effect
+of other work. MIB provider identity uses raw-content SHA-256 hashes.
 
 ---
 
@@ -528,17 +590,32 @@ and resolve the conflict rather than silently layering another system on top.
 
 ---
 
-# Agent / Device Management
+# Connection Model
 
-SnmpB already contained Agent Profile functionality.
+The address book, Device Manager, saved Agent Profile devices, Discovery, and
+Graphs are retired. See `docs/redesign-plan.md`.
 
-MIB Navigator has evolved this toward a Connections/device-management model.
+The connection model is three independent controls at the top of the main
+window:
 
-Do not create competing parallel address-book/device subsystems.
+- Target: typed IP address or hostname with a recent-history list
+- Credential: saved, reusable credentials managed on a separate screen
+- MIB Profile: the MIB environment used to interpret results
 
-Continue evolving the existing Connections architecture.
+Port, timeout, retries, and similar transport settings are global settings in
+the menu, not main-window controls.
 
-Preserve compatibility with existing Agent Profile data where practical.
+Do not create or reintroduce saved-device, address-book, folder, or Discovery
+subsystems.
+
+Existing `agents.conf` Agent Profile data is not migrated. Leave it on disk
+untouched. Do not delete it.
+
+Continue evolving the existing reusable credential architecture.
+
+Operations that run over time (such as Watch) capture their target and
+Credential reference when created. Changing the connection bar must never
+retarget them.
 
 ---
 
@@ -567,7 +644,9 @@ Conceptually:
         +-- patched libsmi
         +-- SNMP++
         +-- crypto/platform dependencies
-        +-- optional visualization dependencies
+
+The vendored Qwt library is being removed together with Graphs. Do not add new
+uses of it.
 
 Do not casually fold third-party implementation source directly back into the
 application target.
@@ -585,9 +664,12 @@ After meaningful backend work:
 5. Run five libsmi goldens when MIB-related.
 6. Run `git diff --check`.
 7. Perform Release build.
-8. Verify install tree.
-9. Run `windeployqt` for the final Windows manual-validation install tree when
-   required.
+8. Install to a manual-validation directory with `cmake --install` and verify
+   the install tree, including that `ldd` reports no missing libraries for the
+   executable. Do not launch the GUI to verify it.
+9. When a change could affect Windows or macOS, say so and rely on GitHub
+   Actions CI for those platforms. Do not push to trigger CI unless the user
+   asks.
 
 Do not silently suppress compiler warnings.
 
@@ -679,11 +761,12 @@ For every substantial milestone, create one stable manual-validation build.
 Always report:
 
 - exact build directory
+- exact install directory
 - exact full executable path
-- whether `windeployqt` ran successfully
+- whether the install tree dependency check (`ldd`) passed
 
-A fresh Windows deployment tree must contain the required Qt runtime and
-platform plugin before asking the user to launch it.
+The user launches manual-validation builds on the Linux VM desktop. Windows
+deployment trees and `windeployqt` are not part of local validation.
 
 Do not assume a previously deployed directory is still valid.
 
@@ -708,9 +791,10 @@ Report:
 11. Any warnings, flakes, timeouts, or environmental limitations.
 12. Whether the implementation is ready for manual validation.
 13. The minimum manual validation still required.
-14. Exact latest successful build directory.
+14. Exact latest successful build and install directories.
 15. Exact full executable path.
-16. Whether `windeployqt` completed successfully.
+16. Whether the install tree dependency check passed, and whether Windows or
+    macOS need CI verification.
 17. Whether any file-scope safety guardrail was triggered, including the number of files modified and any unexpected scope expansion.
 
 If something appears architecturally wrong even though all tests pass, say so.

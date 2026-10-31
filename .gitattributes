@@ -1,0 +1,43 @@
+# Line-ending policy. Repository content is LF unless stated here.
+* text=auto
+
+# Windows-only build and installer files that need CRLF in the working tree.
+# Any such file committed with CRLF is pinned byte-exact in the section below.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.nsi text eol=crlf
+*.def text eol=crlf
+*.dsp text eol=crlf
+*.nmake text eol=crlf
+
+# Shell scripts must keep LF on Windows checkouts.
+*.sh text eol=lf
+
+# MIB provider identity is SHA-256 of the raw file bytes, and libsmi golden
+# output is compared byte-for-byte. Never convert these, on any platform.
+libsmi/mibs/** -text
+libsmi/pibs/** -text
+libsmi/test/** -text
+
+# Files committed with CRLF. No conversion, so committed bytes never change
+# and none of them appears modified.
+app/snmpb.xml -text
+installer/win32/snmpb.ini -text
+installer/win32/snmpb.nsi -text
+libsmi/win/config.nmake -text
+libsmi/win/makefile -text
+libsmi/win/smi.def -text
+libtomcrypt/libtomcrypt.dsp -text
+snmp++/snmp++-3.pc.in -text
+
+# Binary types.
+*.png binary
+*.ico binary
+*.icns binary
+*.der binary
+*.jpg binary
+*.gif binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.qm binary
