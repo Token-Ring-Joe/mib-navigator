@@ -1,3 +1,4 @@
+#include "snmpinstanceasyncrunner.h"
 #include "snmptableasyncrunner.h"
 #include "snmpinstanceoperation.h"
 
@@ -231,10 +232,52 @@ bool instanceCoverage()
     return ok;
 }
 
+// Regression: a runner used to deadlock when it was waited on or destroyed by a thread that was
+// not running its event loop. The worker asks its thread to quit through a queued call into the
+// owner's thread, which can never be delivered while the owner is blocked in wait(). These cases
+// block the owner on purpose, so they fail deterministically (not just under load) if it returns.
+bool blockedOwnerCoverage()
+{
+    bool ok = true;
+    const SnmpRequestContext context(config(), SnmpRequestOperation::Walk);
+    const auto scriptedTable = [] {
+        auto fake = std::make_unique<ScriptedSnmpTransport>(config());
+        fake->append(response("1.3.6.1.4.1.999.1.1.10"));
+        fake->append(response("1.3.6.1.4.1.999.1.1.10"));
+        fake->append(response("1.3.6.1.4.1.999.2.1.0"));
+        return fake;
+    };
+    const auto scriptedInstance = [] {
+        auto fake = std::make_unique<ScriptedSnmpTransport>(config());
+        fake->append(response("1.3.6.1.4.1.999.1.1.10"));
+        fake->append(response("1.3.6.1.4.1.999.2.1"));
+        return fake;
+    };
+    for (int iteration = 0; iteration < 5; ++iteration) {
+        {
+            SnmpTableAsyncRunner runner;
+            ok &= check(runner.start(context, plan(), scriptedTable()), "blocked-owner table start");
+            ok &= check(runner.wait(5000),
+                        "table wait() returns although this thread never runs an event loop");
+        }
+        {
+            SnmpInstanceAsyncRunner runner;
+            ok &= check(runner.start(context, Oid("1.3.6.1.4.1.999.1.1"), scriptedInstance()),
+                        "blocked-owner instance start");
+            ok &= check(runner.wait(5000),
+                        "instance wait() returns although this thread never runs an event loop");
+        }
+        { SnmpTableAsyncRunner runner; runner.start(context, plan(), scriptedTable()); }
+        { SnmpInstanceAsyncRunner runner;
+          runner.start(context, Oid("1.3.6.1.4.1.999.1.1"), scriptedInstance()); }
+    }
+    return ok;
+}
+
 bool asyncCoverage(QCoreApplication &application)
 {
     Q_UNUSED(application)
-    bool ok = true;
+    bool ok = blockedOwnerCoverage();
     for (int iteration = 0; iteration < 2; ++iteration)
     {
         SnmpTableAsyncRunner runner;

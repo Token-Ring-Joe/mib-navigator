@@ -1,4 +1,6 @@
 #include "snmptableasyncrunner.h"
+#include <QDeadlineTimer>
+#include <climits>
 
 namespace
 {
@@ -75,7 +77,19 @@ bool SnmpTableAsyncRunner::isRunning() const
 
 bool SnmpTableAsyncRunner::wait(unsigned long milliseconds)
 {
-    return !thread || thread->wait(milliseconds);
+    if (!thread) return true;
+    // The worker asks its thread to quit through a queued call into the thread that owns
+    // this runner. That call cannot run while the owner is blocked in here, so waiting
+    // alone can deadlock (it did, intermittently, when the runner was destroyed before the
+    // owner's event loop delivered the call). Ask the thread to quit directly, and keep
+    // asking: a quit that arrives before the thread's event loop has started is ignored.
+    const QDeadlineTimer deadline = milliseconds == ULONG_MAX
+        ? QDeadlineTimer(QDeadlineTimer::Forever) : QDeadlineTimer(static_cast<qint64>(milliseconds));
+    while (!thread->wait(25)) {
+        thread->quit();
+        if (deadline.hasExpired()) return false;
+    }
+    return true;
 }
 
 #include "snmptableasyncrunner.moc"
