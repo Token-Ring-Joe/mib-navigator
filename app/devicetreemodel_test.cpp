@@ -1,6 +1,7 @@
 #include "devicetreemodel.h"
 
 #include <QCoreApplication>
+#include <QLocale>
 #include <QMimeData>
 #include <QTemporaryDir>
 
@@ -47,6 +48,9 @@ QStringList Children(const DeviceTreeModel &model, const QModelIndex &parent)
 int main(int argc, char **argv)
 {
     QCoreApplication application(argc, argv);
+    // Folder names are sorted with the user's locale. Pin one so the test does not depend on the
+    // machine's settings (CI uses the plain "C" locale, which puts "Beta" before "alpha-folder").
+    QLocale::setDefault(QLocale(QLocale::English, QLocale::UnitedStates));
     QTemporaryDir temporary;
     if (!Check(temporary.isValid(), "temporary directory failed"))
         return 1;

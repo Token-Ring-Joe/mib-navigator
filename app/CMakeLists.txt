@@ -423,10 +423,12 @@ if(BUILD_TESTING)
     if(WIN32)
         target_link_libraries(snmpb_stability_diagnostics_test PRIVATE iphlpapi ws2_32)
         add_test(NAME snmpb.stability-diagnostics COMMAND ${CMAKE_COMMAND} -E env
+            "QT_QPA_PLATFORM=offscreen"
             "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
             $<TARGET_FILE:snmpb_stability_diagnostics_test>)
     else()
-        add_test(NAME snmpb.stability-diagnostics COMMAND
+        add_test(NAME snmpb.stability-diagnostics COMMAND ${CMAKE_COMMAND} -E env
+            "QT_QPA_PLATFORM=offscreen"
             $<TARGET_FILE:snmpb_stability_diagnostics_test>)
     endif()
 

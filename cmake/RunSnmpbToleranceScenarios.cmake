@@ -6,6 +6,9 @@
 #
 # Required: SNMPB_EXECUTABLE SNMPB_QT_BIN_DIR SNMPB_SOURCE_DIR SNMPB_TOLERANCE_DIR
 
+# Script mode starts with old policies; IN_LIST and the list() operations below need newer ones.
+cmake_minimum_required(VERSION 3.20)
+
 foreach(required SNMPB_EXECUTABLE SNMPB_QT_BIN_DIR SNMPB_SOURCE_DIR SNMPB_TOLERANCE_DIR)
     if(NOT DEFINED ${required})
         message(FATAL_ERROR "Tolerance scenarios: ${required} is not set")
