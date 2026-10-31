@@ -235,7 +235,20 @@ into smaller steps, each with its own working build.
     "why this provider" detail, and copy/export.*
 14. **Collection-wide search** (#7) by name, qualified name, or numeric OID
     across the whole MIB collection, not only the loaded tree. Results say which
-    module and which profiles contain the match.
+    module and which profiles contain the match. *Done (2026-10-31):* the "Search all
+    MIBs..." box in the query toolbar fills a Search tab in the bottom panel. It searches an
+    index built by reading the text of every MIB file in the Library (`mibcollectionindex.*`),
+    so it covers MIBs that are in no profile and even MIBs the parser rejects. Queries: a
+    name or part of one, `Module::name`, or a numeric OID (an instance finds the definition
+    above it). Each result shows kind, module, OID, and the profiles that contain the module;
+    rows in the active profile are green. Double-click opens the Tree if the module is active,
+    otherwise the editor at the definition. The index rebuilds in the background when the
+    Library changes (`mibcollectionservice.*`), reusing unchanged files. An OID it cannot work
+    out (a missing parent) is shown as unresolved, never guessed. Checked against libsmi on
+    every bundled standard MIB (25,678 nodes, 0 wrong) and, optionally, a real vendor
+    collection (40,602 nodes, 0 wrong; set `SNMPB_ACCURACY_EXTRA_DIRS`). Building the index
+    for 799 files takes about 8 seconds in a Debug build over a network share, which is why it
+    runs in the background; step 15 (persisting it) is not needed yet.
 15. **Persist compiled MIB data** (#9), only if measured search or startup
     performance requires it.
 16. **Detect profile.** Reuses the collection-wide index from step 14.

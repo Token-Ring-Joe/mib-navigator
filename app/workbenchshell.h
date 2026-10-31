@@ -32,7 +32,7 @@ public:
 
     WorkbenchShell(QMainWindow *window, QWidget *centralRoot, QGridLayout *centralLayout,
                    QWidget *contextStrip, QTabWidget *documents, const Pages &pages,
-                   QWidget *inspector, QWidget *watch,
+                   QWidget *inspector, QWidget *watch, QWidget *search,
                    QWidget *problems, QWidget *diagnostics, QWidget *raw,
                    QObject *parent = nullptr);
 

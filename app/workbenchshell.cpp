@@ -65,7 +65,7 @@ QPushButton *sidebarButton(QWidget *page, const QString &text, const QString &na
 WorkbenchShell::WorkbenchShell(QMainWindow *window, QWidget *centralRoot,
                                QGridLayout *centralLayout, QWidget *contextStrip,
                                QTabWidget *documents, const Pages &pages,
-                               QWidget *inspector, QWidget *watch,
+                               QWidget *inspector, QWidget *watch, QWidget *search,
                                QWidget *problems, QWidget *diagnostics, QWidget *raw,
                                QObject *parent)
     : QObject(parent), mainWindow(window), documentTabs(documents), workbenchPages(pages)
@@ -166,6 +166,7 @@ WorkbenchShell::WorkbenchShell(QMainWindow *window, QWidget *centralRoot,
     bottomTabs->setObjectName(QStringLiteral("WorkbenchBottomTabs"));
     bottomTabs->setDocumentMode(true);
     bottomTabs->addTab(watch, tr("Watch"));
+    bottomTabs->addTab(search, tr("Search"));
     bottomTabs->addTab(problems, tr("Problems"));
     bottomTabs->addTab(diagnostics, tr("Diagnostics"));
     bottomTabs->addTab(raw, tr("Raw"));

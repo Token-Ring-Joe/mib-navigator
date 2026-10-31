@@ -49,6 +49,9 @@
 #include "snmptransport.h"
 #include "watchpanel.h"
 #include "watchservice.h"
+#include "collectionsearchpanel.h"
+#include "mibcollectionservice.h"
+#include <QSet>
 #include <QMenu>
 #include <memory>
 #include "trap.h"
@@ -432,6 +435,16 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     auto *tableButton = addQueryButton(tr("Table"), QStyle::SP_FileDialogDetailedView);
     auto *setButton = addQueryButton(tr("Set"), QStyle::SP_DialogApplyButton);
     auto *stopButton = addQueryButton(tr("Stop"), QStyle::SP_BrowserStop);
+    // Search every MIB file in the collection, not only the active profile's tree.
+    auto *collectionSearch = new QLineEdit(queryTools);
+    collectionSearch->setObjectName(QStringLiteral("CollectionSearch"));
+    collectionSearch->setPlaceholderText(tr("Search all MIBs…"));
+    collectionSearch->setToolTip(tr("Find a name, Module::name or numeric OID in every MIB file in the collection. "
+                                    "Results show which module and which profiles contain it."));
+    collectionSearch->setClearButtonEnabled(true);
+    collectionSearch->setMinimumWidth(220);
+    queryToolsLayout->addStretch();
+    queryToolsLayout->addWidget(collectionSearch);
     const QList<QToolButton *> mibDependentActions{getButton, getNextButton, getBulkButton,
                                                    walkButton, tableButton, setButton};
     for (QToolButton *button : mibDependentActions) {
@@ -718,6 +731,54 @@ void Snmpb::BindToGUI(QMainWindow* mw)
         if (workbench) workbench->showBottomPage(watchPanel);
     });
 
+    // Collection-wide search: an index of every definition in every MIB file, rebuilt in the
+    // background when the collection changes.
+    auto *collectionService = new MibCollectionService([this]() {
+        QStringList files;
+        for (const MibDependencyFileRecord &record : modules->DependencyIndex()->files())
+            files << record.canonicalPath;
+        return files;
+    }, this);
+    auto profileModules = std::make_shared<QHash<QString, QStringList>>();
+    auto profileModulesValid = std::make_shared<bool>(false);
+    const auto forgetProfileModules = [profileModulesValid]() { *profileModulesValid = false; };
+    connect(modules, &MibModule::inventoryChanged, this, forgetProfileModules);
+    connect(mibLibrary, &MibLibraryWidget::profilesChanged, this, forgetProfileModules);
+    connect(modules, &MibModule::inventoryChanged, collectionService, &MibCollectionService::invalidate);
+    collectionService->invalidate();   // first build shortly after start-up
+    CollectionSearchPanel::Lookups searchLookups;
+    searchLookups.profilesContaining = [this, profileModules, profileModulesValid](const QString &module) {
+        if (!*profileModulesValid) {
+            profileModules->clear();
+            for (const MibProfileRecord &profile : mibLibrary->profileService()->profiles())
+                for (const QString &name : modules->BuildEffectivePlan(profile).effectiveModules)
+                    (*profileModules)[name] << profile.name;
+            *profileModulesValid = true;
+        }
+        return profileModules->value(module);
+    };
+    searchLookups.activeModules = [this]() {
+        QSet<QString> active;
+        if (const MibEnvironmentPtr environment = modules->CurrentEnvironment())
+            for (const auto &module : environment->modules()) active.insert(module.identity);
+        return active;
+    };
+    auto *searchPanel = new CollectionSearchPanel(collectionService, searchLookups, mw);
+    connect(searchPanel, &CollectionSearchPanel::showInTreeRequested, this, [this](const QString &oid) {
+        if (workbench) { workbench->setActivity(WorkbenchActivity::Mibs); workbench->showMibTree(); }
+        w.MIBTree->SelectFromOid(oid);
+    });
+    connect(searchPanel, &CollectionSearchPanel::openInEditorRequested, this, [this](const QString &file, int line) {
+        editor->MibFileOpen(file);
+        ShowEditorDocument();
+        editor->GoToLine(line);
+    });
+    connect(collectionSearch, &QLineEdit::returnPressed, this, [this, collectionService, searchPanel, collectionSearch]() {
+        if (!collectionService->hasIndex() && !collectionService->isBuilding()) collectionService->rebuildNow();
+        searchPanel->search(collectionSearch->text());
+        if (workbench) workbench->showBottomPage(searchPanel);
+    });
+
     auto *problemsPage = new QWidget(mw);
     problemsPage->setObjectName(QStringLiteral("WorkbenchProblemsPage"));
     auto *problemsLayout = new QVBoxLayout(problemsPage);
@@ -917,7 +978,7 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     workbenchPages.events = w.TrapsTab;
     workbench = new WorkbenchShell(mw, w.widget,
         qobject_cast<QGridLayout *>(w.widget->layout()), contextWidget, w.TabW,
-        workbenchPages, w.NodeInfoLayout, watchPanel, problemsPage,
+        workbenchPages, w.NodeInfoLayout, watchPanel, searchPanel, problemsPage,
             diagnosticsPage, rawPage, this);
     startup->advance(startupGeneration, StartupState::ShellReady,
                      tr("Loading MIB Catalog…"));

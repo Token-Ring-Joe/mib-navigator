@@ -78,11 +78,12 @@ int main(int argc, char **argv)
 
     auto *inspector = new QWidget;
     auto *watch = new QWidget;
+    auto *search = new QWidget;
     auto *problems = new QWidget;
     auto *diagnostics = new QWidget;
     auto *raw = new QWidget;
     WorkbenchShell shell(&window, root, layout, context, documents, pages,
-                         inspector, watch, problems, diagnostics, raw, &window);
+                         inspector, watch, search, problems, diagnostics, raw, &window);
 
     check(documents->tabBar()->isHidden(), "old primary tab navigation remains visible");
     QTabBar *durableTabs = window.findChild<QTabBar *>("WorkbenchOpenDocuments");

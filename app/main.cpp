@@ -52,6 +52,8 @@
 #include <QComboBox>
 #include <QToolButton>
 #include "agent.h"
+#include "mibcollectionservice.h"
+#include <QLineEdit>
 #include "credentialsdialog.h"
 #include "usmcredentialservice.h"
 #include "watchservice.h"
@@ -289,12 +291,13 @@ int main( int argc, char ** argv )
             QTabWidget *bottomTabs = mw.findChild<QTabWidget *>("WorkbenchBottomTabs");
             check(workbenchDocuments && workbenchDocuments->tabBar()->isHidden(),
                   "legacy primary tab navigation is retired");
-            check(bottomTabs && bottomTabs->count() == 4 &&
+            check(bottomTabs && bottomTabs->count() == 5 &&
                   bottomTabs->tabText(0) == "Watch" &&
-                  bottomTabs->tabText(1) == "Problems" &&
-                  bottomTabs->tabText(2) == "Diagnostics" &&
-                  bottomTabs->tabText(3) == "Raw",
-                  "bottom Watch, Problems, Diagnostics, and Raw views are integrated");
+                  bottomTabs->tabText(1) == "Search" &&
+                  bottomTabs->tabText(2) == "Problems" &&
+                  bottomTabs->tabText(3) == "Diagnostics" &&
+                  bottomTabs->tabText(4) == "Raw",
+                  "bottom Watch, Search, Problems, Diagnostics, and Raw views are integrated");
             QAction *eventsActivity = mw.findChild<QAction *>("WorkbenchActivityEvents");
             QAction *mibsActivity = mw.findChild<QAction *>("WorkbenchActivityMIBs");
             if (eventsActivity) eventsActivity->trigger();
@@ -350,7 +353,7 @@ int main( int argc, char ** argv )
                 QCheckBox *notes = mw.findChild<QCheckBox *>("WorkbenchProblemShowNotes");
                 QPlainTextEdit *detail = mw.findChild<QPlainTextEdit *>("WorkbenchProblemDetail");
                 QTabWidget *bottom = mw.findChild<QTabWidget *>("WorkbenchBottomTabs");
-                if (bottom) bottom->setCurrentIndex(1);
+                if (bottom) bottom->setCurrentIndex(2);
                 mw.resize(1500, 1000);
                 QCoreApplication::processEvents();
                 mw.grab().save(QDir(smoke_config_dir).filePath("problems-tab.png"));
@@ -579,6 +582,55 @@ int main( int argc, char ** argv )
             }
             check(snmpb.MainUI()->TrapLog->contextMenuPolicy() == Qt::CustomContextMenu,
                   "the trap list offers a right-click menu (Copy source IP)");
+            // Search all MIBs: an index of every MIB file in the collection, not just the active profile.
+            {
+                MibCollectionService *collection = snmpb.findChild<MibCollectionService *>();
+                QLineEdit *searchBox = mw.findChild<QLineEdit *>("CollectionSearch");
+                QTableWidget *searchTable = mw.findChild<QTableWidget *>("SearchResults");
+                QTabWidget *bottomSearch = mw.findChild<QTabWidget *>("WorkbenchBottomTabs");
+                check(collection && searchBox && searchTable && bottomSearch, "collection search box, index and Search tab exist");
+                if (collection && searchBox && searchTable && bottomSearch) {
+                    collection->rebuildNow();
+                    check(collection->waitForBuild(60000) && collection->hasIndex(),
+                          "the collection index builds in the background");
+                    const auto cell = [searchTable](int row, int column) {
+                        return searchTable->item(row, column) ? searchTable->item(row, column)->text() : QString(); };
+                    // GOOD-MIB exists only in the scenarios that build a library with it.
+                    const bool hasGoodMib = QFileInfo::exists(QDir(smoke_config_dir).filePath("MIB-Library/Acme/Prod/GOOD-MIB"));
+                    if (hasGoodMib) {
+                    searchBox->setText("goodValue");
+                    emit searchBox->returnPressed();
+                    check(searchTable->rowCount() == 1 && cell(0, 0) == "goodValue" && cell(0, 2) == "GOOD-MIB" &&
+                          cell(0, 3) == "1.3.6.1.4.1.90001.1" && cell(0, 4).contains("Test profile"),
+                          "a search finds the object, its module, its OID and the profile that contains it");
+                    check(bottomSearch->tabText(bottomSearch->currentIndex()) == "Search",
+                          "searching brings the Search tab forward");
+                    }
+                    searchBox->setText("sysDescr");
+                    emit searchBox->returnPressed();
+                    int snmpv2Row = -1;
+                    for (int row = 0; row < searchTable->rowCount(); ++row)
+                        if (cell(row, 2) == "SNMPv2-MIB") snmpv2Row = row;
+                    check(searchTable->rowCount() >= 2 && snmpv2Row >= 0 && cell(snmpv2Row, 3) == "1.3.6.1.2.1.1.1",
+                          "the same name defined in several modules gives one result per module");
+                    check(snmpv2Row >= 0 && !cell(snmpv2Row, 4).isEmpty(),
+                          "every result says which profiles contain it, or that none does");
+                    if (hasGoodMib) {
+                    searchBox->setText("1.3.6.1.4.1.90001.1.0");
+                    emit searchBox->returnPressed();
+                    check(searchTable->rowCount() == 1 && cell(0, 0) == "goodValue",
+                          "an instance OID finds the definition above it");
+                    }
+                    searchBox->setText("no-such-thing-anywhere");
+                    emit searchBox->returnPressed();
+                    check(searchTable->rowCount() == 0, "a search with no match shows no rows");
+                    searchBox->setText(hasGoodMib ? "goodValue" : "sysDescr");
+                    emit searchBox->returnPressed();
+                    mw.resize(1500, 1000);
+                    QCoreApplication::processEvents();
+                    mw.grab().save(QDir(smoke_config_dir).filePath("search-tab.png"));
+                }
+            }
             // One Credentials screen for communities and SNMPv3 users; OK with no edits changes nothing.
             if (CredentialsDialog *credentials = mw.findChild<CredentialsDialog *>("CredentialsDialog")) {
                 check(credentials->tabs()->count() == 2 &&
