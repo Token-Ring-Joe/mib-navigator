@@ -569,9 +569,13 @@ bool MibProfileService::migrateLegacyProfiles(const MibDependencyIndex &index, Q
                     return value;
 #endif
                 };
-                const auto indexedRecord = [&index](const MibProfileMember &member)
+                // files() returns the list by value, and iterating a temporary list makes a private
+                // copy that is destroyed when the loop ends. Hand out pointers only into a list that
+                // outlives every use of them.
+                const QList<MibDependencyFileRecord> indexFiles = index.files();
+                const auto indexedRecord = [&indexFiles](const MibProfileMember &member)
                     -> const MibDependencyFileRecord * {
-                    for (const auto &record : index.files())
+                    for (const auto &record : indexFiles)
                         if (canonicalFilePath(record.canonicalPath).compare(
                                 canonicalFilePath(member.canonicalPath), Qt::CaseInsensitive) == 0 &&
                             record.sha256 == member.sha256) return &record;
