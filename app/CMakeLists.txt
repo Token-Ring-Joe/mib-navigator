@@ -33,6 +33,9 @@ set(SNMPB_APP_SOURCES
     mibruntimestage.cpp
     mibvaluesemantics.cpp
     snmpreport.cpp
+    mibcollectionindex.cpp
+    mibcollectionservice.cpp
+    collectionsearchpanel.cpp
     watchcalculator.cpp
     watchservice.cpp
     watchpanel.cpp
@@ -114,6 +117,9 @@ set(SNMPB_APP_HEADERS
     mibservice_internal.h
     mibvaluesemantics.h
     snmpreport.h
+    mibcollectionindex.h
+    mibcollectionservice.h
+    collectionsearchpanel.h
     watchcalculator.h
     watchservice.h
     watchpanel.h
@@ -520,6 +526,41 @@ if(BUILD_TESTING)
             $<TARGET_FILE:snmpb_watch_service_test>)
     else()
         add_test(NAME snmpb.watch-service COMMAND $<TARGET_FILE:snmpb_watch_service_test>)
+    endif()
+
+    add_executable(snmpb_mib_collection_index_test mibcollectionindex.cpp mibcollectionindex.h mibcollectionindex_test.cpp)
+    target_link_libraries(snmpb_mib_collection_index_test PRIVATE Qt6::Core)
+    if(WIN32)
+        add_test(NAME snmpb.mib-collection-index COMMAND ${CMAKE_COMMAND} -E env
+            "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
+            $<TARGET_FILE:snmpb_mib_collection_index_test>)
+    else()
+        add_test(NAME snmpb.mib-collection-index COMMAND $<TARGET_FILE:snmpb_mib_collection_index_test>)
+    endif()
+
+    add_executable(snmpb_mib_collection_accuracy_test mibcollectionindex.cpp mibcollectionindex.h mibcollectionaccuracy_test.cpp)
+    target_compile_definitions(snmpb_mib_collection_accuracy_test PRIVATE SNMPB_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+    target_link_libraries(snmpb_mib_collection_accuracy_test PRIVATE Qt6::Core snmpb_libsmi)
+    if(WIN32)
+        add_test(NAME snmpb.mib-collection-accuracy COMMAND ${CMAKE_COMMAND} -E env
+            "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
+            $<TARGET_FILE:snmpb_mib_collection_accuracy_test>)
+    else()
+        add_test(NAME snmpb.mib-collection-accuracy COMMAND $<TARGET_FILE:snmpb_mib_collection_accuracy_test>)
+    endif()
+
+    add_executable(snmpb_mib_collection_service_test
+        mibcollectionindex.cpp mibcollectionindex.h
+        mibcollectionservice.cpp mibcollectionservice.h
+        mibcollectionservice_test.cpp)
+    set_target_properties(snmpb_mib_collection_service_test PROPERTIES AUTOMOC ON)
+    target_link_libraries(snmpb_mib_collection_service_test PRIVATE Qt6::Core)
+    if(WIN32)
+        add_test(NAME snmpb.mib-collection-service COMMAND ${CMAKE_COMMAND} -E env
+            "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
+            $<TARGET_FILE:snmpb_mib_collection_service_test>)
+    else()
+        add_test(NAME snmpb.mib-collection-service COMMAND $<TARGET_FILE:snmpb_mib_collection_service_test>)
     endif()
 
     add_executable(snmpb_snmp_report_test snmpreport.cpp snmpreport.h snmpreport_test.cpp)
