@@ -32,6 +32,8 @@ public:
     bool hasIndex() const { return static_cast<bool>(current); }
     bool isBuilding() const { return building; }
     MibCollectionSearchResult search(const QString &query, int limit = 500) const;
+    // The current index, for callers that need more than search() (Detect profile).
+    std::shared_ptr<const MibCollectionIndex> snapshot() const { return current; }
     QString statusText() const;
     quint64 generation() const { return builtGeneration; }
 

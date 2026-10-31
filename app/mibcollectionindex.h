@@ -5,6 +5,7 @@
 #include <QHash>
 #include <QList>
 #include <QMap>
+#include <QMultiHash>
 #include <QString>
 #include <QStringList>
 
@@ -74,6 +75,10 @@ public:
     MibCollectionSearchResult search(const QString &query, int limit = 500) const;
     // Every module that defines this exact name (used to find the right module for a result).
     QStringList modulesDefining(const QString &name) const;
+    // Modules that define an object registered at exactly this numeric OID.
+    QStringList modulesDefiningOid(const QString &oid) const;
+    // Modules that define anything at, or below, this numeric OID.
+    QStringList modulesUnderOid(const QString &oid) const;
 
 private:
     void resolveAll(const QList<ParsedFile> &files);
@@ -81,6 +86,7 @@ private:
     QList<MibCollectionEntry> entries;
     QHash<QString, QList<int>> byLowerName;   // lower-case name -> entry indexes
     QHash<QString, int> byOid;                // oid -> first entry index
+    QMultiHash<QString, int> byOidAll;        // oid -> every entry index
     QMap<QString, QList<int>> byModule;
     int filesIndexed = 0;
 };

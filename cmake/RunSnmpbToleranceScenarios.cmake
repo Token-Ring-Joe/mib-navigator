@@ -138,12 +138,19 @@ function(run_scenario name)
         list(JOIN S_UNRESOLVED "," joined)
         set(unresolved_json ",\"unresolvedLegacyModules\":[${joined}]")
     endif()
+    # The live scenario also needs a second, empty profile to switch away from when it tests Detect.
+    set(extra_profiles_json "")
+    if(S_LIVE)
+        string(CONCAT extra_profiles_json
+            ",{\"id\":\"custom.other\",\"manifestVersion\":1,\"name\":\"Other profile\",\"roots\":[],"
+            "\"scope\":[{\"id\":\"collection:Standards\",\"path\":\"${library}/Standards\"}],\"type\":\"custom\"}")
+    endif()
     file(WRITE "${dir}/state/mibs/profiles-v1.json"
         "{\"ordinaryProfilesMigrated\":true,\"schemaVersion\":5,\"profiles\":[{\"id\":\"custom.test\","
         "\"manifestVersion\":1,\"name\":\"Test profile\",\"roots\":[${roots_json}],"
         "\"scope\":[{\"id\":\"collection:Acme\",\"path\":\"${library}/Acme\"},"
         "{\"id\":\"collection:Standards\",\"path\":\"${library}/Standards\"}],"
-        "\"type\":\"custom\"${unresolved_json}}]}")
+        "\"type\":\"custom\"${unresolved_json}}${extra_profiles_json}]}")
     file(WRITE "${dir}/snmpb.sourceforge.net/SnmpB.ini"
         "[mib-library]\nroot=${library}\ncurrent-profile=custom.test\n")
 
@@ -323,6 +330,9 @@ if(SNMPB_PYTHON)
                "PASS: live: the Watch tab shows the row and its change"
                "PASS: live: removing a watch removes its row"
                "PASS: live: the history remembers the credential used with the target"
+               "PASS: live: Detect read the device and switched to the profile that holds its MIBs"
+               "PASS: live: the Detect button is available again"
+               "PASS: live: the detection is in the Log with the profile it chose"
                "PASS: live: the Log tab lists every request"
                "PASS: live: a successful Get is logged with its target, identity and object count"
                "PASS: live: a request that got no answer is logged as a timeout"

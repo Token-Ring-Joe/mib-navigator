@@ -220,13 +220,14 @@ int MibCollectionIndex::unresolvedCount() const
 
 void MibCollectionIndex::setFiles(const QList<ParsedFile> &files)
 {
-    entries.clear(); byLowerName.clear(); byOid.clear(); byModule.clear();
+    entries.clear(); byLowerName.clear(); byOid.clear(); byOidAll.clear(); byModule.clear();
     filesIndexed = files.size();
     resolveAll(files);
     for (int i = 0; i < entries.size(); ++i) {
         byLowerName[entries.at(i).name.toLower()].append(i);
         byModule[entries.at(i).module].append(i);
         if (!entries.at(i).oid.isEmpty() && !byOid.contains(entries.at(i).oid)) byOid.insert(entries.at(i).oid, i);
+        if (!entries.at(i).oid.isEmpty()) byOidAll.insert(entries.at(i).oid, i);
     }
 }
 
@@ -347,6 +348,29 @@ QStringList MibCollectionIndex::modulesDefining(const QString &name) const
     QStringList modules;
     for (int i : byLowerName.value(name.toLower()))
         if (entries.at(i).name == name && !modules.contains(entries.at(i).module)) modules << entries.at(i).module;
+    return modules;
+}
+
+QStringList MibCollectionIndex::modulesDefiningOid(const QString &oid) const
+{
+    QStringList modules;
+    for (int i : byOidAll.values(oid)) {
+        if (entries.at(i).kind == QLatin1String("Type")) continue;
+        if (!modules.contains(entries.at(i).module)) modules << entries.at(i).module;
+    }
+    modules.sort();
+    return modules;
+}
+
+QStringList MibCollectionIndex::modulesUnderOid(const QString &oid) const
+{
+    QStringList modules;
+    const QString below = oid + QLatin1Char('.');
+    for (const MibCollectionEntry &e : entries) {
+        if (e.oid.isEmpty() || e.kind == QLatin1String("Type")) continue;
+        if ((e.oid == oid || e.oid.startsWith(below)) && !modules.contains(e.module)) modules << e.module;
+    }
+    modules.sort();
     return modules;
 }
 

@@ -7,6 +7,7 @@
 
 class QComboBox;
 class QLabel;
+class QToolButton;
 class CommunityCredentialService;
 class UsmCredentialService;
 
@@ -23,15 +24,19 @@ public:
 
     QString target() const;
     QString credentialKey() const;
+    QString credentialLabel() const;   // the chosen credential's name, for display and the Log
     int credentialProtocol() const;   // 0, 1, 2 as SnmpRequestVersion; -1 when none
     // Remember the current Target (and the Credential used with it) at the top of the history.
     void rememberCurrentTarget();
+    void setDetectBusy(bool busy);   // disables the button while a detection runs
     void refreshCredentials();
 
 signals:
     void selectionChanged();
     // protocol is the chosen credential's SNMP version (0, 1, 2), or -1 when none is chosen.
     void manageCredentialsRequested(int protocol);
+    // The user clicked Detect: read the device's identity and pick the matching MIB Profile.
+    void detectRequested();
 
 private:
     void applyHistoryCredential();
@@ -42,6 +47,7 @@ private:
     QComboBox *targetCombo;
     QComboBox *credentialCombo;
     QLabel *hint;
+    QToolButton *detectButton = nullptr;
     QList<ConnectionCredentialChoice> choices;
     bool updating = false;
 };

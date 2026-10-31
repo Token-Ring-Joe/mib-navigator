@@ -52,6 +52,9 @@
 #include "collectionsearchpanel.h"
 #include "requestlog.h"
 #include "requestlogpanel.h"
+#include "profiledetector.h"
+#include "profilematch.h"
+#include <QInputDialog>
 #include "mibcollectionservice.h"
 #include <QSet>
 #include <QMenu>
@@ -741,7 +744,7 @@ void Snmpb::BindToGUI(QMainWindow* mw)
             files << record.canonicalPath;
         return files;
     }, this);
-    auto profileModules = std::make_shared<QHash<QString, QStringList>>();
+    auto profileModules = std::make_shared<QHash<QString, QList<ProfileMatchProfile>>>();
     auto profileModulesValid = std::make_shared<bool>(false);
     const auto forgetProfileModules = [profileModulesValid]() { *profileModulesValid = false; };
     connect(modules, &MibModule::inventoryChanged, this, forgetProfileModules);
@@ -749,15 +752,21 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     connect(modules, &MibModule::inventoryChanged, collectionService, &MibCollectionService::invalidate);
     collectionService->invalidate();   // first build shortly after start-up
     CollectionSearchPanel::Lookups searchLookups;
-    searchLookups.profilesContaining = [this, profileModules, profileModulesValid](const QString &module) {
+    // module -> the profiles whose environment includes it (rebuilt when the Library or profiles change)
+    const auto profilesHolding = [this, profileModules, profileModulesValid](const QString &module) {
         if (!*profileModulesValid) {
             profileModules->clear();
             for (const MibProfileRecord &profile : mibLibrary->profileService()->profiles())
                 for (const QString &name : modules->BuildEffectivePlan(profile).effectiveModules)
-                    (*profileModules)[name] << profile.name;
+                    (*profileModules)[name] << ProfileMatchProfile{profile.id, profile.name};
             *profileModulesValid = true;
         }
         return profileModules->value(module);
+    };
+    searchLookups.profilesContaining = [profilesHolding](const QString &module) {
+        QStringList names;
+        for (const ProfileMatchProfile &profile : profilesHolding(module)) names << profile.name;
+        return names;
     };
     searchLookups.activeModules = [this]() {
         QSet<QString> active;
@@ -785,6 +794,88 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     auto *requestLog = new RequestLog(this);
     agent->SetRequestLog(requestLog);
     auto *requestLogPanel = new RequestLogPanel(requestLog, mw);
+
+    // Detect: on click, ask the device what it is and pick the profile holding its MIBs. Nothing
+    // is ever sent unless the user clicks the button.
+    auto *detector = new ProfileDetector(
+        [this](const QString &target, const QString &credentialKey, SnmpRequestConfig *config, QString *error) {
+            QSettings settings;
+            AgentRequestSelection selection;
+            const ConnectionError problem = ConnectionModel::build(
+                target, credentialKey, communityCredentialService, UsmCredentials(),
+                PreferencesSettings::load(settings), &selection);
+            if (problem != ConnectionError::None) { *error = ConnectionModel::errorText(problem); return false; }
+            return selection.requestConfig(config);
+        },
+        [](const SnmpRequestConfig &config) { return std::make_unique<SnmpPlusTransport>(config); }, this);
+    auto detectLogId = std::make_shared<quint64>(0);
+    if (auto *bar = mw->findChild<ConnectionBar *>(QStringLiteral("ConnectionBar"))) {
+        connect(bar, &ConnectionBar::detectRequested, this,
+                [this, mw, bar, detector, requestLog, collectionService, detectLogId]() {
+            if (!collectionService->hasIndex()) {
+                if (!collectionService->isBuilding()) collectionService->rebuildNow();
+                QMessageBox::information(mw, tr("Detect profile"),
+                    tr("The MIB collection is still being indexed. Try again in a moment."));
+                return;
+            }
+            QString error;
+            *detectLogId = requestLog->begin(tr("Detect profile"), bar->target(), bar->credentialLabel(),
+                                             QStringLiteral("sysObjectID.0, sysDescr.0"));
+            bar->setDetectBusy(true);
+            if (!detector->detect(bar->target(), bar->credentialKey(), &error)) {
+                bar->setDetectBusy(false);
+                requestLog->finish(*detectLogId, QStringLiteral("<font color=red>%1</font>").arg(error.toHtmlEscaped()), 0);
+                QMessageBox::warning(mw, tr("Detect profile"), error);
+            }
+        });
+        connect(detector, &ProfileDetector::finished, this,
+                [this, mw, bar, requestLog, collectionService, detectLogId, profilesHolding]
+                (const QString &target, const DeviceIdentity &identity) {
+            bar->setDetectBusy(false);
+            const auto closeLog = [&](const QString &text, bool failed, int objects) {
+                requestLog->finish(*detectLogId, failed ? QStringLiteral("<font color=red>%1</font>").arg(text.toHtmlEscaped())
+                                                        : text.toHtmlEscaped(), objects);
+            };
+            if (!identity.ok) {
+                closeLog(identity.error, true, 0);
+                QMessageBox::warning(mw, tr("Detect profile"),
+                    tr("Could not read the device's identity from %1.\n\n%2\n\nNothing was changed.").arg(target, identity.error));
+                return;
+            }
+            const std::shared_ptr<const MibCollectionIndex> index = collectionService->snapshot();
+            if (!index) { closeLog(tr("The MIB collection index is not ready"), true, 0); return; }
+            const ProfileMatchResult match = MatchProfileForSysObjectId(*index, identity.sysObjectId,
+                [profilesHolding](const QString &module) {
+                    QList<ProfileMatchProfile> detectable;
+                    for (const ProfileMatchProfile &profile : profilesHolding(module))
+                        if (profile.id != MibProfileDefinitions::standardsId()) detectable << profile;   // Standards fits every device
+                    return detectable;
+                });
+            const QString identityText = tr("sysObjectID %1\nsysDescr: %2").arg(identity.sysObjectId, identity.sysDescr);
+            if (match.candidates.isEmpty()) {
+                closeLog(tr("%1 No profile matched; nothing was changed.").arg(match.explanation), true, 0);
+                QMessageBox::information(mw, tr("Detect profile"),
+                    tr("%1\n\n%2\n\nNothing was changed.").arg(identityText, match.explanation));
+                return;
+            }
+            ProfileMatchCandidate chosen = match.candidates.first();
+            if (match.candidates.size() > 1) {
+                QStringList items;
+                for (const ProfileMatchCandidate &c : match.candidates)
+                    items << tr("%1  (MIBs: %2)").arg(c.profileName, c.viaModules.mid(0, 3).join(QStringLiteral(", ")));
+                bool accepted = false;
+                const QString picked = QInputDialog::getItem(mw, tr("Detect profile"),
+                    tr("%1\n\n%2\n\nSeveral profiles hold MIBs for this device. Choose one:").arg(identityText, match.explanation),
+                    items, 0, false, &accepted);
+                if (!accepted) { closeLog(tr("%1 Several profiles matched; none was chosen.").arg(match.explanation), false, 0); return; }
+                chosen = match.candidates.at(items.indexOf(picked));
+            }
+            mibLibrary->selectProfile(chosen.profileId);
+            const QString done = tr("Detected %1; MIB Profile set to \"%2\". %3").arg(identity.sysDescr.left(80), chosen.profileName, match.explanation);
+            closeLog(done, false, 1);
+            mw->statusBar()->showMessage(done, 15000);
+        });
+    }
 
     auto *problemsPage = new QWidget(mw);
     problemsPage->setObjectName(QStringLiteral("WorkbenchProblemsPage"));

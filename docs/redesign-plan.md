@@ -261,7 +261,20 @@ into smaller steps, each with its own working build.
     runs in the background; step 15 (persisting it) is not needed yet.
 15. **Persist compiled MIB data** (#9), only if measured search or startup
     performance requires it.
-16. **Detect profile.** Reuses the collection-wide index from step 14.
+16. **Detect profile.** Reuses the collection-wide index from step 14. *Done (2026-10-31):*
+    the **Detect** button next to the MIB Profile selector sends one GET for sysObjectID.0 and
+    sysDescr.0 (only when clicked, never otherwise), then matches with
+    `MatchProfileForSysObjectId` (`profilematch.*`): the longest registered prefix of the
+    sysObjectID that some MIB in the collection defines (stopping one level above the
+    enterprise number), then, failing that, every profile holding any MIB the vendor registers
+    under its enterprise number. One candidate profile is selected at once (the status bar and
+    the Log say which and why); several offer a short choice list showing sysDescr; none changes
+    nothing and explains why (for example "the collection has MIBs for this vendor but no saved
+    profile includes them"). A device that is unreachable, refuses the login (SNMPv3 reports are
+    translated), or reports no sysObjectID changes nothing. No vendor name or enterprise number
+    is built in. **Limit:** Automatic Profiles generated from `Vendor/Product` folders do not
+    exist in the code yet (folder snapshots become Custom profiles), so Detect considers every
+    saved profile except the built-in Standards profile, which would match every device.
 17. **Table verification** (#3) against real vendor tables (sparse rows,
     string/IP indexes, IMPLIED, AUGMENTS), plus Copy as CSV.
 

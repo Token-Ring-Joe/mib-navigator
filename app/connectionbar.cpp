@@ -55,6 +55,13 @@ ConnectionBar::ConnectionBar(CommunityCredentialService *communityService,
     mibProfileCombo->setMinimumWidth(190);
     mibProfileCombo->setToolTip(tr("How to interpret what comes back."));
     layout->addWidget(mibProfileCombo, 2);
+    detectButton = new QToolButton(this);
+    detectButton->setObjectName(QStringLiteral("ConnectionDetect"));
+    detectButton->setText(tr("Detect"));
+    detectButton->setToolTip(tr("Ask the device what it is (sysObjectID and sysDescr, one request) and pick the MIB Profile "
+                                "that holds its MIBs. Nothing is sent unless you click this."));
+    connect(detectButton, &QToolButton::clicked, this, &ConnectionBar::detectRequested);
+    layout->addWidget(detectButton);
 
     hint = new QLabel(this);
     hint->setObjectName(QStringLiteral("ConnectionHint"));
@@ -112,6 +119,14 @@ QString ConnectionBar::target() const { return targetCombo->currentText().trimme
 QString ConnectionBar::credentialKey() const
 {
     return credentialCombo->currentData().toString();
+}
+
+QString ConnectionBar::credentialLabel() const { return credentialCombo->currentText(); }
+
+void ConnectionBar::setDetectBusy(bool busy)
+{
+    detectButton->setEnabled(!busy);
+    detectButton->setText(busy ? tr("Detecting…") : tr("Detect"));
 }
 
 int ConnectionBar::credentialProtocol() const

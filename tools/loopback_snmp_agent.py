@@ -55,7 +55,9 @@ QUIT_OID = '1.3.6.1.4.1.99999.0'   # asking for this makes the agent answer once
 
 MIB = [  # sorted; a value is either encoded bytes or a function returning them
     ('1.3.6.1.2.1.1.1.0', tlv(4, b'Loopback test agent (not a real device)')),
-    ('1.3.6.1.2.1.1.2.0', enc_oid('1.3.6.1.4.1.8072.3.2.10')),
+    # A vendor registration under the enterprise number the test MIB (GOOD-MIB) uses, so that
+    # "Detect profile" has something to find.
+    ('1.3.6.1.2.1.1.2.0', enc_oid('1.3.6.1.4.1.90001.7')),
     ('1.3.6.1.2.1.1.3.0', uptime_ticks),
     ('1.3.6.1.2.1.1.5.0', tlv(4, b'loopback-agent')),
     ('1.3.6.1.2.1.2.2.1.10.1', moving_counter),

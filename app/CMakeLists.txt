@@ -36,6 +36,8 @@ set(SNMPB_APP_SOURCES
     mibcollectionindex.cpp
     mibcollectionservice.cpp
     requestlog.cpp
+    profilematch.cpp
+    profiledetector.cpp
     requestlogpanel.cpp
     collectionsearchpanel.cpp
     watchcalculator.cpp
@@ -122,6 +124,8 @@ set(SNMPB_APP_HEADERS
     mibcollectionindex.h
     mibcollectionservice.h
     requestlog.h
+    profilematch.h
+    profiledetector.h
     requestlogpanel.h
     collectionsearchpanel.h
     watchcalculator.h
@@ -576,6 +580,31 @@ if(BUILD_TESTING)
             $<TARGET_FILE:snmpb_request_log_test>)
     else()
         add_test(NAME snmpb.request-log COMMAND $<TARGET_FILE:snmpb_request_log_test>)
+    endif()
+
+    add_executable(snmpb_profile_match_test
+        mibcollectionindex.cpp mibcollectionindex.h profilematch.cpp profilematch.h profilematch_test.cpp)
+    target_link_libraries(snmpb_profile_match_test PRIVATE Qt6::Core)
+    if(WIN32)
+        add_test(NAME snmpb.profile-match COMMAND ${CMAKE_COMMAND} -E env
+            "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
+            $<TARGET_FILE:snmpb_profile_match_test>)
+    else()
+        add_test(NAME snmpb.profile-match COMMAND $<TARGET_FILE:snmpb_profile_match_test>)
+    endif()
+
+    add_executable(snmpb_profile_detector_test
+        snmpreport.cpp snmpreport.h snmptransport.cpp snmptransport.h snmprequestconfig.cpp snmprequestconfig.h
+        snmprequestconfigadapter.cpp snmprequestconfigadapter.h
+        profiledetector.cpp profiledetector.h profiledetector_test.cpp)
+    set_target_properties(snmpb_profile_detector_test PROPERTIES AUTOMOC ON)
+    target_link_libraries(snmpb_profile_detector_test PRIVATE Qt6::Core snmpb_snmp_pp snmpb_libtomcrypt)
+    if(WIN32)
+        add_test(NAME snmpb.profile-detector COMMAND ${CMAKE_COMMAND} -E env
+            "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
+            $<TARGET_FILE:snmpb_profile_detector_test>)
+    else()
+        add_test(NAME snmpb.profile-detector COMMAND $<TARGET_FILE:snmpb_profile_detector_test>)
     endif()
 
     add_executable(snmpb_snmp_report_test snmpreport.cpp snmpreport.h snmpreport_test.cpp)

@@ -52,6 +52,7 @@
 #include <QComboBox>
 #include <QToolButton>
 #include "agent.h"
+#include "mibprofile.h"
 #include "requestlog.h"
 #include "mibcollectionservice.h"
 #include <QLineEdit>
@@ -587,6 +588,53 @@ int main( int argc, char ** argv )
                             mw.grab().save(QDir(smoke_config_dir).filePath("watch-tab.png"));
                             watchService->remove(watchId);
                             check(watchTable && watchTable->rowCount() == 0, "live: removing a watch removes its row");
+                        }
+                        if (smoke_live_target.startsWith("127.0.0.1") && smoke_live_walk.isEmpty()) {
+                            // Detect profile: start from another profile; the test agent reports a
+                            // vendor registration that only the test profile's MIBs define.
+                            QComboBox *profileCombo = mw.findChild<QComboBox *>("MibBrowserProfileSelector");
+                            QToolButton *detectButton = mw.findChild<QToolButton *>("ConnectionDetect");
+                            MibCollectionService *collection = snmpb.findChild<MibCollectionService *>();
+                            check(profileCombo && detectButton && collection, "live: the Detect button exists");
+                            if (profileCombo && detectButton && collection) {
+                                collection->rebuildNow();
+                                collection->waitForBuild(60000);
+                                const QString before = profileCombo->currentText();
+                                const int standards = profileCombo->findData(QStringLiteral("custom.other"));   // the empty second profile
+                                snmpb.MibLibraryObj()->selectProfile(QStringLiteral("custom.other"));
+                                targetBox->setEditText(smoke_live_target);
+                                // The selector follows the Library a moment later: wait until it really shows Standards.
+                                const auto waitUntil = [](const std::function<bool()> &done, int limitMs) {
+                                    QEventLoop loop; QTimer limit, poll; limit.setSingleShot(true);
+                                    QObject::connect(&limit, &QTimer::timeout, &loop, &QEventLoop::quit);
+                                    QObject::connect(&poll, &QTimer::timeout, &loop, [&]() { if (done()) loop.quit(); });
+                                    poll.start(50); limit.start(limitMs);
+                                    if (!done()) loop.exec();
+                                    return done();
+                                };
+                                check(standards >= 0 && waitUntil([&]() { return profileCombo->currentIndex() == standards; }, 30000),
+                                      "live: a different profile is selected before Detect");
+                                QEventLoop detectWait; QTimer detectLimit; detectLimit.setSingleShot(true);
+                                QObject::connect(&detectLimit, &QTimer::timeout, &detectWait, &QEventLoop::quit);
+                                QTimer detectPoll; QObject::connect(&detectPoll, &QTimer::timeout, &detectWait, [&]() {
+                                    if (profileCombo->currentText() == before) detectWait.quit();
+                                });
+                                detectButton->click();
+                                check(!detectButton->isEnabled(), "live: the Detect button is disabled while a detection runs");
+                                detectPoll.start(100); detectLimit.start(60000);
+                                detectWait.exec();
+                                smoke_output << "launch-smoke: DETECT before=\"" << before << "\" after=\"" << profileCombo->currentText() << "\"" << Qt::endl;
+                                check(profileCombo->currentText() == before,
+                                      "live: Detect read the device and switched to the profile that holds its MIBs");
+                                QCoreApplication::processEvents();
+                                check(detectButton->isEnabled(), "live: the Detect button is available again");
+                                bool logged = false;
+                                if (RequestLog *detectLog = snmpb.findChild<RequestLog *>())
+                                    for (const RequestLogEntry &e : detectLog->entries())
+                                        logged = logged || (e.operation == "Detect profile" && e.outcome == RequestOutcome::Succeeded &&
+                                                            e.detail.contains(before));
+                                check(logged, "live: the detection is in the Log with the profile it chose");
+                            }
                         }
                         if (smoke_live_target.startsWith("127.0.0.1")) {
                             // Ask the test agent to exit so the scenario ends without waiting.
