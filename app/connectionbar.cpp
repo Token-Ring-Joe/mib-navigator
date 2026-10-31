@@ -9,7 +9,6 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
-#include <QMenu>
 #include <QToolButton>
 #include <QSettings>
 
@@ -39,17 +38,16 @@ ConnectionBar::ConnectionBar(CommunityCredentialService *communityService,
     credentialCombo = new QComboBox(this);
     credentialCombo->setObjectName(QStringLiteral("ConnectionCredential"));
     credentialCombo->setMinimumWidth(190);
-    credentialCombo->setToolTip(tr("How to authenticate. Manage saved credentials from the Options menu."));
+    credentialCombo->setToolTip(tr("How to authenticate. Use Manage… to add or edit saved credentials."));
     layout->addWidget(credentialCombo, 2);
     auto *manage = new QToolButton(this);
     manage->setObjectName(QStringLiteral("ConnectionManageCredentials"));
     manage->setText(tr("Manage…"));
-    manage->setToolTip(tr("Add, edit or delete saved credentials"));
-    manage->setPopupMode(QToolButton::InstantPopup);
-    auto *manageMenu = new QMenu(manage);
-    manageMenu->addAction(tr("SNMPv1/v2c communities…"), this, &ConnectionBar::manageCommunitiesRequested);
-    manageMenu->addAction(tr("SNMPv3 users…"), this, &ConnectionBar::manageUsmRequested);
-    manage->setMenu(manageMenu);
+    manage->setToolTip(tr("Add, edit or delete saved credentials (SNMPv1/v2c communities and SNMPv3 users)"));
+    // Opens the Credentials screen on the tab that matches the credential chosen now.
+    connect(manage, &QToolButton::clicked, this, [this]() {
+        emit manageCredentialsRequested(credentialProtocol());
+    });
     layout->addWidget(manage);
 
     layout->addWidget(new QLabel(tr("MIB Profile"), this));

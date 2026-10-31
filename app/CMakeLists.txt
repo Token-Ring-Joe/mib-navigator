@@ -7,6 +7,7 @@ set(SNMPB_APP_SOURCES
     communitycredentialrepository.cpp
     communitycredentialservice.cpp
     communitycredentialmanager.cpp
+    credentialsdialog.cpp
     credentialrecords.cpp
     diagnosticlogger.cpp
     mainwindowlayout.cpp
@@ -87,6 +88,7 @@ set(SNMPB_APP_HEADERS
     communitycredentialrepository.h
     communitycredentialservice.h
     communitycredentialmanager.h
+    credentialsdialog.h
     credentialrecords.h
     diagnosticlogger.h
     mainwindowlayout.h
@@ -317,6 +319,13 @@ if(BUILD_TESTING)
     add_test(NAME snmpb.mib-environment-manager COMMAND $<TARGET_FILE:snmpb_mib_environment_manager_test>)
 
     function(snmpb_configure_qt_test_runtime)
+        foreach(test_name IN LISTS ARGN)
+            # Checked on every platform: only Windows uses the list, so a stale name used to
+            # surface only in Windows CI.
+            if(NOT TEST ${test_name})
+                message(FATAL_ERROR "snmpb_configure_qt_test_runtime: no test named ${test_name}")
+            endif()
+        endforeach()
         if(WIN32)
             foreach(test_name IN LISTS ARGN)
                 set_property(TEST ${test_name} PROPERTY ENVIRONMENT
@@ -916,7 +925,6 @@ if(BUILD_TESTING)
         snmpb.mib-effective-plan
         snmpb.mib-startup-path
         snmpb.stability-diagnostics
-        snmpb.connection-request-settings
         snmpb.product-identity
         snmpb.mib-service
         snmpb.mib-environment
@@ -931,14 +939,6 @@ if(BUILD_TESTING)
         snmpb.snmp-operations
         snmpb.community-credential
         snmpb.credential-architecture
-        snmpb.preferred-mib
-        snmpb.profile-transfer
-        snmpb.profile-metadata
-        snmpb.agentprofile-service
-        snmpb.agentprofile-operations
-        snmpb.device-tree-repository
-        snmpb.device-tree-model
-        snmpb.device-pane
         snmpb.table-traversal
         snmpb.table-node-validation
         snmpb.synchronous-config
@@ -946,6 +946,5 @@ if(BUILD_TESTING)
         snmpb.request-context
         snmpb.request-config
         snmpb.preferences-settings
-        snmpb.agentprofile-repository
     )
 endif()

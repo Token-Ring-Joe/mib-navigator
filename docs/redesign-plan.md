@@ -190,9 +190,11 @@ into smaller steps, each with its own working build.
    (`snmprequestsettings.h`), the compatibility shim is gone, and the unused "selected
    Agent Profile" preference fields are no longer read or written (the saved keys stay
    in the settings file untouched).
-8d. *Still to do:* replace the two credential managers (SNMPv1/v2c communities and SNMPv3
-   users) with the single Credentials screen. They are reached from the Manage button
-   next to the Credential list.
+8d. *Done (2026-10-31):* one **Credentials** screen (Options > Credentials, or Manage next to
+   the Credential list) with an SNMPv1/v2c communities tab and an SNMPv3 users tab and a single
+   OK and Cancel. OK saves the SNMPv3 users first (validation and rollback), then the
+   communities; pressing OK with no edits leaves every file byte-identical (checked against a
+   copy of a real saved user). Manage opens on the tab matching the chosen credential.
 
 ### Phase 3: Features, in dependency order
 

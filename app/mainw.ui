@@ -1222,7 +1222,7 @@
     <property name="title">
      <string>&amp;Options</string>
     </property>
-    <addaction name="actionManageUSMProfiles"/>
+    <addaction name="actionCredentials"/>
     <addaction name="separator"/>
     <addaction name="actionPreferences"/>
    </widget>
@@ -1366,9 +1366,9 @@
     <string>&amp;Extract MIB from RFC...</string>
    </property>
   </action>
-  <action name="actionManageUSMProfiles">
+  <action name="actionCredentials">
    <property name="text">
-    <string extracomment="&quot;USM Profiles&quot; are just accounts, username-password pairs">Manage SNMPv3 USM Profiles...</string>
+    <string>Credentials...</string>
    </property>
   </action>
   <action name="actionPreferences">

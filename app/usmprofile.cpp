@@ -24,11 +24,19 @@
 #include "usmcredentialcoordinator.h"
 #include <QMessageBox>
 
+USMProfileManager::~USMProfileManager()
+{
+    // When the editor is hosted in the Credentials screen that screen owns (and deletes) it.
+    if (editorDialog && !editorDialog->parentWidget()) delete editorDialog;
+}
+
 USMProfileManager::USMProfileManager(Snmpb *snmpb)
 {
     s = snmpb;
 
-    up.setupUi(&upw);
+    editorDialog = new QDialog;
+    up.setupUi(editorDialog);
+    up.OKCancelBox->hide();   // the Credentials screen provides OK and Cancel
 
     // Set some properties for the USM Profile TreeView
     up.ProfileTree->header()->hide();
@@ -80,57 +88,52 @@ USMProfileManager::USMProfileManager(Snmpb *snmpb)
         this);
 }
 
-void USMProfileManager::Execute (void)
+QWidget *USMProfileManager::EditorWidget()
 {
-    ExecuteEditor(false);
+    return editorDialog;
 }
 
-void USMProfileManager::ExecuteNewCredential(void)
-{
-    ExecuteEditor(true);
-}
-
-void USMProfileManager::ExecuteEditor(bool createCredential)
+void USMProfileManager::PrepareEditor()
 {
     RebuildEditor();
-    if (createCredential)
-        Add();
-    if(upw.exec() == QDialog::Accepted)
+}
+
+bool USMProfileManager::ApplyEditor()
+{
+    const QList<UsmCredentialRecord> before = credentialService->records();
+    const QList<UsmCredentialRecord> after = EditorRecords();
+    if (!credentialService->validateWorkingCopy(after))
     {
-        const QList<UsmCredentialRecord> before = credentialService->records();
-        const QList<UsmCredentialRecord> after = EditorRecords();
-        if (!credentialService->validateWorkingCopy(after))
-        {
-            QMessageBox::warning(&upw, tr("USM Profiles"),
-                                 tr("Security names must be non-empty and unique. "
-                                    "Selected authentication and privacy protocols "
-                                    "also require their corresponding secrets."));
-            return;
-        }
-        USM* usm = s->AgentObj()->GetUSMObj();
-        UsmCredentialRepository identities(s->GetCredentialIdentitiesConfigFile());
-        auto runtimeWriter = [usm, this](const QList<UsmCredentialRecord> &records) {
-            return UsmCredentialRuntimeRepository::replaceAndSave(
-                       usm, records, s->GetUsmUsersConfigFile()) == SNMPv3_USM_OK;
-        };
-        auto identityWriter = [&identities](const QList<UsmCredentialRecord> &records) {
-            QList<UsmCredentialIdentityRecord> mappings;
-            for (const auto &record : records)
-                mappings.append({record.identity.credentialId, record.securityName});
-            return identities.save(mappings);
-        };
-        const UsmCommitResult result = UsmCredentialCoordinator::apply(
-            before, after, runtimeWriter, identityWriter);
-        if (result.status != UsmCommitStatus::Success)
-        {
-            QMessageBox::critical(&upw, tr("USM Profiles"),
-                                  tr("The credential changes could not be saved. "
-                                     "The previous configuration was restored where possible."));
-            return;
-        }
-        credentialService->applyCommitted(after);
-        emit CredentialsChanged();
+        QMessageBox::warning(editorDialog, tr("SNMPv3 users"),
+                             tr("Security names must be non-empty and unique. "
+                                "Selected authentication and privacy protocols "
+                                "also require their corresponding secrets."));
+        return false;
     }
+    USM* usm = s->AgentObj()->GetUSMObj();
+    UsmCredentialRepository identities(s->GetCredentialIdentitiesConfigFile());
+    auto runtimeWriter = [usm, this](const QList<UsmCredentialRecord> &records) {
+        return UsmCredentialRuntimeRepository::replaceAndSave(
+                   usm, records, s->GetUsmUsersConfigFile()) == SNMPv3_USM_OK;
+    };
+    auto identityWriter = [&identities](const QList<UsmCredentialRecord> &records) {
+        QList<UsmCredentialIdentityRecord> mappings;
+        for (const auto &record : records)
+            mappings.append({record.identity.credentialId, record.securityName});
+        return identities.save(mappings);
+    };
+    const UsmCommitResult result = UsmCredentialCoordinator::apply(
+        before, after, runtimeWriter, identityWriter);
+    if (result.status != UsmCommitStatus::Success)
+    {
+        QMessageBox::critical(editorDialog, tr("SNMPv3 users"),
+                              tr("The credential changes could not be saved. "
+                                 "The previous configuration was restored where possible."));
+        return false;
+    }
+    credentialService->applyCommitted(after);
+    emit CredentialsChanged();
+    return true;
 }
 
 void USMProfileManager::RebuildEditor()

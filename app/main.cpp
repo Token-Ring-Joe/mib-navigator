@@ -52,6 +52,8 @@
 #include <QComboBox>
 #include <QToolButton>
 #include "agent.h"
+#include "credentialsdialog.h"
+#include "usmcredentialservice.h"
 #include "watchservice.h"
 #include <QTableWidget>
 #include <QCryptographicHash>
@@ -577,6 +579,23 @@ int main( int argc, char ** argv )
             }
             check(snmpb.MainUI()->TrapLog->contextMenuPolicy() == Qt::CustomContextMenu,
                   "the trap list offers a right-click menu (Copy source IP)");
+            // One Credentials screen for communities and SNMPv3 users; OK with no edits changes nothing.
+            if (CredentialsDialog *credentials = mw.findChild<CredentialsDialog *>("CredentialsDialog")) {
+                check(credentials->tabs()->count() == 2 &&
+                      credentials->tabs()->tabText(0).contains("communities") &&
+                      credentials->tabs()->tabText(1).contains("SNMPv3"),
+                      "the Credentials screen has a communities tab and an SNMPv3 users tab");
+                const int communitiesBefore = snmpb.CommunityCredentials()->records().size();
+                const int usersBefore = snmpb.UsmCredentials()->records().size();
+                credentials->prepare(CredentialsDialog::Users);
+                check(credentials->tabs()->currentIndex() == 1, "the Credentials screen opens on the requested tab");
+                check(credentials->applyChanges() &&
+                      snmpb.CommunityCredentials()->records().size() == communitiesBefore &&
+                      snmpb.UsmCredentials()->records().size() == usersBefore,
+                      "pressing OK in the Credentials screen with no edits keeps every credential");
+            } else {
+                check(false, "the Credentials screen exists");
+            }
             // Deleting the chosen credential must not silently switch to another one.
             if (QComboBox *credentialBox = mw.findChild<QComboBox *>("ConnectionCredential")) {
                 CommunityCredentialRecord doomed;

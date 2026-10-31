@@ -32,6 +32,7 @@ CommunityCredentialManager::CommunityCredentialManager(
     right->addLayout(actions); right->addStretch();
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok |
                                          QDialogButtonBox::Cancel, this);
+    buttonBox = buttons;
     right->addWidget(buttons); layout->addLayout(right, 2);
     connect(list, &QListWidget::currentRowChanged, this, &CommunityCredentialManager::selectRow);
     connect(name, &QLineEdit::editingFinished, this, &CommunityCredentialManager::storeFields);
@@ -44,10 +45,25 @@ CommunityCredentialManager::CommunityCredentialManager(
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 }
 
-void CommunityCredentialManager::execute()
+void CommunityCredentialManager::setButtonsVisible(bool visible)
+{
+    buttonBox->setVisible(visible);
+}
+
+void CommunityCredentialManager::reload()
 {
     working = service->records(); rebuildList();
+}
+
+void CommunityCredentialManager::execute()
+{
+    reload();
     if (exec() != Accepted) return;
+    applyChanges();
+}
+
+void CommunityCredentialManager::applyChanges()
+{
     storeFields();
     QStringList retained;
     for (const auto &record : working)

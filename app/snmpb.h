@@ -72,7 +72,6 @@ public:
 
 public slots:
     void TabSelected(void);
-    void ManageUSMProfiles(bool);
     void ManagePreferences(bool);
     void AboutBox(bool);
 
@@ -95,6 +94,7 @@ private:
     WorkbenchShell *workbench = nullptr;
     StartupCoordinator *startup = nullptr;
     QMainWindow *mainWindow = nullptr;
+    class CredentialsDialog *credentialsDialog = nullptr;
 
     QString start_msg;
     bool start_issuccess;

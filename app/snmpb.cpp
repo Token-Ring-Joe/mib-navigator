@@ -44,6 +44,7 @@
 #include "mibmodule.h"
 #include "agent.h"
 #include "connectionbar.h"
+#include "credentialsdialog.h"
 #include "mibenvironmentregistry.h"
 #include "snmptransport.h"
 #include "watchpanel.h"
@@ -989,18 +990,15 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     // Connect some signals
     connect( w.TabW, SIGNAL( currentChanged(int) ),
              this, SLOT( TabSelected() ) );
-    connect( w.actionManageUSMProfiles, SIGNAL( triggered(bool) ),
-             this, SLOT( ManageUSMProfiles(bool) ) );
-    QAction *manageCommunities = w.optionsMenu->addAction(
-        tr("Manage SNMPv1/v2c Community Credentials..."));
-    connect(manageCommunities, &QAction::triggered, mw, [this, mw]() {
-        CommunityCredentialManager manager(communityCredentialService, mw);
-        manager.execute();
+    credentialsDialog = new CredentialsDialog(communityCredentialService, upm, mw);
+    connect( w.actionCredentials, &QAction::triggered, this, [this](bool) {
+        credentialsDialog->execute(CredentialsDialog::Communities);
     });
-    if (auto *bar = mw->findChild<ConnectionBar *>(QStringLiteral("ConnectionBar"))) {
-        connect(bar, &ConnectionBar::manageCommunitiesRequested, manageCommunities, &QAction::trigger);
-        connect(bar, &ConnectionBar::manageUsmRequested, w.actionManageUSMProfiles, &QAction::trigger);
-    }
+    if (auto *bar = mw->findChild<ConnectionBar *>(QStringLiteral("ConnectionBar")))
+        connect(bar, &ConnectionBar::manageCredentialsRequested, this, [this](int protocol) {
+            credentialsDialog->execute(protocol == 2 ? CredentialsDialog::Users
+                                                     : CredentialsDialog::Communities);
+        });
     connect( w.actionPreferences, SIGNAL( triggered(bool) ),
              this, SLOT( ManagePreferences(bool) ) );
     connect( w.helpAboutAction, SIGNAL( triggered(bool) ),
@@ -1232,11 +1230,6 @@ QString Snmpb::GetLogConfigFile(void)
     QSettings settings;
     QDir cfgdir = QFileInfo(settings.fileName()).dir();
     return cfgdir.filePath(LOG_CONFIG_FILE);
-}
-
-void Snmpb::ManageUSMProfiles(bool)
-{
-    upm->Execute();
 }
 
 void Snmpb::ManagePreferences(bool)

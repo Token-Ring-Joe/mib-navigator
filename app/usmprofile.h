@@ -25,6 +25,7 @@
 #include <qdialog.h>
 #include <qtreewidget.h>
 #include <qlist.h>
+#include <QPointer>
 #include "credentialrecords.h"
 
 class USMProfile: public QObject
@@ -68,8 +69,14 @@ class USMProfileManager: public QObject
 
 public:
     USMProfileManager(Snmpb *snmpb);
-    void Execute(void);
-    void ExecuteNewCredential(void);
+    ~USMProfileManager() override;
+
+    // The SNMPv3 user editor is hosted by the Credentials screen, which owns the OK and Cancel
+    // buttons. PrepareEditor() reloads the saved users (dropping unsaved edits); ApplyEditor()
+    // validates and saves them, or explains why it could not and returns false.
+    QWidget *EditorWidget();
+    void PrepareEditor();
+    bool ApplyEditor();
 
     QStringList GetUsersList(void);
     class UsmCredentialService *Credentials() const;
@@ -102,12 +109,11 @@ protected slots:
     int LibPrivToUiPriv(int prot);
 
 private:
-    void ExecuteEditor(bool createCredential);
     void RebuildEditor();
     QList<UsmCredentialRecord> EditorRecords();
     Snmpb *s;
     Ui_USMProfile up;
-    QDialog upw;
+    QPointer<QDialog> editorDialog;
 
     USMProfile* currentprofile;
     QList<USMProfile *> users;

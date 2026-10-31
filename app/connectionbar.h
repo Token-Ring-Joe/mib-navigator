@@ -30,8 +30,8 @@ public:
 
 signals:
     void selectionChanged();
-    void manageCommunitiesRequested();
-    void manageUsmRequested();
+    // protocol is the chosen credential's SNMP version (0, 1, 2), or -1 when none is chosen.
+    void manageCredentialsRequested(int protocol);
 
 private:
     void applyHistoryCredential();
