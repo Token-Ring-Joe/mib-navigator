@@ -159,13 +159,13 @@ function(run_scenario name)
         "${SNMPB_EXECUTABLE}" --launch-smoke-test "${dir}"
         --smoke-mib "${smoke_mib}" ${edit_args})
     if(S_LIVE)
-        # The test agent listens on 127.0.0.1 only and answers two requests. Both processes run
-        # at the same time; the agent ends after answering (or after 60 seconds).
+        # The test agent listens on 127.0.0.1 only and answers until asked to exit (or idle for 60 seconds). Both processes run
+        # at the same time.
         string(RANDOM LENGTH 4 ALPHABET 123456789 port_seed)
         math(EXPR live_port "20000 + ${port_seed} % 20000")
         execute_process(
             COMMAND "${SNMPB_PYTHON}" -I "${SNMPB_SOURCE_DIR}/tools/loopback_snmp_agent.py"
-                ${live_port} smokero "${dir}/agent.log" 2 60
+                ${live_port} smokero "${dir}/agent.log" 0 60
             COMMAND ${app_command} --smoke-network
                 --smoke-live-target "127.0.0.1:${live_port}"
                 --smoke-live-credential "Smoke lab - SNMPv2c"
@@ -316,6 +316,10 @@ if(SNMPB_PYTHON)
         EXPECT "PASS: live: the Get through the connection bar returned the agent's sysDescr"
                "PASS: live: the target was remembered in the recent-target history"
                "PASS: live: a request that gets no answer shows an error line above the Results table"
+               "PASS: live: a watch polls repeatedly and shows change and rate"
+               "PASS: live: the watch kept its own target after the connection bar changed"
+               "PASS: live: the Watch tab shows the row and its change"
+               "PASS: live: removing a watch removes its row"
                "PASS: live: the history remembers the credential used with the target"
                "PASS: live: a wrong-type answer shows a plain-English warning naming both types"
                "PASS: live: the Results table shows the received type and raw value beside the interpretation"

@@ -52,6 +52,8 @@
 #include <QComboBox>
 #include <QToolButton>
 #include "agent.h"
+#include "watchservice.h"
+#include <QTableWidget>
 #include <QCryptographicHash>
 #include "communitycredentialservice.h"
 #include <QTextEdit>
@@ -285,11 +287,12 @@ int main( int argc, char ** argv )
             QTabWidget *bottomTabs = mw.findChild<QTabWidget *>("WorkbenchBottomTabs");
             check(workbenchDocuments && workbenchDocuments->tabBar()->isHidden(),
                   "legacy primary tab navigation is retired");
-            check(bottomTabs && bottomTabs->count() == 3 &&
-                  bottomTabs->tabText(0) == "Problems" &&
-                  bottomTabs->tabText(1) == "Diagnostics" &&
-                  bottomTabs->tabText(2) == "Raw",
-                  "bottom Problems, Diagnostics, and Raw views are integrated");
+            check(bottomTabs && bottomTabs->count() == 4 &&
+                  bottomTabs->tabText(0) == "Watch" &&
+                  bottomTabs->tabText(1) == "Problems" &&
+                  bottomTabs->tabText(2) == "Diagnostics" &&
+                  bottomTabs->tabText(3) == "Raw",
+                  "bottom Watch, Problems, Diagnostics, and Raw views are integrated");
             QAction *eventsActivity = mw.findChild<QAction *>("WorkbenchActivityEvents");
             QAction *mibsActivity = mw.findChild<QAction *>("WorkbenchActivityMIBs");
             if (eventsActivity) eventsActivity->trigger();
@@ -345,7 +348,7 @@ int main( int argc, char ** argv )
                 QCheckBox *notes = mw.findChild<QCheckBox *>("WorkbenchProblemShowNotes");
                 QPlainTextEdit *detail = mw.findChild<QPlainTextEdit *>("WorkbenchProblemDetail");
                 QTabWidget *bottom = mw.findChild<QTabWidget *>("WorkbenchBottomTabs");
-                if (bottom) bottom->setCurrentIndex(0);
+                if (bottom) bottom->setCurrentIndex(1);
                 mw.resize(1500, 1000);
                 QCoreApplication::processEvents();
                 mw.grab().save(QDir(smoke_config_dir).filePath("problems-tab.png"));
@@ -508,6 +511,58 @@ int main( int argc, char ** argv )
                         check(requestStatus && requestStatus->property("failed").toBool() && !requestStatus->text().isEmpty(),
                               "live: a request that gets no answer shows an error line above the Results table");
                         targetBox->setEditText(smoke_live_target);
+                    }
+                    if (smoke_live_walk.isEmpty()) {
+                        // Watch: a moving counter on the test agent, polled every second while the
+                        // connection bar is pointed somewhere else.
+                        WatchService *watchService = snmpb.findChild<WatchService *>();
+                        check(watchService != nullptr, "live: the Watch service exists");
+                        if (watchService) {
+                            WatchSpec spec;
+                            spec.target = smoke_live_target;
+                            spec.credentialKey = credentialBox->currentData().toString();
+                            spec.oid = "1.3.6.1.2.1.2.2.1.10.1";
+                            spec.intervalSeconds = 1;
+                            const quint64 watchId = watchService->add(spec);
+                            targetBox->setEditText("127.0.0.1:1");   // the bar no longer points at the agent
+                            QEventLoop watchWait; QTimer watchLimit; watchLimit.setSingleShot(true);
+                            QObject::connect(&watchLimit, &QTimer::timeout, &watchWait, &QEventLoop::quit);
+                            QTimer watchPoll; QObject::connect(&watchPoll, &QTimer::timeout, &watchWait, [&]() {
+                                const WatchRow *row = watchService->row(watchId);
+                                if (row && row->polls >= 4) watchWait.quit();
+                            });
+                            watchPoll.start(100); watchLimit.start(30000);
+                            watchWait.exec();
+                            const WatchRow *row = watchService->row(watchId);
+                            if (row)
+                                smoke_output << "launch-smoke: LIVE-WATCH polls=" << row->polls << " failures=" << row->failures
+                                             << " status=\"" << row->status << "\" value=" << row->value << " change=\""
+                                             << row->change.change << "\" rate=\"" << row->change.rate << "\" received=\""
+                                             << row->received << "\" target=" << row->spec.target << Qt::endl;
+                            check(row && row->polls >= 4 && row->status == "OK" && row->failures == 0 &&
+                                  row->change.change == "+1000" && !row->change.rate.isEmpty(),
+                                  "live: a watch polls repeatedly and shows change and rate");
+                            check(row && row->spec.target == smoke_live_target,
+                                  "live: the watch kept its own target after the connection bar changed");
+                            QTableWidget *watchTable = mw.findChild<QTableWidget *>("WatchTable");
+                            check(watchTable && watchTable->rowCount() == 1 &&
+                                  watchTable->item(0, 4)->text() == "+1000",
+                                  "live: the Watch tab shows the row and its change");
+                            if (QTabWidget *bottomWatch = mw.findChild<QTabWidget *>("WorkbenchBottomTabs")) bottomWatch->setCurrentIndex(0);
+                            if (QAction *mibsWatch = mw.findChild<QAction *>("WorkbenchActivityMIBs")) mibsWatch->trigger();
+                            mw.resize(1500, 1000);
+                            QCoreApplication::processEvents();
+                            mw.grab().save(QDir(smoke_config_dir).filePath("watch-tab.png"));
+                            watchService->remove(watchId);
+                            check(watchTable && watchTable->rowCount() == 0, "live: removing a watch removes its row");
+                        }
+                        if (smoke_live_target.startsWith("127.0.0.1")) {
+                            // Ask the test agent to exit so the scenario ends without waiting.
+                            targetBox->setEditText(smoke_live_target);
+                            QEventLoop quitWait; QTimer::singleShot(1500, &quitWait, &QEventLoop::quit);
+                            snmpb.AgentObj()->GetFrom("1.3.6.1.4.1.99999.0", 0);
+                            quitWait.exec();
+                        }
                     }
                     QSettings historySettings;
                     check(historySettings.value("connection/target-history").toString().contains(smoke_live_target),

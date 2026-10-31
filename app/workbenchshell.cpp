@@ -65,7 +65,7 @@ QPushButton *sidebarButton(QWidget *page, const QString &text, const QString &na
 WorkbenchShell::WorkbenchShell(QMainWindow *window, QWidget *centralRoot,
                                QGridLayout *centralLayout, QWidget *contextStrip,
                                QTabWidget *documents, const Pages &pages,
-                               QWidget *inspector,
+                               QWidget *inspector, QWidget *watch,
                                QWidget *problems, QWidget *diagnostics, QWidget *raw,
                                QObject *parent)
     : QObject(parent), mainWindow(window), documentTabs(documents), workbenchPages(pages)
@@ -165,6 +165,7 @@ WorkbenchShell::WorkbenchShell(QMainWindow *window, QWidget *centralRoot,
     bottomTabs = new QTabWidget(window);
     bottomTabs->setObjectName(QStringLiteral("WorkbenchBottomTabs"));
     bottomTabs->setDocumentMode(true);
+    bottomTabs->addTab(watch, tr("Watch"));
     bottomTabs->addTab(problems, tr("Problems"));
     bottomTabs->addTab(diagnostics, tr("Diagnostics"));
     bottomTabs->addTab(raw, tr("Raw"));
@@ -337,6 +338,14 @@ void WorkbenchShell::openDocument(QWidget *document)
     }
     openDocumentTabs->show();
     openDocumentTabs->setCurrentIndex(tab);
+}
+
+void WorkbenchShell::showBottomPage(QWidget *page)
+{
+    const int index = bottomTabs->indexOf(page);
+    if (index < 0) return;
+    bottomPanel->show();
+    bottomTabs->setCurrentIndex(index);
 }
 
 void WorkbenchShell::showMibTree() { openDocument(workbenchPages.tree); }

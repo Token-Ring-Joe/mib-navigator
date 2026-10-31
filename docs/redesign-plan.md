@@ -207,7 +207,19 @@ into smaller steps, each with its own working build.
    that answers one object with the wrong type. Still to do: show it in the Query
    Table view, Traps, and Watch. Not checked yet: DISPLAY-HINT mismatches and
    values that violate a TEXTUAL-CONVENTION beyond range, size, and enumeration.
-10. **Watch.**
+10. **Watch.** *Done (2026-10-31):* right-click a row in Results and choose "Watch this value".
+    The Watch tab (bottom panel) lists each watch with its own target and credential, value,
+    change since the previous poll, rate per second, the raw received type, any MIB warnings,
+    and its status. Rates use the device's own sysUpTime when it answers (so polling jitter does
+    not distort them) and fall back to the local clock; "octets" objects show bits per second.
+    A Counter32 wrap is told from a device restart by sysUpTime (no sysUpTime: a fall from the
+    top quarter of the range is a wrap, anything else a reset), so neither shows a false spike
+    and a restart resets the baseline. A row captures the target text and a credential
+    reference; the credential is re-resolved at every poll, and the connection bar never
+    retargets a row (`snmpb.watch-service`, `snmpb.watch-calculator`, and the loopback
+    scenario, which points the bar elsewhere while a watch keeps polling). Not done yet:
+    watches are not saved across restarts, there is no per-row interval edit, and Watch cannot
+    be started from the Tree.
 11. **Traps**: Copy source IP, plus raw/interpreted varbinds from step 9.
 12. **Log / PDU view**, starting with plain-English SNMPv3 REPORT translation
     (unknown user, wrong auth, decryption failure, time window, unknown engine

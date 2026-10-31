@@ -32,6 +32,9 @@ set(SNMPB_APP_SOURCES
     mibruntimestage.cpp
     mibvaluesemantics.cpp
     snmpreport.cpp
+    watchcalculator.cpp
+    watchservice.cpp
+    watchpanel.cpp
     mibprofile.cpp
     mibdownloadtransport.cpp
     miblibrarywidget.cpp
@@ -109,6 +112,9 @@ set(SNMPB_APP_HEADERS
     mibservice_internal.h
     mibvaluesemantics.h
     snmpreport.h
+    watchcalculator.h
+    watchservice.h
+    watchpanel.h
     mibprofile.h
     mibdownloadtransport.h
     miblibrarywidget.h
@@ -475,6 +481,36 @@ if(BUILD_TESTING)
             $<TARGET_FILE:snmpb_mib_value_check_test>)
     else()
         add_test(NAME snmpb.mib-value-check COMMAND $<TARGET_FILE:snmpb_mib_value_check_test>)
+    endif()
+
+    add_executable(snmpb_watch_calculator_test watchcalculator.cpp watchcalculator.h watchcalculator_test.cpp)
+    target_link_libraries(snmpb_watch_calculator_test PRIVATE Qt6::Core)
+    if(WIN32)
+        add_test(NAME snmpb.watch-calculator COMMAND ${CMAKE_COMMAND} -E env
+            "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
+            $<TARGET_FILE:snmpb_watch_calculator_test>)
+    else()
+        add_test(NAME snmpb.watch-calculator COMMAND $<TARGET_FILE:snmpb_watch_calculator_test>)
+    endif()
+
+    add_executable(snmpb_watch_service_test
+        mibenvironment.cpp mibenvironment.h
+        mibvaluesemantics.cpp mibvaluesemantics.h
+        snmpreport.cpp snmpreport.h
+        snmptransport.cpp snmptransport.h
+        snmprequestconfig.cpp snmprequestconfig.h
+        snmprequestconfigadapter.cpp snmprequestconfigadapter.h
+        watchcalculator.cpp watchcalculator.h
+        watchservice.cpp watchservice.h
+        watchservice_test.cpp)
+    set_target_properties(snmpb_watch_service_test PROPERTIES AUTOMOC ON)
+    target_link_libraries(snmpb_watch_service_test PRIVATE Qt6::Core snmpb_snmp_pp snmpb_libtomcrypt)
+    if(WIN32)
+        add_test(NAME snmpb.watch-service COMMAND ${CMAKE_COMMAND} -E env
+            "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
+            $<TARGET_FILE:snmpb_watch_service_test>)
+    else()
+        add_test(NAME snmpb.watch-service COMMAND $<TARGET_FILE:snmpb_watch_service_test>)
     endif()
 
     add_executable(snmpb_snmp_report_test snmpreport.cpp snmpreport.h snmpreport_test.cpp)

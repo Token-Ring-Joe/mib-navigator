@@ -44,6 +44,12 @@
 #include "mibmodule.h"
 #include "agent.h"
 #include "connectionbar.h"
+#include "mibenvironmentregistry.h"
+#include "snmptransport.h"
+#include "watchpanel.h"
+#include "watchservice.h"
+#include <QMenu>
+#include <memory>
 #include "trap.h"
 #include "logsnmpb.h"
 #include "mibeditor.h"
@@ -661,6 +667,56 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     rawLayout->addWidget(w.Query, 1);
     w.QueryLayout->hide();
 
+    // Watch: repeat a GET on one object. Each row keeps the target and credential it was created
+    // with, so the connection bar can change freely afterwards.
+    auto *watchService = new WatchService(
+        [this](const QString &target, const QString &credentialKey, SnmpRequestConfig *config, QString *error) {
+            QSettings settings;
+            AgentRequestSelection selection;
+            const ConnectionError problem = ConnectionModel::build(
+                target, credentialKey, communityCredentialService, UsmCredentials(),
+                PreferencesSettings::load(settings), &selection);
+            if (problem != ConnectionError::None) { *error = ConnectionModel::errorText(problem); return false; }
+            return selection.requestConfig(config);
+        },
+        [](const SnmpRequestConfig &config) { return std::make_unique<SnmpPlusTransport>(config); },
+        []() { return MibEnvironmentRegistry::active(); }, this);
+    watchService->startTimer();
+    auto *watchPanel = new WatchPanel(watchService,
+        [this](const QString &key) {
+            for (const ConnectionCredentialChoice &choice :
+                 ConnectionModel::credentialChoices(communityCredentialService, UsmCredentials()))
+                if (choice.key == key) return choice.label;
+            return tr("(deleted credential)");
+        }, mw);
+    resultTable->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(resultTable, &QWidget::customContextMenuRequested, resultTable,
+            [this, mw, resultTable, watchService, watchPanel](const QPoint &position) {
+        QTableWidgetItem *item = resultTable->itemAt(position);
+        auto *bar = mw->findChild<ConnectionBar *>(QStringLiteral("ConnectionBar"));
+        if (!item || !bar) return;
+        const QString oid = resultTable->item(item->row(), 2) ? resultTable->item(item->row(), 2)->text() : QString();
+        QMenu menu(resultTable);
+        QAction *watch = menu.addAction(tr("Watch this value"));
+        watch->setEnabled(!oid.isEmpty());
+        if (menu.exec(resultTable->viewport()->mapToGlobal(position)) != watch) return;
+        // Check now, so a missing target or credential is explained while the user is looking.
+        QSettings settings;
+        AgentRequestSelection probe;
+        const ConnectionError problem = ConnectionModel::build(
+            bar->target(), bar->credentialKey(), communityCredentialService, UsmCredentials(),
+            PreferencesSettings::load(settings), &probe);
+        if (problem != ConnectionError::None) {
+            QMessageBox::warning(mw, tr("MIB Navigator"), ConnectionModel::errorText(problem));
+            return;
+        }
+        WatchSpec spec;
+        spec.target = bar->target(); spec.credentialKey = bar->credentialKey();
+        spec.oid = oid; spec.intervalSeconds = watchPanel->intervalSeconds();
+        watchService->add(spec);
+        if (workbench) workbench->showBottomPage(watchPanel);
+    });
+
     auto *problemsPage = new QWidget(mw);
     problemsPage->setObjectName(QStringLiteral("WorkbenchProblemsPage"));
     auto *problemsLayout = new QVBoxLayout(problemsPage);
@@ -860,7 +916,7 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     workbenchPages.events = w.TrapsTab;
     workbench = new WorkbenchShell(mw, w.widget,
         qobject_cast<QGridLayout *>(w.widget->layout()), contextWidget, w.TabW,
-        workbenchPages, w.NodeInfoLayout, problemsPage,
+        workbenchPages, w.NodeInfoLayout, watchPanel, problemsPage,
             diagnosticsPage, rawPage, this);
     startup->advance(startupGeneration, StartupState::ShellReady,
                      tr("Loading MIB Catalog…"));

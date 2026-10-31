@@ -32,7 +32,7 @@ public:
 
     WorkbenchShell(QMainWindow *window, QWidget *centralRoot, QGridLayout *centralLayout,
                    QWidget *contextStrip, QTabWidget *documents, const Pages &pages,
-                   QWidget *inspector,
+                   QWidget *inspector, QWidget *watch,
                    QWidget *problems, QWidget *diagnostics, QWidget *raw,
                    QObject *parent = nullptr);
 
@@ -40,6 +40,7 @@ public:
     void setActivity(WorkbenchActivity activity);
     void openDocument(QWidget *document);
     void showMibTree();
+    void showBottomPage(QWidget *page);   // bring one of the bottom tabs forward
     void showMibLibrary(int mode);
     void restorePresentationState();
     void savePresentationState() const;
