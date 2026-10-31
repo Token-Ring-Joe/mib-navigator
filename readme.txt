@@ -33,7 +33,6 @@ Tested & compiles on MSYS2/Windows, Linux, MacOS Leonard & Sierra, and NetBSD
     * GNU install
     * The `patch` tool
  - Qt5: `apt install qt5-base-dev`
- - Qwt library: `apt install libqwt-qt5-dev`
 
 Optional:
 
@@ -95,16 +94,6 @@ lib/parser-smi.y "Fixed crash on compliance statement group"
 Deleted mibs/ietf/IANA-ITU-ALARM-TC-MIB: redundant with one in iana folder
 (prevented proper copy in win32 installer)
 Ran 'autoreconf -i' to generate Makefiles for 1.15 libtools
-
-## QWT http://qwt.sourceforge.net ##
-Version: 6.1.2
-
-Modified file(s):
-qwtconfig.pri
-qwtbuild.pri "Removed silent flag, prevented build on win32"
-qwt.pro
-
---------------------------------
 
 Original author: Martin Jolicoeur <martsjoli@gmail.com>
 

@@ -7,7 +7,6 @@ installed without modification where it exists in the source distribution.
 |---|---:|---|---|---|
 | MIB Navigator (derived from SnmpB) | 1.0.0-rc1 | GPL-2.0-or-later; `license.txt` | repository root and `app/` | executable shipped; GPL text installed |
 | Qt | 6.11.1 in the validated Windows package; CI currently uses 6.10.3 | Qt commercial or applicable open-source terms; Qt SDK SBOMs identify module-level licensing | external Qt SDK, found by CMake | Core, Gui, Widgets, Svg, and deployment-selected Network are dynamically linked in the Windows package; Qt plugins and translations are dynamically loaded; Qt license compliance must be confirmed for the chosen distribution license |
-| Qwt | 6.3.0 | Qwt License 1.0 (`COPYING`) | `third_party/qwt-6.3.0` | statically linked; COPYING and README installed |
 | libsmi | 0.5.0, locally patched | permissive libsmi license (`COPYING`) | `libsmi/` | statically linked; COPYING installed |
 | SNMP++ | 3.3.10 | HP/Jochen Katz permission notice reproduced from the source headers | `snmp++/` | statically linked; notice installed |
 | LibTomCrypt | 1.17 | public-domain dedication (`LICENSE`) | `libtomcrypt/` | statically linked; LICENSE installed |

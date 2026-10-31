@@ -78,12 +78,6 @@ else
 	cd libsmi; ./configure --disable-shared --disable-yang --with-pathseparator=';' --with-dirseparator='/' --with-smipath=$(INSTALL_PREFIX)/$(SHARE)/snmpb/mibs;$(INSTALL_PREFIX)/$(SHARE)/snmpb/pibs
 endif
 
-qwt/lib/libqwt.a: qwt/Makefile
-	$(MAKE) -C qwt
-
-qwt/Makefile:
-	cd qwt; $(QMAKE) qwt.pro
-
 app/makefile.snmpb:
 	cd app; $(QMAKE) -o makefile.snmpb snmpb.pro
 
@@ -92,7 +86,6 @@ app/snmpb: app/makefile.snmpb
 
 snmpb: libtomcrypt/libtomcrypt.a \
        $(LIBSMI) \
-       qwt/lib/libqwt.a \
        app/snmpb
 
 clean: app/makefile.snmpb
@@ -102,7 +95,6 @@ ifneq ($(findstring MINGW,$(os)),)
 else
 	-$(MAKE) -C libsmi clean
 endif
-	-$(MAKE) -C qwt clean
 	-$(MAKE) -C app -f makefile.snmpb clean
 
 distclean: clean
@@ -111,7 +103,6 @@ ifneq ($(findstring MINGW,$(os)),)
 else
 	-$(MAKE) -C libsmi distclean
 endif
-	-$(MAKE) -C qwt distclean
 
 maintainer-clean: clean
 ifneq ($(findstring MINGW,$(os)),)
@@ -119,7 +110,6 @@ ifneq ($(findstring MINGW,$(os)),)
 else
 	-$(MAKE) -C libsmi maintainer-clean
 endif
-	-$(MAKE) -C qwt distclean
 
 install:
 	$(INSTALL) -d $(INSTALL_PREFIX)/$(BIN_PREFIX) $(INSTALL_PREFIX)/$(SHARE)/snmpb/mibs $(INSTALL_PREFIX)/$(SHARE)/snmpb/pibs
