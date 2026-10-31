@@ -11,6 +11,7 @@
 #include <QtGlobal>
 #include <memory>
 
+#include "mibproblem.h"
 #include "mibruntimeparser.h"
 
 inline constexpr int MIB_ENVIRONMENT_SCHEMA_VERSION = 3;
@@ -202,9 +203,14 @@ public:
     const QStringList &constructionDiagnostics() const { return authorityDiagnostics; }
     bool providersAuthorized() const { return loadedProvidersAuthorized; }
     bool authorityComplete() const { return runtimeAuthorityComplete; }
+    // A Partial Environment (some modules failed, the rest loaded from exactly the
+    // authorized files) is publishable: MIB Navigator keeps what it could build
+    // and reports the rest through problems().
     bool publishable() const {
-        return constructionStatus == MibEnvironmentStatus::Complete && runtimeAuthorityComplete;
+        return (constructionStatus == MibEnvironmentStatus::Complete ||
+                constructionStatus == MibEnvironmentStatus::Partial) && runtimeAuthorityComplete;
     }
+    const QList<MibProblem> &problems() const { return problemList; }
 
     const MibEnvironmentModuleRecord *module(const QString &identity) const;
     const MibEnvironmentNodeRecord *nodeByOid(const QString &numericOid) const;
@@ -231,6 +237,7 @@ private:
     QStringList actualLoadedIdentities;
     QMap<QString, QString> actualProviderPaths;
     QStringList authorityDiagnostics;
+    QList<MibProblem> problemList;
     bool loadedProvidersAuthorized = false;
     bool runtimeAuthorityComplete = false;
     MibEnvironmentStatus constructionStatus = MibEnvironmentStatus::Unusable;

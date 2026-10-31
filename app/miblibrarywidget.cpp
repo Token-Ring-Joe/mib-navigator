@@ -727,9 +727,9 @@ void MibLibraryWidget::refreshImpl(bool prepareProfile)
     records = library.inventory(bundledPaths, catalog, localRecords);
     const qint64 inventoryMs = phaseTimer.restart();
     const MibProfileRecord *activeProfile = profiles.find(QSettings().value(
-        "mib-library/current-profile", MibProfileDefinitions::allId()).toString());
+        "mib-library/current-profile", MibProfileDefinitions::standardsId()).toString());
     QSet<QString> activeModules;
-    if (activeProfile && activeProfile->type != MibProfileType::All) {
+    if (activeProfile) {
         const MibEffectivePlan activePlan = planFor(*activeProfile);
         const QStringList effective = callbacks.effectivePlan
             ? activePlan.effectiveModules : activeProfile->explicitModules;
@@ -753,9 +753,7 @@ void MibLibraryWidget::refreshImpl(bool prepareProfile)
         }
         const MibLibraryStatus displayedStatus = sessionState.status(record.moduleName, record.status);
         auto *statusItem = new QTableWidgetItem(inventoryStatusText(displayedStatus));
-        const bool inActiveProfile = activeProfile &&
-            (activeProfile->type == MibProfileType::All ||
-             activeModules.contains(record.moduleName));
+        const bool inActiveProfile = activeProfile && activeModules.contains(record.moduleName);
         auto *activeItem = new QTableWidgetItem(inActiveProfile ? tr("Included") : tr("Not included"));
         if (displayedStatus == MibLibraryStatus::Unresolved ||
             displayedStatus == MibLibraryStatus::Conflict ||
@@ -802,7 +800,7 @@ void MibLibraryWidget::refreshImpl(bool prepareProfile)
             ? profileCombo->currentData().toString() : QString());
     } else {
         QString id = QSettings().value("mib-library/current-profile",
-            MibProfileDefinitions::allId()).toString();
+            MibProfileDefinitions::standardsId()).toString();
         id = MibProfileDefinitions::validCurrentId(id, profiles.profiles());
         const QSignalBlocker blocker(profileCombo);
         profileCombo->clear();
@@ -832,7 +830,7 @@ void MibLibraryWidget::reloadProfiles()
     QString error;
     profiles.reload(&error);
     QString id = QSettings().value("mib-library/current-profile",
-        MibProfileDefinitions::allId()).toString();
+        MibProfileDefinitions::standardsId()).toString();
     id = MibProfileDefinitions::validCurrentId(id, profiles.profiles());
     const QSignalBlocker blocker(profileCombo);
     profileCombo->clear();
@@ -1099,7 +1097,7 @@ void MibLibraryWidget::refreshProfiles(const QString &selectId)
 {
     QString id = selectId;
     if (id.isEmpty()) id = QSettings().value("mib-library/current-profile",
-                                             MibProfileDefinitions::allId()).toString();
+                                             MibProfileDefinitions::standardsId()).toString();
     id = MibProfileDefinitions::validCurrentId(id, profiles.profiles());
     const QSignalBlocker blocker(profileCombo);
     profileCombo->clear();

@@ -53,9 +53,10 @@ process-wide registry owns the currently published `shared_ptr<const
 MibEnvironment>` for stateless graph/trap callbacks, while Tree nodes retain
 their own shared ownership. Absence of a Plan-backed Environment produces an
 empty Tree or numeric-only labels rather than falling back to libsmi.
-The built-in **All MIBs** entry is a real Profile whose Effective Plan covers
-all resolvable Library identities; it is materialized normally, including at
-startup. Environment replacement invalidates Qt indexes, retains only numeric
+There is no built-in **All MIBs** Profile. The built-in default is
+**Standards / MIB-II**, and a user who wants every MIB creates an ordinary Custom
+Profile. Every Profile, including the default, is materialized normally,
+including at startup. Environment replacement invalidates Qt indexes, retains only numeric
 OID selection intent, clears OID Info during reset, and restores selection only
 when that OID exists in the destination model.
 
@@ -86,6 +87,27 @@ Module presentation retains `MibModuleRecord`, and `MibViewLoader` retains
 canonical module names rather than `SmiModule *` arrays. Any libsmi pointer is
 therefore confined to a synchronous lookup or snapshot traversal and cannot
 survive a reload.
+
+## Partial Environments and the problem report
+
+An Environment that loses some modules is **Partial and published**, not refused.
+`runtimeAuthorityComplete` is about integrity only: the configuration matches the plan,
+the loaded files are exactly the authorized files, and at least one requested root
+loaded. A failed module, an unresolved import, a listed module the Library cannot
+supply, a missing root file, or a stale pin makes the Environment Partial and adds a
+problem. The Environment is Unusable only when integrity fails or nothing loaded.
+
+Each build produces a list of `MibProblem` records (`mibproblem.h`, built by
+`mibproblemreport.h`) from three sources: the plan's resolution findings, libsmi's own
+diagnostics captured during the load (with line numbers, mapped back to the user's
+original files), and the load outcomes. Severities: Error (something the user chose
+could not be loaded), Warning (loaded, but some definitions may be missing), Note
+(informational: modified files, standards issues, parser warnings). Only errors and
+warnings count as problems. The report is stored on the immutable Environment.
+
+When several different files declare a module, the first by path is used and a
+Duplicate providers warning names every candidate. A changed root file loads as it is
+on disk and carries a Modified note; saving from the editor refreshes the recorded hash.
 
 ## Value records and services
 

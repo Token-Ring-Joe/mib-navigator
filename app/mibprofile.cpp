@@ -188,7 +188,6 @@ QStringList MibProfileScopePaths(const MibProfileRecord &profile)
     return result;
 }
 
-QString MibProfileDefinitions::allId() { return QStringLiteral("builtin.all"); }
 QString MibProfileDefinitions::standardsId() { return QStringLiteral("builtin.standards-mib2"); }
 
 QStringList MibProfileDefinitions::standardsModules()
@@ -200,13 +199,12 @@ QStringList MibProfileDefinitions::standardsModules()
             QStringLiteral("TCP-MIB"), QStringLiteral("UDP-MIB"),
             QStringLiteral("ENTITY-MIB"), QStringLiteral("HOST-RESOURCES-MIB"),
             QStringLiteral("BRIDGE-MIB"), QStringLiteral("Q-BRIDGE-MIB"),
-            QStringLiteral("LLDP-MIB"), QStringLiteral("INET-ADDRESS-MIB")};
+            QStringLiteral("INET-ADDRESS-MIB")};
 }
 
 QList<MibProfileRecord> MibProfileDefinitions::builtIns()
 {
-    return {{allId(), QObject::tr("All MIBs"), MibProfileType::All, {}, false},
-            {standardsId(), QObject::tr("Standards / MIB-II"),
+    return {{standardsId(), QObject::tr("Standards / MIB-II"),
              MibProfileType::Standards, standardsModules(), false}};
 }
 
@@ -329,11 +327,24 @@ MibProfileService::MibProfileService(MibProfileRepository value)
     if (!migrated) {
         for (MibProfileRecord profile : std::as_const(builtInProfiles)) {
             profile.type = MibProfileType::Custom;
-            if (profile.id == MibProfileDefinitions::allId()) profile.explicitModules.clear();
             if (std::none_of(customProfiles.cbegin(), customProfiles.cend(),
                 [&profile](const auto &existing) { return existing.id == profile.id; }))
                 customProfiles.append(profile);
         }
+        QString ignored;
+        persist(&ignored);
+    }
+    // An earlier version of this built-in listed LLDP-MIB, which the application does not
+    // ship. Profiles migrated from it were left with that module unresolved, which would
+    // be reported on every launch. Remove only that stale entry from the built-in profile;
+    // nothing else is touched, and the repair does nothing the second time.
+    bool repaired = false;
+    for (QList<MibProfileRecord> *profiles : {&customProfiles, &folderProfiles})
+        for (MibProfileRecord &profile : *profiles)
+            if (profile.id == MibProfileDefinitions::standardsId() &&
+                profile.unresolvedLegacyModules.removeAll(QStringLiteral("LLDP-MIB")) > 0)
+                repaired = true;
+    if (repaired) {
         QString ignored;
         persist(&ignored);
     }
@@ -657,6 +668,30 @@ bool MibProfileService::hasUnresolvedLegacyResidue() const
         [](const MibProfileRecord &profile) {
             return MibProfileIsManifest(profile) && !profile.unresolvedLegacyModules.isEmpty();
         });
+}
+
+int MibProfileService::refreshRootHash(const QString &path, const QString &sha256, QString *error)
+{
+    const QString wanted = QFileInfo(path).canonicalFilePath();
+    if (wanted.isEmpty() || sha256.isEmpty()) return 0;
+    const auto samePhysicalFile = [&wanted](const QString &candidate) {
+        const QString other = QFileInfo(candidate).canonicalFilePath();
+#ifdef Q_OS_WIN
+        return !other.isEmpty() && other.compare(wanted, Qt::CaseInsensitive) == 0;
+#else
+        return !other.isEmpty() && other == wanted;
+#endif
+    };
+    int updated = 0;
+    for (QList<MibProfileRecord> *profiles : {&customProfiles, &folderProfiles})
+        for (MibProfileRecord &profile : *profiles)
+            for (MibProfileMember &root : profile.roots)
+                if (root.sha256 != sha256 && samePhysicalFile(root.canonicalPath)) {
+                    root.sha256 = sha256;
+                    ++updated;
+                }
+    if (updated > 0) persist(error);
+    return updated;
 }
 
 bool MibProfileService::migrateLegacyFolderProfiles(QString *error)

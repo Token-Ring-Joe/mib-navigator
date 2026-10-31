@@ -11,7 +11,10 @@ bool authorityMatches(const MibEnvironmentPtr &environment, const MibEffectivePl
         return MibEnvironmentRegistry::isUsableMaterialization(environment);
     QStringList requestedPaths;
     for (const auto &entry : plan.runtimePaths.entries()) requestedPaths.append(entry.canonicalPath);
-    const bool exactFileRuntime = !plan.runtimeConfiguration.authorizedFiles().isEmpty();
+    // A plan resolved from exact roots is an exact-file plan even when it has no files
+    // (an empty profile, or one whose roots are all missing).
+    const bool exactFileRuntime = !plan.runtimeConfiguration.authorizedFiles().isEmpty() ||
+                                  plan.hasResolverInput;
     const bool runtimePathsMatch = environment && (exactFileRuntime
         ? !environment->authorizedRuntimePaths().isEmpty() &&
           environment->runtimePathHash() != plan.runtimePaths.sha256()
@@ -59,7 +62,8 @@ void MibEnvironmentManager::deliver(quint64 completed,const MibEffectivePlan &pl
     if(usable)environmentCache.insert(key,result.environment);
     if(completed!=generation)emit staleResultDiscarded(completed,plan.profileId);
     else if(!usable)emit buildFailed(completed,plan.profileId,result.error.isEmpty()
-        ? QStringLiteral("MIB Environment does not match the requested runtime authority") : result.error);
+        ? QStringLiteral("The MIB environment could not be built for this profile (the result did not match "
+                         "the files the profile asked for)") : result.error);
     else {activeEnvironment=result.environment;MibEnvironmentRegistry::publishMaterialization(result.environment);
         emit buildCompleted(completed,plan.profileId,result.environment,result.loadedModules,false,
             result.environment->status()==MibEnvironmentStatus::Partial);}

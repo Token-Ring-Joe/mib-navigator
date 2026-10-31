@@ -10,7 +10,8 @@ public:
     MibEnvironmentPtr extract(const MibEffectivePlan &plan,
                               const QStringList &failedIdentities = {},
                               const QList<MibExplicitRootLoadResult> &rootOutcomes = {},
-                              const QStringList &diagnostics = {}) const;
+                              const QStringList &diagnostics = {},
+                              const QList<MibProblem> &problems = {}) const;
 };
 
 #endif

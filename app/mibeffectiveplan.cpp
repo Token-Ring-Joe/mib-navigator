@@ -247,8 +247,6 @@ MibEffectivePlan MibEffectivePlanResolver::resolve(const MibProfileRecord &profi
         return plan;
     }
     plan.explicitModules = exactProfile ? MibProfileMemberIdentities(profile.members)
-        : profile.type == MibProfileType::All
-        ? sortedUnique(library.moduleNames())
         : profile.type == MibProfileType::Standards
             ? sortedUnique(MibProfileDefinitions::standardsModules())
             : sortedUnique(profile.explicitModules);
@@ -522,26 +520,38 @@ MibEffectivePlan MibEffectiveRuntimePlanResolver::resolve(
         root.identities = sortedUnique(root.identities);
         root.reason = MibProfileMemberReason::Added;
         const QString actualHash = fileHash(root.canonicalPath);
-        const auto *record = recordFor(root.canonicalPath, root.sha256);
+        // A root whose content differs from what was recorded is still loaded: the
+        // current file wins and the plan reports it as modified. The recorded hash
+        // is only a way to notice the difference, never a reason to refuse the file.
+        const bool modified = !actualHash.isEmpty() && actualHash != root.sha256;
+        const auto *record = actualHash.isEmpty() ? nullptr : recordFor(root.canonicalPath, actualHash);
         QString failure;
-        if (actualHash.isEmpty()) failure = QObject::tr("Root file is missing or unreadable");
-        else if (actualHash != root.sha256) failure = QObject::tr("Root file content changed");
-        else if (!record) failure = QObject::tr("Root file is absent from the Catalog snapshot");
+        if (actualHash.isEmpty()) failure = QObject::tr("The file is missing or cannot be read");
+        else if (!record) failure = modified
+            ? QObject::tr("The file changed since the Library was last scanned; refresh the Library")
+            : QObject::tr("The file is not in the Library snapshot");
         else for (const QString &identity : std::as_const(root.identities))
             if (!record->importsByModule.contains(identity)) {
-                failure = QObject::tr("Root file does not declare %1").arg(identity); break;
+                failure = QObject::tr("The file no longer declares %1").arg(identity); break;
             }
         if (!failure.isEmpty()) {
             const QStringList identities = root.identities.isEmpty()
                 ? QStringList{QFileInfo(root.canonicalPath).fileName()} : root.identities;
             for (const QString &identity : identities)
                 diagnostics.append({identity, {}, QStringLiteral("ROOT"), {},
-                    MibPlanResolutionTier::InvalidRoot, {}, failure});
+                    MibPlanResolutionTier::InvalidRoot, root.canonicalPath, failure});
             continue;
         }
         root.identities = sortedUnique(record->importsByModule.keys());
+        root.sha256 = actualHash;
+        if (modified)
+            for (const QString &identity : std::as_const(root.identities))
+                diagnostics.append({identity, {}, QStringLiteral("ROOT"), {},
+                    MibPlanResolutionTier::ModifiedRoot, root.canonicalPath,
+                    QObject::tr("Modified since it was added to this profile; the current file is used")});
         selected.insert(key(root.canonicalPath), {root, MibPlanResolutionTier::Root,
-            QObject::tr("Exact user-selected root")});
+            modified ? QObject::tr("User-selected root (modified since it was added)")
+                     : QObject::tr("Exact user-selected root")});
     }
 
     bool progress = true;
@@ -572,6 +582,7 @@ MibEffectivePlan MibEffectiveRuntimePlanResolver::resolve(
                     return pathWithin(provider.canonicalPath, scope);
                 });
             };
+            bool pinHonoured = false;
             if (const auto pin = input.pins.constFind(identity); pin != input.pins.cend()) {
                 tier = MibPlanResolutionTier::ExplicitPin;
                 for (const auto &provider : std::as_const(all))
@@ -579,12 +590,16 @@ MibEffectivePlan MibEffectiveRuntimePlanResolver::resolve(
                         provider.sha256 == pin->sha256 && eligible(provider) &&
                         fileHash(provider.canonicalPath) == pin->sha256) winning.append(provider);
                 if (winning.isEmpty()) {
+                    // The pinned file is gone or changed. Do not give up on the module:
+                    // report the stale pin and fall back to normal provider selection.
                     diagnostics.append({identity, requesters, QStringLiteral("IMPORTS"), all,
                         MibPlanResolutionTier::StalePin, {},
-                        QObject::tr("Explicit pin is missing, changed, does not declare the identity, or is out of scope")});
-                    continue;
-                }
-            } else {
+                        QObject::tr("The pinned provider is missing, changed, or out of scope; "
+                                    "normal provider selection was used instead")});
+                    tier = MibPlanResolutionTier::Unresolved;
+                } else pinHonoured = true;
+            }
+            if (!pinHonoured) {
                 QStringList requesterDirectories;
                 for (const QString &requester : std::as_const(requesters)) {
                     const auto owner = selected.constFind(identityOwner.value(requester));
@@ -641,13 +656,21 @@ MibEffectivePlan MibEffectiveRuntimePlanResolver::resolve(
             }
             QSet<QString> hashes;
             for (const auto &provider : std::as_const(winning)) hashes.insert(provider.sha256);
+            MibIndexedProvider chosen = winning.first();
             if (hashes.size() != 1 || hashes.contains(QString())) {
+                // Several different files declare this module. Do not refuse it: use the
+                // first readable one by path (a stable rule) and say so in the report.
+                const auto usable = std::find_if(winning.cbegin(), winning.cend(),
+                    [](const auto &provider) { return !provider.sha256.isEmpty(); });
                 diagnostics.append({identity, requesters, QStringLiteral("IMPORTS"), winning,
                     MibPlanResolutionTier::Ambiguous, winningScope,
-                    QObject::tr("Winning tier contains differing-content providers")});
-                continue;
+                    usable == winning.cend()
+                        ? QObject::tr("Several files declare this module and none can be read")
+                        : QObject::tr("Several different files declare this module; %1 was used "
+                                      "because it comes first by path").arg(usable->canonicalPath)});
+                if (usable == winning.cend()) continue;
+                chosen = *usable;
             }
-            const MibIndexedProvider chosen = winning.first();
             const auto *record = recordFor(chosen.canonicalPath, chosen.sha256);
             if (!record) continue;
             const QStringList identities = sortedUnique(record->importsByModule.keys());
@@ -697,7 +720,10 @@ MibEffectivePlan MibEffectiveRuntimePlanResolver::resolve(
     }
     QMap<QString, MibPlanResolutionDiagnostic> finalByIdentity;
     for (const auto &diagnostic : std::as_const(diagnostics)) {
-        if (diagnostic.dependencyKind != QStringLiteral("ROOT") && provided.contains(diagnostic.identity))
+        const bool reportEvenWhenProvided = diagnostic.tier == MibPlanResolutionTier::Ambiguous ||
+            diagnostic.tier == MibPlanResolutionTier::StalePin;
+        if (diagnostic.dependencyKind != QStringLiteral("ROOT") && provided.contains(diagnostic.identity) &&
+            !reportEvenWhenProvided)
             continue;
         auto existing = finalByIdentity.find(diagnostic.identity);
         if (existing == finalByIdentity.end()) finalByIdentity.insert(diagnostic.identity, diagnostic);
@@ -705,13 +731,9 @@ MibEffectivePlan MibEffectiveRuntimePlanResolver::resolve(
     }
     const QList<MibPlanResolutionDiagnostic> finalDiagnostics = finalByIdentity.values();
     plan.resolutionDiagnostics = finalDiagnostics;
-    for (const auto &diagnostic : std::as_const(finalDiagnostics))
-        if (diagnostic.tier == MibPlanResolutionTier::InvalidRoot) {
-            plan.authorityError = QObject::tr("One or more exact roots are missing, changed, or invalid");
-            break;
-        }
     plan.missingModules.clear(); plan.ambiguousModules.clear(); plan.pinFailureModules.clear();
     for (const auto &diagnostic : std::as_const(finalDiagnostics)) {
+        if (diagnostic.tier == MibPlanResolutionTier::ModifiedRoot) continue;  // informational only
         if (diagnostic.tier == MibPlanResolutionTier::Ambiguous ||
             diagnostic.tier == MibPlanResolutionTier::ProviderConflict)
             plan.ambiguousModules.append(diagnostic.identity);
@@ -740,6 +762,8 @@ MibEffectivePlan MibEffectiveRuntimePlanResolver::resolve(
     plan.runtimeConfiguration = MibProfileRuntimeConfigurationBuilder().build(manifest, library, {});
     plan.runtimePaths = MibRuntimePathConfigurationBuilder().derive(plan.runtimeConfiguration, library);
     plan.hasRuntimePaths = true;
+    plan.resolverInput = input;
+    plan.hasResolverInput = true;
     MibEffectivePlanResolver::sealRuntimeAuthority(&plan);
     return plan;
 }

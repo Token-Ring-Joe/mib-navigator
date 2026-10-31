@@ -134,8 +134,6 @@ int main(int argc, char **argv)
     callbacks.effectivePlan = [](const MibProfileRecord &profile) {
         MibEffectivePlan plan; plan.profileId = profile.id; plan.profileName = profile.name;
         plan.profileType = profile.type; plan.explicitModules = profile.explicitModules;
-        if (profile.type == MibProfileType::All)
-            plan.explicitModules = {"A-MIB", "DEP-MIB", "IANA-ONE-MIB", "IANA-TWO-MIB"};
         plan.effectiveModules = plan.explicitModules; plan.sha256 = "test-plan"; return plan;
     };
     MibLibraryWidget widget({}, nullptr, &transport, callbacks);
@@ -237,6 +235,10 @@ int main(int argc, char **argv)
     ok &= check(applicationSourceText.contains("modules->CheckProfileDependencies(QStringLiteral(\"mib-library\")") &&
                 applicationSourceText.contains("modules->DependencyIndex()->moduleNames()"),
                 "MIB Library owns the library-wide Check Dependencies action");
+    ok &= check(applicationSourceText.contains("&MibEditor::FileSaved") &&
+                applicationSourceText.contains("refreshRootHash(saved, hash)") &&
+                applicationSourceText.contains("mibLibrary->selectProfile(current.id)"),
+                "saving a MIB refreshes the Library index, stored profile hashes, and the active Environment");
     ok &= check(!applicationSourceText.contains("MibFileOpenReadOnly") &&
                 !viewSourceText.contains("MibFileOpenReadOnly"),
                 "no MIB file is opened read-only: every MIB stays editable so errors can be fixed");
@@ -260,7 +262,7 @@ int main(int argc, char **argv)
                 !effectivePlanSourceText.contains("mibpreloads") &&
                 moduleSourceText.contains("MibRuntimeParser::loadExplicitRoots(") &&
                 !moduleSourceText.contains("MibBoundedDependencyLoader().load(plan, load)") &&
-                moduleSourceText.contains("MibEnvironmentExtractor().extract(isolatedPlan,missing,rootOutcomes)") &&
+                moduleSourceText.contains("MibEnvironmentExtractor().extract(isolatedPlan,missing,rootOutcomes,{},") &&
                 moduleSourceText.contains("MibRuntimeStage::prepare(plan)") &&
                 moduleSourceText.contains("RestoreRuntimeAfterEditorValidation"),
                 "one pure Effective Plan resolver owns membership while runtime loads explicit roots alias-first and leaves imports native");

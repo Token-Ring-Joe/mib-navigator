@@ -42,6 +42,11 @@ successful planned module publishes an Environment with `Partial` status and
 failed-identity findings. A materialization with no successful planned module
 is fatal and cannot replace the previous published Environment.
 
+> **Amended 2026-10-30:** the built-in `All MIBs` Profile no longer exists. See
+> `redesign-plan.md`. Loading every MIB is almost never wanted, and users who
+> want it create an ordinary Custom Profile. The text below is the original
+> decision and is kept for history.
+
 `All MIBs` is the built-in `builtin.all` Profile, not legacy preload state or
 a visibility-only mode. Its Plan deterministically contains every resolvable
 Library identity and follows the same materialization/publication path as
@@ -87,7 +92,7 @@ Profile persistence is verified before the durable migration marker is written;
 the stable ID makes a marker-write retry idempotent. Empty legacy state creates
 no Profile or marker. A valid saved Profile selection is retained; otherwise a
 newly imported Profile becomes the initial selection, while later deletion falls
-back through the normal built-in `All MIBs` policy and does not resurrect it.
+back through the normal built-in policy (now `Standards / MIB-II`) and does not resurrect it.
 Legacy keys are retained for downgrade evidence but normal Preferences, module
 editing, refresh, parser configuration, and automatic OID loading no longer
 write or reconstruct runtime from them. Environment construction continues only

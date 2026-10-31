@@ -121,7 +121,12 @@ struct MibEffectivePlanMember {
 enum class MibEffectivePlanFileOrigin { Root, Dependency };
 enum class MibPlanResolutionTier { Root, ExplicitPin, RequesterDirectory, RequesterBatch,
                                   OrderedScope, Unresolved, OutOfScope, Ambiguous,
-                                  StalePin, ProviderConflict, InvalidRoot };
+                                  StalePin, ProviderConflict, InvalidRoot,
+                                  // Informational: the root file differs from what was recorded
+                                  // when it was added; the current file is used.
+                                  ModifiedRoot,
+                                  // A module the profile lists that the Library cannot supply.
+                                  ListedNotFound };
 
 struct MibPlanResolutionDiagnostic {
     QString identity;
@@ -186,11 +191,31 @@ struct MibEffectivePlan {
     MibProfileRuntimeConfiguration runtimeConfiguration;
     MibRuntimePathConfiguration runtimePaths;
     bool hasRuntimePaths = false;
+    // The inputs this plan was resolved from, so it can be re-resolved after a
+    // MIB file is edited. Not part of the plan hash.
+    MibEffectivePlanResolverInput resolverInput;
+    bool hasResolverInput = false;
 
     const MibEffectivePlanMember *member(const QString &identity) const;
     bool isComplete() const { return authorityError.isEmpty() && converged && missingModules.isEmpty() &&
         ambiguousModules.isEmpty() && pinFailureModules.isEmpty(); }
 };
+
+// A module the profile lists but the Library cannot supply is skipped and reported;
+// it never blocks the rest of the profile from loading.
+inline void MibEffectivePlanAddListedNotFound(MibEffectivePlan *plan, const QStringList &identities)
+{
+    for (const QString &identity : identities) {
+        if (!plan->missingModules.contains(identity)) plan->missingModules.append(identity);
+        MibPlanResolutionDiagnostic finding;
+        finding.identity = identity;
+        finding.dependencyKind = QStringLiteral("PROFILE");
+        finding.tier = MibPlanResolutionTier::ListedNotFound;
+        plan->resolutionDiagnostics.append(finding);
+    }
+    plan->missingModules.removeDuplicates();
+    plan->missingModules.sort(Qt::CaseSensitive);
+}
 
 class MibEffectivePlanResolver
 {

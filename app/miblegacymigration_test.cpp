@@ -27,7 +27,7 @@ int main(int argc,char**argv)
     QSettings empty(temp.filePath("empty.ini"),QSettings::IniFormat);
     MibProfileService emptyProfiles{MibProfileRepository(temp.filePath("empty-profiles.json"))};
     auto emptyResult=MibLegacyMigration::migrate(empty,emptyProfiles,index);
-    ok&=check(!emptyResult.needed&&!emptyResult.migrated&&!empty.contains(MibLegacyMigration::markerKey())&&emptyProfiles.profiles().size()==2,"empty/fresh state creates no artifact");
+    ok&=check(!emptyResult.needed&&!emptyResult.migrated&&!empty.contains(MibLegacyMigration::markerKey())&&emptyProfiles.profiles().size()==1,"empty/fresh state creates no artifact");
 
     QSettings settings(temp.filePath("legacy.ini"),QSettings::IniFormat);
     preloads(settings,{"A-MIB","A-MIB","synro.mib","STALE-MIB"});
@@ -46,7 +46,7 @@ int main(int argc,char**argv)
         "legacy preload migration persists exact unique files and unresolved intent before marker");
     ok&=check(profiles.find(userId)&&profiles.find(userId)->name=="Existing User Profile","existing profile preserved");
     const auto second=MibLegacyMigration::migrate(settings,profiles,index);
-    ok&=check(second.alreadyComplete&&!second.migrated&&profiles.profiles().size()==4,"repeated startup is idempotent");
+    ok&=check(second.alreadyComplete&&!second.migrated&&profiles.profiles().size()==3,"repeated startup is idempotent");
     ok&=check(!profiles.requiresLegacyConversion()&&profiles.hasUnresolvedLegacyResidue(),
         "schema-5 unresolved residue is retryable but does not require startup conversion");
     preloads(settings,{"OTHER-MIB"});

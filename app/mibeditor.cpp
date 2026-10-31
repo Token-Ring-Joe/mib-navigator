@@ -401,7 +401,9 @@ void MibEditor::MibFileSave(void)
 
     ts << s->MainUI()->MIBFile->toPlainText();
     SetCurrentFileName(LoadedFile);
+    ts.flush();
     file.close();
+    emit FileSaved(LoadedFile);
 }
 
 void MibEditor::MibFileSaveAs(void)
@@ -758,16 +760,19 @@ void MibEditor::ExtractMIBfromRFC(void)
     }
 }
 
+void MibEditor::GoToLine(int line)
+{
+    if (line <= 0) return;
+    s->MainUI()->MIBFileMarker->setMarker(line);
+    QTextCursor cursor(s->MainUI()->MIBFile->document()->findBlockByLineNumber(line - 1));
+    s->MainUI()->MIBFile->setTextCursor(cursor);
+    s->MainUI()->MIBFile->setFocus();
+}
+
 void MibEditor::SelectedLogEntry(const QModelIndex &index)
 {
     const QModelIndex source = diagnosticFilter->mapToSource(index);
-    const int line = source.data(MibDiagnosticModel::LineRole).toInt();
-    if (line > 0) {
-        s->MainUI()->MIBFileMarker->setMarker(line);
-        QTextCursor cursor(s->MainUI()->MIBFile->document()->findBlockByLineNumber(line - 1));
-        s->MainUI()->MIBFile->setTextCursor(cursor);
-        s->MainUI()->MIBFile->setFocus();
-    }
+    GoToLine(source.data(MibDiagnosticModel::LineRole).toInt());
 }
 
 void MibEditor::SetLineNumStatus(void)

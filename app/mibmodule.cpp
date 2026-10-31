@@ -27,11 +27,14 @@
 #include <QStringBuilder>
 #include <QElapsedTimer>
 #include <QCryptographicHash>
+#include <QMutex>
+#include <QMutexLocker>
 #include <algorithm>
 
 #include "mibmodule.h"
 #include "mibenvironmentextractor.h"
 #include "mibenvironmentregistry.h"
+#include "mibproblemreport.h"
 #include "mibcollection.h"
 #include "miblibrary.h"
 #include "diagnosticlogger.h"
@@ -197,6 +200,76 @@ static void NormalErrorHdlr(char *path, int line, int severity,
     if (severity <= 1)
         CurrentModuleObject->SendLogError(MibModule::tr("ERROR(%1) loading %2: %3")
                                           .arg(severity).arg(path).arg(msg));
+}
+
+namespace {
+// While an Environment is being built, keep what libsmi says about each file
+// (message, line, severity) instead of discarding it, so the user can be told what
+// went wrong and where. Builds are serialized by MibEngine, so one collector is enough.
+QMutex parserDiagnosticMutex;
+QList<MibDiagnosticRecord> parserDiagnosticRecords;
+bool parserDiagnosticsActive = false;
+}
+
+static void CollectingErrorHdlr(char *path, int line, int severity, char *msg, char *tag)
+{
+    NormalErrorHdlr(path, line, severity, msg, tag);
+    QMutexLocker lock(&parserDiagnosticMutex);
+    if (!parserDiagnosticsActive) return;
+    MibDiagnosticRecord record;
+    record.severity = severity;
+    record.line = line;
+    record.sourcePath = path ? QString::fromLocal8Bit(path) : QString();
+    record.message = msg ? QString::fromLocal8Bit(msg) : QString();
+    record.tag = tag ? QString::fromLocal8Bit(tag) : QString();
+    parserDiagnosticRecords.append(record);
+}
+
+namespace {
+class ParserDiagnosticCapture
+{
+public:
+    ParserDiagnosticCapture() : savedFlags(smiGetFlags())
+    {
+        {
+            QMutexLocker lock(&parserDiagnosticMutex);
+            parserDiagnosticRecords.clear();
+            parserDiagnosticsActive = true;
+        }
+        smiSetFlags(savedFlags | SMI_FLAG_ERRORS);
+        smiSetErrorHandler(CollectingErrorHdlr);
+        smiSetErrorLevel(5);   // errors and warnings; parsing itself is unaffected
+    }
+    ~ParserDiagnosticCapture() { finish({}); }
+    // Stops capturing and returns the records with staged paths mapped back to the
+    // user's original files.
+    QList<MibDiagnosticRecord> finish(const QMap<QString, QString> &stagedToOriginal)
+    {
+        if (finished) return {};
+        finished = true;
+        smiSetFlags(savedFlags);
+        smiSetErrorHandler(NormalErrorHdlr);
+        smiSetErrorLevel(0);
+        QMutexLocker lock(&parserDiagnosticMutex);
+        parserDiagnosticsActive = false;
+        QList<MibDiagnosticRecord> records = std::move(parserDiagnosticRecords);
+        parserDiagnosticRecords.clear();
+        for (MibDiagnosticRecord &record : records) {
+            const QString key =
+#ifdef Q_OS_WIN
+                QDir::fromNativeSeparators(record.sourcePath).toLower();
+#else
+                QDir::fromNativeSeparators(record.sourcePath);
+#endif
+            const auto original = stagedToOriginal.constFind(key);
+            if (original != stagedToOriginal.cend()) record.sourcePath = original.value();
+        }
+        return records;
+    }
+private:
+    int savedFlags;
+    bool finished = false;
+};
 }
 
 static bool MibFilenameFilter(const QString& filename)
@@ -507,13 +580,7 @@ MibEffectivePlan MibModule::BuildEffectivePlan(const MibProfileRecord &profile) 
     MibEffectivePlan plan = MibEffectiveRuntimePlanResolver().resolve(input, dependencyIndex);
     plan.profileName = profile.name;
     plan.profileType = profile.type;
-    if (!profile.unresolvedLegacyModules.isEmpty()) {
-        plan.authorityError = tr("Profile migration still has unresolved legacy intent: %1")
-            .arg(profile.unresolvedLegacyModules.join(QStringLiteral(", ")));
-        plan.missingModules.append(profile.unresolvedLegacyModules);
-        plan.missingModules.removeDuplicates();
-        plan.missingModules.sort(Qt::CaseSensitive);
-    }
+    MibEffectivePlanAddListedNotFound(&plan, profile.unresolvedLegacyModules);
     return plan;
 }
 
@@ -668,18 +735,33 @@ MibEnvironmentBuildResult MibModule::BuildEnvironment(const MibEffectivePlan &pl
     DiagnosticLogger::log("MIB", tr("Profile runtime parser reset paths=%1 path-hash=%2")
         .arg(reset.appliedPaths.size()).arg(isolatedPlan.runtimePaths.sha256()));
     QList<MibExplicitRootLoadResult> rootOutcomes;
+    ParserDiagnosticCapture capture;
     const QStringList unavailable=LoadEffectivePlan(isolatedPlan,&rootOutcomes);
+    const QList<MibDiagnosticRecord> parserDiagnostics =
+        capture.finish(isolatedPlan.runtimeConfiguration.stagedToOriginal());
+    // Candidates for "did not load". Modules that duplicate-provider or stale-pin
+    // handling resolved anyway are loaded, so they are filtered out below and only
+    // reported as warnings.
+    QStringList candidates;
+    candidates.append(plan.effectiveModules);
+    candidates.append(plan.missingModules);
+    candidates.append(plan.pinFailureModules);
+    candidates.append(unavailable);
+    candidates.removeDuplicates();
     QStringList missing;
-    for(const QString &identity:plan.effectiveModules)
+    for(const QString &identity:std::as_const(candidates))
         if(!smiGetModule(identity.toLocal8Bit().constData()))missing.append(identity);
-    missing.append(plan.missingModules);
-    missing.append(plan.ambiguousModules);
-    missing.append(plan.pinFailureModules);
-    missing.append(unavailable);missing.removeDuplicates();
-    result.environment=MibEnvironmentExtractor().extract(isolatedPlan,missing,rootOutcomes);
     for(SmiModule *module=smiGetFirstModule();module;module=smiGetNextModule(module))
         if(module->name)result.loadedModules.append(QString::fromLocal8Bit(module->name));
     result.loadedModules.removeDuplicates();result.loadedModules.sort(Qt::CaseSensitive);
+    MibProblemInput problemInput;
+    problemInput.plan=isolatedPlan;
+    problemInput.parserDiagnostics=parserDiagnostics;
+    problemInput.failedIdentities=missing;
+    problemInput.loadedIdentities=result.loadedModules;
+    problemInput.rootOutcomes=rootOutcomes;
+    result.environment=MibEnvironmentExtractor().extract(isolatedPlan,missing,rootOutcomes,{},
+                                                         MibBuildProblemReport(problemInput));
     if (!dependencyIndex.ownsSnapshot(currentLibraryRoot(),
                                       plan.runtimeConfiguration.libraryGeneration())) {
         result.environment.reset();

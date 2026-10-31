@@ -410,6 +410,37 @@ bookkeeping belongs in ApplicationLocalData/AppData.
 
 ---
 
+# MIB Loading Tolerance and Visibility
+
+Flexibility and visibility are the owner's top priorities for MIB handling:
+
+- **Load everything that can load.** A problem with one MIB, one import, one listed
+  module, or one edited file must never stop the rest of a profile from loading. An
+  Environment is Partial, not refused, when some modules failed and the loaded files
+  are exactly the authorized ones. Only "nothing at all could be loaded" is an error.
+- **Say what went wrong and why.** Every skipped or degraded item appears in the
+  Environment's problem report (`MibProblem`, `mibproblemreport.h`) with the module,
+  file and line, the plain-language cause, what it affects, and what the user can do.
+  The Problems tab shows it. The header badge, status bar, and startup state all
+  describe the same report.
+- **The user decides.** MIB Navigator never edits MIB files. The user can fix a problem
+  or carry on knowing which parts may not work.
+- **Edited MIBs are normal.** Every MIB file is editable. A root file whose content
+  differs from the hash recorded when it was added is loaded as it is on disk and gets
+  a small "Modified" note, not a problem. Saving from the editor refreshes the stored
+  hash, the Library index, and the active Environment.
+- **Duplicates are resolved, not refused.** When several different files declare a
+  module, the first by path is used and the report says which, and why.
+- **Integrity stays strict.** The application never silently loads a file that the plan
+  did not authorize. That is a consistency check, not a reason to refuse a profile.
+
+Any change that makes a profile or Environment fail where it previously loaded with a
+report must come with a scenario in `cmake/RunSnmpbToleranceScenarios.cmake`. That
+test builds libraries containing every kind of problem, starts the real application
+headless, and checks both that it loads and that it explains what it could not.
+
+---
+
 # libsmi Rules
 
 The repository contains a patched version of libsmi.

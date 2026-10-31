@@ -42,6 +42,11 @@
 #include "productidentity.h"
 #include "diagnosticlogger.h"
 #include "startupcoordinator.h"
+#include "mibproblem.h"
+#include <QCheckBox>
+#include <QLabel>
+#include <QTableWidget>
+#include "mibenvironment.h"
 
 QString file_to_open;
 
@@ -180,6 +185,52 @@ int main( int argc, char ** argv )
                 passed = passed && condition;
             };
 
+            // Record what the Environment build reported, so scripted tests can verify
+            // that problems are tolerated and described.
+            if (const MibEnvironmentPtr built = snmpb.MibModuleObj()->CurrentEnvironment()) {
+                const MibProblemSummary summary = MibSummarizeProblems(built->problems());
+                smoke_output << "launch-smoke: ENVIRONMENT status="
+                             << (built->status() == MibEnvironmentStatus::Complete ? "Complete"
+                                 : built->status() == MibEnvironmentStatus::Partial ? "Partial"
+                                                                                    : "Unusable")
+                             << " loaded=" << built->loadedCount() << " failed=" << built->failedCount()
+                             << " errors=" << summary.errors << " warnings=" << summary.warnings
+                             << " notes=" << summary.notes << Qt::endl;
+                // The Problems tab and the header badge must agree with the Environment's report.
+                QTableWidget *problemTable = mw.findChild<QTableWidget *>("WorkbenchProblemTable");
+                QCheckBox *showNotes = mw.findChild<QCheckBox *>("WorkbenchProblemShowNotes");
+                QLabel *problemState = mw.findChild<QLabel *>("WorkbenchProblemState");
+                QLabel *badge = mw.findChild<QLabel *>("CurrentEnvironmentStatus");
+                check(problemTable && showNotes && problemState && badge,
+                      "Problems tab and Environment badge exist");
+                if (problemTable && showNotes && problemState && badge) {
+                    const int expectedRows = summary.errors + summary.warnings;
+                    check(problemTable->rowCount() == expectedRows,
+                          "Problems tab lists errors and warnings and hides notes by default");
+                    showNotes->setChecked(true);
+                    check(problemTable->rowCount() == expectedRows + summary.notes,
+                          "Show notes adds the informational rows");
+                    showNotes->setChecked(false);
+                    check(problemState->text().contains("loaded"),
+                          "Problems tab summary states what was loaded");
+                    check(summary.hasProblems() ? badge->text().contains("problem")
+                          : built->loadedCount() == 0 ? badge->text().contains("Empty")
+                                                      : badge->text().contains("Ready"),
+                          "Environment badge reflects the problem report");
+                    if (summary.hasProblems() && problemTable->rowCount() > 0) {
+                        const QTableWidgetItem *first = problemTable->item(0, 0);
+                        const QString firstSeverity = first ? first->text() : QString();
+                        check(firstSeverity == MibProblemSeverityText(MibProblemSeverity::Error) ||
+                              firstSeverity == MibProblemSeverityText(MibProblemSeverity::Warning),
+                              "Problems tab lists the most serious items first");
+                    }
+                }
+                for (const MibProblem &problem : built->problems())
+                    smoke_output << "launch-smoke: PROBLEM severity=" << MibProblemSeverityText(problem.severity)
+                                 << " category=\"" << problem.category << "\" module=" << problem.module
+                                 << " file=" << QFileInfo(problem.file).fileName() << " line=" << problem.line
+                                 << " why=\"" << problem.why << "\"" << Qt::endl;
+            }
             QSettings settings;
             check(QFileInfo(settings.fileName()).absoluteFilePath().startsWith(
                       QFileInfo(smoke_config_dir).absoluteFilePath()),

@@ -35,9 +35,11 @@ input, not current runtime authority. Migration persists the schema-5 manifest b
 external completion marker can be written. A current manifest is never converted back to
 legacy membership.
 
-`All MIBs` and `Standards / MIB-II` are synthesized permanent profiles. `All MIBs` means
-every locally available, usable declared module identity. The maintainable V1 standards
-base is:
+`Standards / MIB-II` is the only built-in profile. There is no built-in `All MIBs`:
+loading every MIB is rarely useful, and users who want it create an ordinary Custom
+profile (an earlier version created an empty `All MIBs` Custom profile on first run;
+existing copies are preserved as ordinary Custom profiles). The maintainable V1
+standards base is:
 
     SNMPv2-SMI, SNMPv2-TC, SNMPv2-CONF, SNMPv2-MIB,
     IF-MIB, IP-MIB, TCP-MIB, UDP-MIB, ENTITY-MIB, HOST-RESOURCES-MIB,

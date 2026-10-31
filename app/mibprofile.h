@@ -9,7 +9,7 @@
 
 class MibDependencyIndex;
 
-enum class MibProfileType { All, Standards, Custom, Folder };
+enum class MibProfileType { Standards, Custom, Folder };
 
 struct MibProviderPin {
     QString canonicalPath;
@@ -66,7 +66,6 @@ QStringList MibProfileScopePaths(const MibProfileRecord &profile);
 class MibProfileDefinitions
 {
 public:
-    static QString allId();
     static QString standardsId();
     static QStringList standardsModules();
     static QList<MibProfileRecord> builtIns();
@@ -111,6 +110,10 @@ public:
                   MibProfileMemberReason reason = MibProfileMemberReason::Added,
                   QString *error = nullptr);
     bool addFolder(const QString &id, const QString &folder, QString *error = nullptr);
+    // After the user saves a MIB from the editor, every profile root at that path
+    // records the new content hash so the root is not later reported as modified.
+    // Returns how many roots were updated.
+    int refreshRootHash(const QString &path, const QString &sha256, QString *error = nullptr);
 private:
     static bool isBuiltIn(const QString &id);
     MibProfileRepository repository;

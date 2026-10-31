@@ -46,8 +46,12 @@ Obsolete design documents (historical record only): `device-manager.md`,
   SNMPv3 user). Managed on a separate Credentials screen. Continue the existing
   reusable credential architecture (`credential-architecture-v1.md`,
   `reusable-community-credentials-v1.md`, `usm-credential-management-v2.md`).
-- **MIB Profile**: dropdown of Automatic, Custom, and built-in `All MIBs`
-  profiles.
+- **MIB Profile**: dropdown of Automatic and Custom profiles, plus the built-in
+  `Standards / MIB-II` profile, which is the default. There is **no built-in
+  `All MIBs` profile** (decided 2026-10-30): loading every MIB is almost never
+  wanted, and a user who does want it builds an ordinary Custom profile. An
+  empty `All MIBs` Custom profile created by an earlier migration is left
+  untouched as an ordinary Custom profile.
 - **Detect** button next to the MIB Profile dropdown (see Phase 3).
 - Port, timeout, retries, GETBULK max-repetitions, and transport are **global
   settings** reached from the menu bar. They are not shown in the main window.
@@ -56,8 +60,8 @@ Obsolete design documents (historical record only): `device-manager.md`,
 
 ### Traps
 
-- Decode with the **currently selected MIB Profile**. The user selects
-  `All MIBs` for multi-vendor decoding.
+- Decode with the **currently selected MIB Profile**. For multi-vendor decoding
+  the user selects a Custom profile that combines the vendors involved.
 - Right-click **Copy source IP** copies the sender address to the clipboard.
   For SNMPv1 traps, prefer the agent-address field when it differs from the
   UDP source.
@@ -156,7 +160,10 @@ into smaller steps, each with its own working build.
 13. **MIB Problems view** (competitive features #1 and #6 merged). Actionable
     messages for missing imports, unresolved symbols, duplicate and conflicting
     providers, and parse diagnostics. Show where each definition came from and
-    why that provider was chosen.
+    why that provider was chosen. *Foundation done (2026-10-30): tolerant
+    loading, a structured problem report with parser line numbers, and a
+    Problems tab (see `mib-architecture.md`). Remaining: filtering and sorting,
+    "why this provider" detail, and copy/export.*
 14. **Collection-wide search** (#7) by name, qualified name, or numeric OID
     across the whole MIB collection, not only the loaded tree. Results say which
     module and which profiles contain the match.

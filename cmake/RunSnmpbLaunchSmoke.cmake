@@ -11,16 +11,6 @@ set(settings_dir "${SNMPB_SMOKE_DIR}/snmpb.sourceforge.net")
 set(library_root "${SNMPB_SMOKE_DIR}/MIB-Library")
 file(MAKE_DIRECTORY "${settings_dir}")
 file(MAKE_DIRECTORY "${library_root}/Standards")
-file(WRITE "${library_root}/Standards/LLDP-MIB"
-"LLDP-MIB DEFINITIONS ::= BEGIN\n"
-"IMPORTS MODULE-IDENTITY, enterprises FROM SNMPv2-SMI;\n"
-"lldpMIB MODULE-IDENTITY\n"
-"    LAST-UPDATED \"202609010000Z\"\n"
-"    ORGANIZATION \"MIB Navigator launch smoke\"\n"
-"    CONTACT-INFO \"none\"\n"
-"    DESCRIPTION \"Deterministic launch-smoke fixture.\"\n"
-"    ::= { enterprises 99999 }\n"
-"END\n")
 file(WRITE "${settings_dir}/SnmpB.ini"
 "[mib-library]\n"
 "root=${library_root}\n"

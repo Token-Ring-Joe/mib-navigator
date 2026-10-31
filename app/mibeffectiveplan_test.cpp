@@ -429,14 +429,7 @@ int main(int argc, char **argv)
     ok &= check(first.member("PRODUCT-ONLY-MIB")->membershipReason == MibPlanMembershipReason::Dependency && first.member("ROOT-MIB")->membershipReason == MibPlanMembershipReason::Explicit, "membership reasons");
     ok &= check(first.missingModules == QStringList{"ABSENT-MIB"} && first.ambiguousModules == QStringList{"CONFLICT-MIB"}, "missing and ambiguous findings");
     ok &= check(!first.cycles.isEmpty() && first.initialLoadOrder.contains("CYCLE-A") && first.initialLoadOrder.contains("CYCLE-B"), "cycle termination");
-    MibProfileRecord all = MibProfileDefinitions::builtIns().first();
-    const auto allPlan = MibEffectivePlanResolver().resolve(all, index);
-    const auto repeatedAllPlan = MibEffectivePlanResolver().resolve(all, index);
-    ok &= check(all.id == MibProfileDefinitions::allId() && all.type == MibProfileType::All &&
-                allPlan.profileId == all.id && allPlan.explicitModules == index.moduleNames() &&
-                allPlan.sha256 == repeatedAllPlan.sha256,
-                "All MIBs is a deterministic built-in Profile backed by an Effective Plan");
-    const MibProfileRecord standardsProfile = MibProfileDefinitions::builtIns().at(1);
+    const MibProfileRecord standardsProfile = MibProfileDefinitions::builtIns().first();
     const auto standardsRuntime = runtimeBuilder.build(standardsProfile, index, {standardsCollection});
     const auto standardsPaths = pathBuilder.derive(standardsRuntime, index);
     QStringList expectedStandardRoots = MibProfileDefinitions::standardsModules();

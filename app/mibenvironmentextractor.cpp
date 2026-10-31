@@ -199,7 +199,8 @@ QString canonicalPath(const QString &path)
 MibEnvironmentPtr MibEnvironmentExtractor::extract(const MibEffectivePlan &plan,
                                                     const QStringList &failedIdentities,
                                                     const QList<MibExplicitRootLoadResult> &rootOutcomes,
-                                                    const QStringList &diagnostics) const
+                                                    const QStringList &diagnostics,
+                                                    const QList<MibProblem> &problems) const
 {
     auto engineOperation=MibEngine::instance().beginOperation(QStringLiteral("environment-extraction"));
     QElapsedTimer timer; timer.start();
@@ -219,6 +220,7 @@ MibEnvironmentPtr MibEnvironmentExtractor::extract(const MibEffectivePlan &plan,
         environment->authorityFiles.insert(canonicalPath(file.canonicalPath), file.sha256);
     environment->rootOutcomes = rootOutcomes;
     environment->authorityDiagnostics = diagnostics;
+    environment->problemList = problems;
     environment->loadedProvidersAuthorized = true;
 
     const auto planMember = [&plan](const QString &identity) -> const MibEffectivePlanMember * {
@@ -540,14 +542,19 @@ MibEnvironmentPtr MibEnvironmentExtractor::extract(const MibEffectivePlan &plan,
         const bool materializedRequestedRoot = environment->requestedRoots.isEmpty() ||
             std::any_of(rootOutcomes.cbegin(), rootOutcomes.cend(),
                 [](const auto &outcome) { return outcome.success; });
+        // Authority is about integrity: the configuration matches the plan, the
+        // loaded files are exactly the authorized ones, and at least one requested
+        // root really loaded. Individual module failures do not break authority;
+        // they make the Environment Partial and are reported as problems.
         environment->runtimeAuthorityComplete =
             plan.runtimeConfiguration.profileId() == plan.profileId &&
             !plan.runtimeConfiguration.sha256().isEmpty() &&
             !plan.runtimePaths.sha256().isEmpty() && plan.runtimePaths.isValid() &&
-            rootsSucceeded && materializedRequestedRoot && failed.isEmpty() &&
-            environment->loadedProvidersAuthorized;
+            materializedRequestedRoot && environment->loadedProvidersAuthorized;
         if (!environment->runtimeAuthorityComplete)
             environment->constructionStatus = MibEnvironmentStatus::Unusable;
+        else if (!rootsSucceeded && environment->constructionStatus == MibEnvironmentStatus::Complete)
+            environment->constructionStatus = MibEnvironmentStatus::Partial;
     }
     if (!failed.isEmpty()) environment->materializationFindings.append({
         MibEnvironmentFindingKind::PartialLoad, {}, {}, {},

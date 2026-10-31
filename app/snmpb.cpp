@@ -28,6 +28,11 @@
 #include <QGridLayout>
 #include <QComboBox>
 #include <QLabel>
+#include <QCheckBox>
+#include <QPlainTextEdit>
+#include <QCryptographicHash>
+#include <QTableWidget>
+#include <QHeaderView>
 #include <QSplitter>
 #include <QElapsedTimer>
 #include <QHeaderView>
@@ -100,6 +105,51 @@
     "QT [v%5] (<a href=http://qt.io>http://qt.io</a>)"
 #endif
 
+
+namespace {
+// One description of the Environment, so the header badge, status bar, startup state and
+// Problems tab never disagree. "Needs attention" means something the user may want to
+// look at; the Environment is still usable.
+struct EnvironmentPresentation {
+    QString state;          // short word or phrase for the badge
+    QString badge;          // style key: ready / warning / empty
+    int problems = 0;       // errors + warnings (notes are not problems)
+    bool needsAttention = false;
+};
+
+EnvironmentPresentation PresentEnvironment(const MibEnvironmentPtr &environment)
+{
+    EnvironmentPresentation result;
+    if (!environment) {
+        result.state = QObject::tr("Empty");
+        result.badge = QStringLiteral("empty");
+        return result;
+    }
+    const MibProblemSummary summary = MibSummarizeProblems(environment->problems());
+    result.problems = summary.errors + summary.warnings;
+    if (environment->loadedCount() == 0 && result.problems == 0) {
+        result.state = QObject::tr("Empty");
+        result.badge = QStringLiteral("empty");
+        return result;
+    }
+    if (environment->loadedCount() == 0) {
+        result.state = QObject::tr("Nothing loaded · %n problem(s)", nullptr, result.problems);
+        result.badge = QStringLiteral("warning");
+        result.needsAttention = true;
+        return result;
+    }
+    if (result.problems > 0 || environment->status() == MibEnvironmentStatus::Partial) {
+        if (result.problems == 0) result.problems = 1;
+        result.state = QObject::tr("Loaded with %n problem(s)", nullptr, result.problems);
+        result.badge = QStringLiteral("warning");
+        result.needsAttention = true;
+    } else {
+        result.state = QObject::tr("Ready");
+        result.badge = QStringLiteral("ready");
+    }
+    return result;
+}
+}
 
 Snmpb::Snmpb(bool offline)
 {
@@ -233,7 +283,7 @@ void Snmpb::BindToGUI(QMainWindow* mw)
         if (!load) return tr("Downloaded %n MIB file(s) to the Library.", nullptr, downloaded);
 
         const QString activeProfileId = QSettings().value(
-            "mib-library/current-profile", MibProfileDefinitions::allId()).toString();
+            "mib-library/current-profile", MibProfileDefinitions::standardsId()).toString();
         QStringList exactFiles;
         const MibRuntimeRequestNormalization normalized =
             MibNormalizeRuntimeRequests(requested, *modules->DependencyIndex());
@@ -364,6 +414,31 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     });
     connect(modules, &MibModule::inventoryChanged, mibLibrary, &MibLibraryWidget::refresh);
     connect(modules, &MibModule::inventoryChanged, this, refreshLibraryDependencyStatus);
+    connect(editor, &MibEditor::FileSaved, mw, [this](const QString &path) {
+        const QString saved = QFileInfo(path).canonicalFilePath();
+        if (saved.isEmpty()) return;
+        QString indexError;
+        modules->RefreshDependencyIndex(&indexError);
+        QString hash;
+        if (QFile file(saved); file.open(QIODevice::ReadOnly))
+            hash = QString::fromLatin1(QCryptographicHash::hash(file.readAll(),
+                                                                QCryptographicHash::Sha256).toHex());
+        const int updated = hash.isEmpty() ? 0 : mibLibrary->profileService()->refreshRootHash(saved, hash);
+        const MibProfileRecord current = mibLibrary->currentProfile();
+        bool involved = false;
+        for (const MibProfileMember &root : current.roots)
+            involved = involved || QFileInfo(root.canonicalPath).canonicalFilePath() == saved;
+        for (const QString &scope : MibProfileScopePaths(current)) {
+            QString prefix = QDir::cleanPath(QFileInfo(scope).canonicalFilePath());
+            if (!prefix.isEmpty() && !prefix.endsWith('/')) prefix += '/';
+            involved = involved || (!prefix.isEmpty() && saved.startsWith(prefix));
+        }
+        DiagnosticLogger::log("MIB", QStringLiteral(
+            "Saved MIB %1: library index refreshed%2, %3 profile root hash(es) updated, active profile %4")
+            .arg(saved, indexError.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(indexError))
+            .arg(updated).arg(involved ? QStringLiteral("rebuilding") : QStringLiteral("unaffected")));
+        if (involved && !current.id.isEmpty()) mibLibrary->selectProfile(current.id);
+    });
     connect(mibLibrary, &MibLibraryWidget::openModuleRequested, mw,
             [this](const QString &path) {
         editor->MibFileOpen(path);
@@ -461,13 +536,13 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     w.Query->setToolTip(tr("Raw protocol and diagnostic output"));
     const auto refreshMibProfiles = [this, browserProfile]() {
         const QString selected = QSettings().value("mib-library/current-profile",
-            MibProfileDefinitions::allId()).toString();
+            MibProfileDefinitions::standardsId()).toString();
         const QSignalBlocker blocker(browserProfile);
         browserProfile->clear();
         for (const MibProfileRecord &profile : mibLibrary->profileService()->profiles())
             browserProfile->addItem(profile.name, profile.id);
         int index = browserProfile->findData(selected);
-        if (index < 0) index = browserProfile->findData(MibProfileDefinitions::allId());
+        if (index < 0) index = browserProfile->findData(MibProfileDefinitions::standardsId());
         browserProfile->setCurrentIndex(index);
     };
     refreshMibProfiles();
@@ -490,19 +565,24 @@ void Snmpb::BindToGUI(QMainWindow* mw)
         mw->statusBar()->showMessage(tr("Building MIB environment… %1").arg(name));
     });
     connect(modules,&MibModule::profileRuntimeReady,mw,
-        [this,mw,mibDependentActions](const QString &id,const MibEffectivePlan &plan,MibEnvironmentPtr,
-               const QStringList &,bool cacheHit,bool partial){
-            if(id==MibProfileDefinitions::allId())w.MIBTree->showAllModules();
-            else w.MIBTree->setVisibleModules(plan.effectiveModules);
+        [this,mw,mibDependentActions](const QString &id,const MibEffectivePlan &plan,MibEnvironmentPtr environment,
+               const QStringList &,bool cacheHit,bool){
+            Q_UNUSED(id)
+            const EnvironmentPresentation presentation = PresentEnvironment(environment);
+            w.MIBTree->setVisibleModules(plan.effectiveModules);
             w.MIBTree->Populate();
             mw->statusBar()->showMessage(cacheHit?tr("MIB environment ready (cached)"):
-                partial?tr("MIB environment ready with findings"):tr("MIB environment ready"),5000);
+                presentation.needsAttention
+                    ? tr("MIB environment loaded with %n problem(s); see the Problems tab", nullptr, presentation.problems)
+                    : tr("MIB environment ready"),5000);
             for (QToolButton *button : mibDependentActions) {
                 button->setEnabled(true);
                 button->setToolTip({});
             }
             if (startup) startup->advance(startup->generation(),
-                partial ? StartupState::NeedsAttention : StartupState::Ready);
+                presentation.needsAttention ? StartupState::NeedsAttention : StartupState::Ready,
+                environment ? tr("Environment: %1 modules · %2").arg(environment->loadedCount())
+                                  .arg(presentation.state) : tr("Environment: Empty"));
         });
     connect(modules,&MibModule::profileRuntimeFailed,mw,[this,mw](const QString &,const QString &error){
         mw->statusBar()->showMessage(tr("MIB environment build failed; previous environment remains active"),7000);
@@ -630,12 +710,10 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     });
     connect(modules, &MibModule::profileRuntimeReady, environmentContext,
             [environmentContext](const QString &, const MibEffectivePlan &, MibEnvironmentPtr environment,
-                                 const QStringList &, bool, bool partial) {
-        const QString state = !environment || environment->loadedCount() == 0
-            ? QObject::tr("Empty") : partial ? QObject::tr("Needs attention") : QObject::tr("Ready");
-        environmentContext->setText(QObject::tr("Environment: %1").arg(state));
-        environmentContext->setProperty("status", partial ? QStringLiteral("warning")
-            : state == QObject::tr("Ready") ? QStringLiteral("ready") : QStringLiteral("empty"));
+                                 const QStringList &, bool, bool) {
+        const EnvironmentPresentation presentation = PresentEnvironment(environment);
+        environmentContext->setText(QObject::tr("Environment: %1").arg(presentation.state));
+        environmentContext->setProperty("status", presentation.badge);
         environmentContext->style()->unpolish(environmentContext);
         environmentContext->style()->polish(environmentContext);
     });
@@ -820,33 +898,160 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     problemsPage->setObjectName(QStringLiteral("WorkbenchProblemsPage"));
     auto *problemsLayout = new QVBoxLayout(problemsPage);
     problemsLayout->setContentsMargins(8, 8, 8, 8);
-    auto *problemHeading = new QLabel(tr("MIB Environment and Profile"), problemsPage);
-    QFont problemFont = problemHeading->font(); problemFont.setBold(true);
-    problemHeading->setFont(problemFont);
-    auto *problemState = new QLabel(tr("No actionable problems reported."), problemsPage);
+    auto *problemState = new QLabel(tr("No MIB environment has been built yet."), problemsPage);
     problemState->setObjectName(QStringLiteral("WorkbenchProblemState"));
     problemState->setWordWrap(true);
     auto *problemHint = new QLabel(
-        tr("Profile ambiguity, missing or changed files, stale pins, and publication errors appear here."),
+        tr("Double-click a row to open the file at that line. Everything that could be loaded is "
+           "available in the Tree; fix an item, or carry on knowing that part may not work."),
         problemsPage);
     problemHint->setWordWrap(true);
-    problemsLayout->addWidget(problemHeading);
+    auto *showNotes = new QCheckBox(tr("Show notes"), problemsPage);
+    showNotes->setObjectName(QStringLiteral("WorkbenchProblemShowNotes"));
+    showNotes->setToolTip(tr("Notes are informational: modified files, standards issues, and parser "
+                             "warnings that do not stop a MIB from working."));
+    auto *problemToolbar = new QHBoxLayout;
+    problemToolbar->addWidget(problemHint, 1);
+    problemToolbar->addWidget(showNotes, 0, Qt::AlignTop);
+    auto *problemTable = new QTableWidget(0, 6, problemsPage);
+    problemTable->setObjectName(QStringLiteral("WorkbenchProblemTable"));
+    problemTable->setHorizontalHeaderLabels({tr("Severity"), tr("Module"), tr("Problem"),
+                                             tr("Why"), tr("What it affects"), tr("File")});
+    problemTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    problemTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    problemTable->setSelectionMode(QAbstractItemView::SingleSelection);
+    problemTable->setWordWrap(true);
+    problemTable->verticalHeader()->hide();
+    problemTable->horizontalHeader()->setStretchLastSection(true);
+    problemTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
+    problemTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
+    problemTable->setTextElideMode(Qt::ElideNone);
+    connect(problemTable->horizontalHeader(), &QHeaderView::sectionResized, problemTable,
+            [problemTable]() { problemTable->resizeRowsToContents(); });
+    // The full explanation of the selected row, so nothing is cut off.
+    auto *problemDetail = new QPlainTextEdit(problemsPage);
+    problemDetail->setObjectName(QStringLiteral("WorkbenchProblemDetail"));
+    problemDetail->setReadOnly(true);
+    problemDetail->setMaximumHeight(120);
+    problemDetail->setPlaceholderText(tr("Select a row to read the full explanation."));
     problemsLayout->addWidget(problemState);
-    problemsLayout->addWidget(problemHint);
-    problemsLayout->addStretch();
+    problemsLayout->addLayout(problemToolbar);
+    problemsLayout->addWidget(problemTable, 1);
+    problemsLayout->addWidget(problemDetail);
+
+    // The list shown here is a plain copy of the Environment's problem report, so it
+    // never holds a pointer into the Environment or the model that built it.
+    auto problemList = std::make_shared<QList<MibProblem>>();
+    auto problemLoadedCount = std::make_shared<int>(0);
+    const auto describeProblems = [problemState, problemList, problemLoadedCount, showNotes]() {
+        const MibProblemSummary summary = MibSummarizeProblems(*problemList);
+        QString text;
+        if (!summary.hasProblems()) {
+            text = QObject::tr("%n module(s) loaded. No problems.", nullptr, *problemLoadedCount);
+            if (summary.notes > 0)
+                text += showNotes->isChecked()
+                    ? QObject::tr(" Showing %n note(s).", nullptr, summary.notes)
+                    : QObject::tr(" %n note(s) are available (tick \"Show notes\").", nullptr, summary.notes);
+        } else {
+            text = QObject::tr("%n module(s) loaded, with %1 error(s) and %2 warning(s).",
+                               nullptr, *problemLoadedCount).arg(summary.errors).arg(summary.warnings);
+        }
+        problemState->setText(text);
+    };
+    const auto repopulateProblems = [problemTable, problemDetail, showNotes, problemList]() {
+        problemDetail->clear();
+        problemTable->setRowCount(0);
+        QList<int> order;
+        for (int i = 0; i < problemList->size(); ++i)
+            if (problemList->at(i).severity != MibProblemSeverity::Note || showNotes->isChecked())
+                order.append(i);
+        std::stable_sort(order.begin(), order.end(), [problemList](int a, int b) {
+            return static_cast<int>(problemList->at(a).severity) < static_cast<int>(problemList->at(b).severity);
+        });
+        for (int index : std::as_const(order)) {
+            const MibProblem &problem = problemList->at(index);
+            const int row = problemTable->rowCount();
+            problemTable->insertRow(row);
+            const QString where = problem.file.isEmpty() ? QString()
+                : problem.line > 0 ? QStringLiteral("%1:%2").arg(QFileInfo(problem.file).fileName()).arg(problem.line)
+                                   : QFileInfo(problem.file).fileName();
+            const QStringList cells{MibProblemSeverityText(problem.severity), problem.module,
+                                    problem.category, problem.why, problem.effect, where};
+            QString tip = problem.why;
+            if (!problem.effect.isEmpty()) tip += QStringLiteral("\n\n") + problem.effect;
+            if (!problem.requestedBy.isEmpty())
+                tip += QStringLiteral("\n\n") + tr("Needed by: %1").arg(problem.requestedBy.join(QStringLiteral(", ")));
+            if (!problem.suggestion.isEmpty()) tip += QStringLiteral("\n\n") + problem.suggestion;
+            if (!problem.file.isEmpty()) tip += QStringLiteral("\n\n") + problem.file;
+            for (int column = 0; column < cells.size(); ++column) {
+                auto *item = new QTableWidgetItem(cells[column]);
+                item->setToolTip(tip);
+                if (column == 0) {
+                    item->setData(Qt::UserRole, index);
+                    if (problem.severity == MibProblemSeverity::Error) item->setForeground(QColor(0x9b, 0x25, 0x25));
+                    else if (problem.severity == MibProblemSeverity::Warning) item->setForeground(QColor(0x8a, 0x4b, 0x00));
+                }
+                problemTable->setItem(row, column, item);
+            }
+        }
+        problemTable->resizeColumnsToContents();
+        problemTable->resizeRowsToContents();
+    };
+    connect(showNotes, &QCheckBox::toggled, problemsPage,
+            [repopulateProblems, describeProblems](bool) { describeProblems(); repopulateProblems(); });
+    connect(problemTable, &QTableWidget::currentCellChanged, problemsPage,
+            [problemTable, problemDetail, problemList](int row, int, int, int) {
+        const QTableWidgetItem *first = row >= 0 ? problemTable->item(row, 0) : nullptr;
+        const int index = first ? first->data(Qt::UserRole).toInt() : -1;
+        if (index < 0 || index >= problemList->size()) { problemDetail->clear(); return; }
+        const MibProblem &problem = problemList->at(index);
+        QStringList lines;
+        lines << QStringLiteral("%1: %2").arg(MibProblemSeverityText(problem.severity), problem.category);
+        if (!problem.why.isEmpty()) lines << QObject::tr("Why: %1").arg(problem.why);
+        if (!problem.effect.isEmpty()) lines << QObject::tr("What it affects: %1").arg(problem.effect);
+        if (!problem.requestedBy.isEmpty())
+            lines << QObject::tr("Needed by: %1").arg(problem.requestedBy.join(QStringLiteral(", ")));
+        if (!problem.suggestion.isEmpty()) lines << QObject::tr("What you can do: %1").arg(problem.suggestion);
+        if (!problem.file.isEmpty())
+            lines << QObject::tr("File: %1%2").arg(problem.file)
+                         .arg(problem.line > 0 ? QStringLiteral(" (line %1)").arg(problem.line) : QString());
+        problemDetail->setPlainText(lines.join(QStringLiteral("\n")));
+    });
+    connect(problemTable, &QTableWidget::cellDoubleClicked, mw,
+            [this, problemTable, problemList](int row, int) {
+        const QTableWidgetItem *first = problemTable->item(row, 0);
+        if (!first) return;
+        const int index = first->data(Qt::UserRole).toInt();
+        if (index < 0 || index >= problemList->size()) return;
+        const MibProblem problem = problemList->at(index);
+        if (problem.file.isEmpty() || !QFileInfo::exists(problem.file)) return;
+        editor->MibFileOpen(problem.file);
+        editor->GoToLine(problem.line);
+        ShowEditorDocument();
+    });
     connect(modules, &MibModule::profileRuntimeBuildStarted, problemState,
-            [problemState](const QString &) { problemState->setText(QObject::tr("Environment build in progress.")); });
+            [problemState](const QString &) { problemState->setText(QObject::tr("Building the MIB environment…")); });
     connect(modules, &MibModule::profileRuntimeReady, problemState,
-            [problemState](const QString &, const MibEffectivePlan &, MibEnvironmentPtr,
-                           const QStringList &findings, bool, bool partial) {
-        problemState->setText(partial || !findings.isEmpty()
-            ? QObject::tr("Environment published with findings: %1").arg(findings.join(QStringLiteral("\n")))
-            : QObject::tr("No actionable problems reported."));
+            [problemList, problemLoadedCount, describeProblems, repopulateProblems](
+                const QString &, const MibEffectivePlan &, MibEnvironmentPtr environment,
+                const QStringList &, bool, bool) {
+        *problemList = environment ? environment->problems() : QList<MibProblem>{};
+        *problemLoadedCount = environment ? static_cast<int>(environment->loadedCount()) : 0;
+        describeProblems();
+        repopulateProblems();
     });
     connect(modules, &MibModule::profileRuntimeFailed, problemState,
-            [problemState](const QString &, const QString &error) {
-        problemState->setText(QObject::tr("Environment publication failed. The previous Environment remains active.\n%1")
-                              .arg(error));
+            [problemState, problemList, repopulateProblems](const QString &, const QString &error) {
+        problemList->clear();
+        MibProblem problem;
+        problem.severity = MibProblemSeverity::Error;
+        problem.category = QObject::tr("Nothing could be loaded");
+        problem.why = error;
+        problem.effect = QObject::tr("The previous MIB environment stays active.");
+        problemList->append(problem);
+        problemState->setText(QObject::tr("Nothing could be loaded for this profile. "
+                                          "The previous MIB environment remains active."));
+        repopulateProblems();
     });
 
     auto *diagnosticsPage = new QWidget(mw);
@@ -893,10 +1098,12 @@ void Snmpb::BindToGUI(QMainWindow* mw)
             [statusEnvironment](const QString &) { statusEnvironment->setText(QObject::tr("Environment: Building")); });
     connect(modules, &MibModule::profileRuntimeReady, statusEnvironment,
             [statusEnvironment](const QString &, const MibEffectivePlan &, MibEnvironmentPtr environment,
-                                const QStringList &, bool, bool partial) {
+                                const QStringList &, bool, bool) {
+        const EnvironmentPresentation presentation = PresentEnvironment(environment);
         statusEnvironment->setText(!environment ? QObject::tr("Environment: Empty")
-            : partial ? QObject::tr("Environment: %1 modules · Needs attention").arg(environment->loadedCount())
-            : QObject::tr("Environment: %1 modules").arg(environment->loadedCount()));
+            : presentation.needsAttention
+                ? QObject::tr("Environment: %1 modules · %2").arg(environment->loadedCount()).arg(presentation.state)
+                : QObject::tr("Environment: %1 modules").arg(environment->loadedCount()));
     });
     connect(modules, &MibModule::profileRuntimeFailed, statusEnvironment,
             [statusEnvironment](const QString &, const QString &) {
@@ -1058,14 +1265,7 @@ void Snmpb::StartDeferredInitialization()
                     plan = MibEffectiveRuntimePlanResolver().resolve(input, dependencySnapshot);
                     plan.profileName = profile.name;
                     plan.profileType = profile.type;
-                    if (!profile.unresolvedLegacyModules.isEmpty()) {
-                        plan.authorityError = QObject::tr(
-                            "Profile migration still has unresolved legacy intent: %1")
-                            .arg(profile.unresolvedLegacyModules.join(QStringLiteral(", ")));
-                        plan.missingModules.append(profile.unresolvedLegacyModules);
-                        plan.missingModules.removeDuplicates();
-                        plan.missingModules.sort(Qt::CaseSensitive);
-                    }
+                    MibEffectivePlanAddListedNotFound(&plan, profile.unresolvedLegacyModules);
                 }
                 QMetaObject::invokeMethod(context, [context, generation, profile, plan]() {
                     if (!context || !context->startup ||

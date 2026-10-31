@@ -1128,7 +1128,28 @@ if(BUILD_TESTING)
     # timeout. Leave enough outer margin for both launches and CMake setup.
     set_tests_properties(snmpb.launch-smoke PROPERTIES TIMEOUT 120)
 
+    # Starts the real application headless on libraries with every kind of MIB problem and
+    # checks that it still loads what it can and reports what it could not, and why.
+    add_test(
+        NAME snmpb.tolerance-scenarios
+        COMMAND ${CMAKE_COMMAND}
+            -DSNMPB_EXECUTABLE=$<TARGET_FILE:snmpb>
+            -DSNMPB_QT_BIN_DIR=$<TARGET_FILE_DIR:Qt6::Core>
+            -DSNMPB_SOURCE_DIR=${PROJECT_SOURCE_DIR}
+            -DSNMPB_TOLERANCE_DIR=${CMAKE_CURRENT_BINARY_DIR}/tolerance-scenarios
+            -P ${PROJECT_SOURCE_DIR}/cmake/RunSnmpbToleranceScenarios.cmake
+    )
+    set_tests_properties(snmpb.tolerance-scenarios PROPERTIES TIMEOUT 600)
+
     foreach(close_state IN ITEMS CatalogLoading ProfilePreparing EnvironmentBuilding)
+        # Each run starts from empty state so it exercises a true first launch.
+        # Without this the state directory persists between runs and keeps
+        # whatever profiles an older build created.
+        add_test(NAME snmpb.startup-close-${close_state}-reset
+            COMMAND ${CMAKE_COMMAND} -E remove_directory
+                ${CMAKE_CURRENT_BINARY_DIR}/startup-close-${close_state})
+        set_tests_properties(snmpb.startup-close-${close_state}-reset PROPERTIES
+            FIXTURES_SETUP startup-close-${close_state}-state)
         add_test(NAME snmpb.startup-close-${close_state}
             COMMAND ${CMAKE_COMMAND} -E env
                 "QT_QPA_PLATFORM=offscreen"
@@ -1136,7 +1157,8 @@ if(BUILD_TESTING)
                 $<TARGET_FILE:snmpb>
                 --launch-smoke-test ${CMAKE_CURRENT_BINARY_DIR}/startup-close-${close_state}
                 --startup-close-state ${close_state})
-        set_tests_properties(snmpb.startup-close-${close_state} PROPERTIES TIMEOUT 60)
+        set_tests_properties(snmpb.startup-close-${close_state} PROPERTIES TIMEOUT 60
+            FIXTURES_REQUIRED startup-close-${close_state}-state)
     endforeach()
 
     snmpb_configure_qt_test_runtime(

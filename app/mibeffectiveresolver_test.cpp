@@ -310,8 +310,30 @@ int main(int argc, char **argv)
     changedRootInput.roots.first().sha256 = QString(64, 'f');
     changedRootInput.orderedScopes = {batch, standards};
     const auto changedRoot = resolver.resolve(changedRootInput, index);
-    ok &= check(!changedRoot.isComplete() && !changedRoot.authorityError.isEmpty(),
-                "missing or changed exact root is a hard resolution error");
+    ok &= check(changedRoot.authorityError.isEmpty() && changedRoot.runtimeFiles.size() >= 1 &&
+                std::any_of(changedRoot.resolutionDiagnostics.cbegin(), changedRoot.resolutionDiagnostics.cend(),
+                            [](const auto &diagnostic) {
+                                return diagnostic.tier == MibPlanResolutionTier::ModifiedRoot;
+                            }),
+                "a root whose content differs from the recorded hash still loads and is tagged modified");
+
+    // A root that no longer exists is reported and skipped; the other roots still resolve.
+    MibEffectivePlanResolverInput missingRootInput;
+    missingRootInput.id = "missing-root";
+    missingRootInput.roots = MibProfileMembersFromFiles({simpleRoot});
+    MibProfileMember vanished = missingRootInput.roots.first();
+    vanished.canonicalPath = QDir(batch).filePath("vanished-root.mib");
+    vanished.identities = {"VANISHED-MIB"};
+    missingRootInput.roots.append(vanished);
+    missingRootInput.orderedScopes = {batch, standards};
+    const auto missingRoot = resolver.resolve(missingRootInput, index);
+    ok &= check(missingRoot.authorityError.isEmpty() && !missingRoot.runtimeFiles.isEmpty() &&
+                std::any_of(missingRoot.resolutionDiagnostics.cbegin(), missingRoot.resolutionDiagnostics.cend(),
+                            [](const auto &diagnostic) {
+                                return diagnostic.tier == MibPlanResolutionTier::InvalidRoot &&
+                                       diagnostic.identity == QStringLiteral("VANISHED-MIB");
+                            }),
+                "a missing root is reported and skipped without blocking the other roots");
 
     QTemporaryDir stageCache;
     const auto stage = MibRuntimeStage::prepare(transitive, stageCache.path());

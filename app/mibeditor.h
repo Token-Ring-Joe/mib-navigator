@@ -39,6 +39,10 @@ class MibEditor: public QObject
 {
     Q_OBJECT
     
+signals:
+    // Emitted after the editor writes a MIB file to disk.
+    void FileSaved(const QString &path);
+
 public:
     MibEditor(Snmpb *snmpb);
     void ErrorHandler(char *path, int line, int severity, 
@@ -49,6 +53,7 @@ public slots:
     void MibFileNew(void);
     void MibFileOpen(void);
     void MibFileOpen(QString fileName);
+    void GoToLine(int line);
     void MibFileSave(void);
     void MibFileSaveAs(void);
     void VerifyMIB(void);

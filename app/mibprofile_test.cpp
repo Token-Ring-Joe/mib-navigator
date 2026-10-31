@@ -18,9 +18,49 @@ QByteArray mib(const QByteArray&i){return i+" DEFINITIONS ::= BEGIN\nEND\n";}
 
 int main(int argc,char**argv){QCoreApplication app(argc,argv);bool ok=true;QTemporaryDir temp;
  const QString repo=temp.filePath("profiles.json");MibProfileService service{MibProfileRepository(repo)};
- ok&=check(service.profiles().size()==2&&service.find(MibProfileDefinitions::allId())->type==MibProfileType::Custom,"built-ins migrate once to ordinary Profiles");
- ok&=check(service.rename(MibProfileDefinitions::allId(),"Everything I selected")&&service.remove(MibProfileDefinitions::allId()),"former All MIBs is editable and deletable");
- MibProfileService afterDelete{MibProfileRepository(repo)};ok&=check(!afterDelete.find(MibProfileDefinitions::allId()),"All MIBs is not regenerated");
+ ok&=check(service.profiles().size()==1&&service.find(MibProfileDefinitions::standardsId())->type==MibProfileType::Custom,"built-ins migrate once to ordinary Profiles");
+ ok&=check(!service.find(QStringLiteral("builtin.all")),"no empty All MIBs Profile is created; users build their own");
+ ok&=check(MibProfileDefinitions::builtIns().size()==1&&MibProfileDefinitions::builtIns().first().id==MibProfileDefinitions::standardsId(),"Standards / MIB-II is the only built-in definition");
+ ok&=check(service.rename(MibProfileDefinitions::standardsId(),"Everything I selected")&&service.remove(MibProfileDefinitions::standardsId()),"former built-in Profile is editable and deletable");
+ MibProfileService afterDelete{MibProfileRepository(repo)};ok&=check(!afterDelete.find(MibProfileDefinitions::standardsId()),"deleted built-in Profile is not regenerated");
+ {
+  // A saved Profile from an earlier migration that created an empty "All MIBs" Profile must survive unchanged.
+  const QString legacyPath=temp.filePath("legacy-profiles.json");
+  ok&=check(writeFile(legacyPath,QByteArray(R"({"ordinaryProfilesMigrated":true,"schemaVersion":5,"profiles":[{"id":"builtin.all","manifestVersion":1,"name":"All MIBs","roots":[],"scope":[],"type":"custom"}]})")),"legacy fixture written");
+  MibProfileService legacy{MibProfileRepository(legacyPath)};
+  const MibProfileRecord *kept=legacy.find(QStringLiteral("builtin.all"));
+  ok&=check(kept&&kept->name=="All MIBs"&&kept->type==MibProfileType::Custom&&kept->roots.isEmpty(),"existing saved All MIBs Profile is preserved as an ordinary Custom Profile");
+  QString legacyError;const QString extra=legacy.create("Another",&legacyError);
+  MibProfileService reloaded{MibProfileRepository(legacyPath)};
+  ok&=check(!extra.isEmpty()&&reloaded.find(QStringLiteral("builtin.all"))&&reloaded.find(extra)&&reloaded.profiles().size()==2,"saved Profiles survive later edits and restart");
+ }
+ {
+  // The old built-in Standards profile listed LLDP-MIB, which is not shipped. Only that stale entry is removed.
+  const QString stalePath=temp.filePath("stale-standards.json");
+  ok&=check(writeFile(stalePath,QByteArray(R"({"ordinaryProfilesMigrated":true,"schemaVersion":5,"profiles":[{"id":"builtin.standards-mib2","manifestVersion":1,"name":"Standards / MIB-II","roots":[],"scope":[],"type":"custom","unresolvedLegacyModules":["LLDP-MIB","OTHER-MIB"]},{"id":"custom.user","manifestVersion":1,"name":"Mine","roots":[],"scope":[],"type":"custom","unresolvedLegacyModules":["LLDP-MIB"]}]})")),"stale fixture written");
+  MibProfileService repaired{MibProfileRepository(stalePath)};
+  ok&=check(repaired.find(MibProfileDefinitions::standardsId())->unresolvedLegacyModules==QStringList{"OTHER-MIB"},"stale LLDP-MIB entry is removed from the built-in Standards profile only");
+  ok&=check(repaired.find(QStringLiteral("custom.user"))->unresolvedLegacyModules==QStringList{"LLDP-MIB"},"a user's own Profile is never edited by that repair");
+  MibProfileService again{MibProfileRepository(stalePath)};
+  ok&=check(again.find(MibProfileDefinitions::standardsId())->unresolvedLegacyModules==QStringList{"OTHER-MIB"}&&again.profiles().size()==2,"the repair is persisted and does nothing the second time");
+ }
+ {
+  // Saving a MIB in the editor records its new hash on every profile root at that path, and only there.
+  const QString edited=temp.filePath("Saved/EDITED-MIB.mib"),other=temp.filePath("Saved/OTHER-MIB.mib"),storePath=temp.filePath("saved-profiles.json");
+  writeFile(edited,mib("EDITED-MIB"));writeFile(other,mib("OTHER-MIB"));
+  MibProfileService saved{MibProfileRepository(storePath)};QString savedError;
+  const QString savedId=saved.create("Saved",&savedError);
+  ok&=check(saved.addFiles(savedId,{edited,other},MibProfileMemberReason::Added,&savedError),"roots added for the save test");
+  const QString oldHash=saved.find(savedId)->roots.first().sha256;
+  writeFile(edited,mib("EDITED-MIB")+"-- edited\n");
+  const QString newHash=QString(64,'b');
+  ok&=check(saved.refreshRootHash(edited,newHash)==1,"one root at the saved path is updated");
+  MibProfileService reloadedSaved{MibProfileRepository(storePath)};
+  int editedHashes=0,untouched=0;
+  for(const auto&root:reloadedSaved.find(savedId)->roots){if(root.identities.contains("EDITED-MIB")&&root.sha256==newHash)++editedHashes;if(root.identities.contains("OTHER-MIB")&&root.sha256!=newHash)++untouched;}
+  ok&=check(editedHashes==1&&untouched==1&&oldHash!=newHash,"the new hash is persisted for the saved file only");
+  ok&=check(saved.refreshRootHash(edited,newHash)==0,"refreshing again changes nothing");
+ }
  const QString emptyId=afterDelete.create("Empty manifest Profile");ok&=check(afterDelete.find(emptyId)&&MibProfileIsManifest(*afterDelete.find(emptyId))&&afterDelete.find(emptyId)->roots.isEmpty(),"new Profiles begin as empty manifests");
  const QString root=temp.filePath("Catalog"),a=QDir(root).filePath("BatchA/rfc4188.mib"),b=QDir(root).filePath("BatchB/BRIDGE-MIB.mib"),multi=QDir(root).filePath("BatchA/vendor-file.mib");
  writeFile(a,mib("BRIDGE-MIB")+"-- A\n");writeFile(b,mib("BRIDGE-MIB")+"-- B\n");writeFile(multi,mib("VENDOR-ROOT-MIB")+mib("VENDOR-TC-MIB"));
@@ -34,7 +74,7 @@ int main(int argc,char**argv){QCoreApplication app(argc,argv);bool ok=true;QTemp
  MibProfileRecord exactB=exact;exactB.roots=MibProfileMembersFromFiles({b});exactB.explicitModules=MibProfileMemberIdentities(exactB.roots);const auto planB=resolve(exactB);
  ok&=check(planB.member("BRIDGE-MIB")&&planB.member("BRIDGE-MIB")->provider.canonicalPath==QFileInfo(b).canonicalFilePath()&&planA.sha256!=planB.sha256,"provider B cannot silently replace A");
  MibProfileService reload{MibProfileRepository(repo)};const MibProfileRecord saved=*reload.find(id);ok&=check(saved.roots==exact.roots&&saved.orderedScopes==exact.orderedScopes,"schema-5 roots and ordered scope round trip");
- const QString substitute=QDir(root).filePath("BatchA/provider-with-old-content.mib");writeFile(substitute,mib("BRIDGE-MIB")+"-- A\n");writeFile(a,mib("BRIDGE-MIB")+"-- changed\n");ok&=check(MibProfileMemberCurrentState(saved.roots.first())==MibProfileMemberState::Changed,"content change detected");catalog.update({root});const auto changedPlan=resolve(saved);ok&=check(!changedPlan.authorityError.isEmpty(),"changed root is a hard error and cannot substitute same identity elsewhere");QFile::remove(multi);
+ const QString substitute=QDir(root).filePath("BatchA/provider-with-old-content.mib");writeFile(substitute,mib("BRIDGE-MIB")+"-- A\n");writeFile(a,mib("BRIDGE-MIB")+"-- changed\n");ok&=check(MibProfileMemberCurrentState(saved.roots.first())==MibProfileMemberState::Changed,"content change detected");catalog.update({root});const auto changedPlan=resolve(saved);ok&=check(changedPlan.authorityError.isEmpty()&&changedPlan.member("BRIDGE-MIB")&&changedPlan.member("BRIDGE-MIB")->provider.canonicalPath==QFileInfo(a).canonicalFilePath()&&std::any_of(changedPlan.resolutionDiagnostics.cbegin(),changedPlan.resolutionDiagnostics.cend(),[](const auto&d){return d.tier==MibPlanResolutionTier::ModifiedRoot;}),"changed root still loads its current file, is tagged modified, and is never replaced by a different file with the old content");QFile::remove(multi);
  auto mm=std::find_if(saved.roots.cbegin(),saved.roots.cend(),[](const auto&m){return m.identities.contains("VENDOR-ROOT-MIB");});ok&=check(mm!=saved.roots.cend()&&MibProfileMemberCurrentState(*mm)==MibProfileMemberState::Missing,"missing root preserves intent");
  const QString folder=QDir(root).filePath("Folder"),one=QDir(folder).filePath("one.mib"),two=QDir(folder).filePath("nested/two.mib");writeFile(one,mib("ONE-MIB"));writeFile(two,mib("TWO-MIB"));
  const QString iid=reload.create("Individual",&error),fid=reload.create("Folder",&error);reload.addFiles(iid,{one,two},MibProfileMemberReason::Added,&error);reload.addFolder(fid,folder,&error);
