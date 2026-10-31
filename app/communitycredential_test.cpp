@@ -9,9 +9,9 @@
 namespace {
 bool check(bool value, const char *message)
 { if (!value) std::cerr << "FAIL: " << message << '\n'; return value; }
-AgentProfileRecord profile(const QString &id)
+SnmpRequestSettings profile(const QString &id)
 {
-    AgentProfileRecord p{}; p.profileId = id; p.name = id; p.v2 = true;
+    SnmpRequestSettings p{}; p.profileId = id; p.name = id; p.v2 = true;
     p.address = "192.0.2.1"; p.port = "161"; p.retries = 2; p.timeout = 4;
     p.readcomm = "legacy-read"; p.writecomm = "legacy-write";
     return p;
@@ -51,7 +51,7 @@ int main(int argc, char **argv)
 
     // A request captures the credential's values when it is built; later edits and deletes of the
     // saved credential never change a request that is already in flight.
-    const AgentProfileRecord request = profile("request");
+    const SnmpRequestSettings request = profile("request");
     const auto values = CredentialResolver::communityValues(*service.find(first));
     ok &= check(values.readCommunity == "updated-read" && values.writeCommunity == "reusable-write",
                 "saved credential supplies the read and write communities");

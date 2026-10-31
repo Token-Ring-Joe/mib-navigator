@@ -3,7 +3,7 @@
 
 #include <QString>
 
-#include "agentprofilerepository.h"
+#include "snmprequestsettings.h"
 #include "credentialrecords.h"
 
 enum class SnmpRequestVersion
@@ -34,10 +34,10 @@ struct SnmpRequestConfig
     // selectedProtocol uses the existing UI/persistence convention:
     // 0 = SNMPv1, 1 = SNMPv2c, 2 = SNMPv3. Profile support flags are used
     // while resolving the UI selection and do not override that selection.
-    static bool FromProfile(const AgentProfileRecord &profile,
+    static bool FromProfile(const SnmpRequestSettings &profile,
                             int selectedProtocol,
                             SnmpRequestConfig *config);
-    static bool FromProfile(const AgentProfileRecord &profile,
+    static bool FromProfile(const SnmpRequestSettings &profile,
                             int selectedProtocol,
                             const EffectiveCredentialValues &credentials,
                             SnmpRequestConfig *config);

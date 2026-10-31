@@ -186,10 +186,13 @@ into smaller steps, each with its own working build.
    them: deleting a credential is always safe because the connection bar then shows
    "choose a credential". Kept: `AgentProfileRecord` (now in `agentprofilerecord.h`)
    is still the one-request settings struct the SNMP layer is built from.
-8c. *Still to do (small cleanup):* rename `AgentProfileRecord` to a name that matches
-   its role and delete the `agentprofilerepository.h` compatibility shim; drop the
-   now-unused "selected Agent Profile" preference fields; replace the two credential
-   managers with the single Credentials screen.
+8c. *Done (2026-10-31):* `AgentProfileRecord` is now `SnmpRequestSettings`
+   (`snmprequestsettings.h`), the compatibility shim is gone, and the unused "selected
+   Agent Profile" preference fields are no longer read or written (the saved keys stay
+   in the settings file untouched).
+8d. *Still to do:* replace the two credential managers (SNMPv1/v2c communities and SNMPv3
+   users) with the single Credentials screen. They are reached from the Manage button
+   next to the Credential list.
 
 ### Phase 3: Features, in dependency order
 

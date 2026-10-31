@@ -16,11 +16,11 @@ void check(bool condition, const char *description)
     }
 }
 
-AgentProfileRecord profile(const QString &name, const QString &address,
+SnmpRequestSettings profile(const QString &name, const QString &address,
                            int retries, int timeout, int maxRepetitions,
                            int nonRepeaters)
 {
-    AgentProfileRecord record{};
+    SnmpRequestSettings record{};
     record.name = name;
     record.v1 = true;
     record.v2 = true;
@@ -41,7 +41,7 @@ AgentProfileRecord profile(const QString &name, const QString &address,
 }
 
 // A selection is a value: it copies the record and the protocol at the moment it is made.
-AgentRequestSelection select(const AgentProfileRecord &record, int protocol)
+AgentRequestSelection select(const SnmpRequestSettings &record, int protocol)
 {
     AgentRequestSelection selection;
     selection.profile = record;
@@ -53,7 +53,7 @@ AgentRequestSelection select(const AgentProfileRecord &record, int protocol)
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
-    QList<AgentProfileRecord> profiles = {
+    QList<SnmpRequestSettings> profiles = {
         profile("original", "192.0.2.40", 4, 23, 30, 5),
         profile("replacement", "2001:db8::50", 1, 2, 7, 0)
     };

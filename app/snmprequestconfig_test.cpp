@@ -18,9 +18,9 @@ void check(bool condition, const char *description)
     }
 }
 
-AgentProfileRecord profile()
+SnmpRequestSettings profile()
 {
-    AgentProfileRecord record{};
+    SnmpRequestSettings record{};
     record.name = "lab-router";
     record.v1 = true;
     record.v2 = true;
@@ -50,7 +50,7 @@ QString octets(const OctetStr &value)
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
-    const AgentProfileRecord record = profile();
+    const SnmpRequestSettings record = profile();
 
     SnmpRequestConfig v1;
     check(SnmpRequestConfig::FromProfile(record, 0, &v1),
@@ -112,7 +112,7 @@ int main(int argc, char **argv)
     check(v3Pdu.get_security_level() == SNMP_SECURITY_LEVEL_AUTH_PRIV,
           "authPriv security level mapped");
 
-    AgentProfileRecord ipv6Record = record;
+    SnmpRequestSettings ipv6Record = record;
     ipv6Record.address = "2001:db8::10";
     SnmpRequestConfig ipv6;
     check(SnmpRequestConfig::FromProfile(ipv6Record, 1, &ipv6) &&
@@ -125,7 +125,7 @@ int main(int argc, char **argv)
     check(!SnmpRequestConfig::FromProfile(record, -1, &invalid) &&
           !SnmpRequestConfig::FromProfile(record, 3, &invalid),
           "invalid protocol selections rejected");
-    AgentProfileRecord unsupported = record;
+    SnmpRequestSettings unsupported = record;
     unsupported.v2 = false;
     check(SnmpRequestConfig::FromProfile(unsupported, 1, &invalid) &&
           invalid.version == SnmpRequestVersion::V2c,

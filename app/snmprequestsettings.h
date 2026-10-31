@@ -1,13 +1,14 @@
-#ifndef AGENTPROFILERECORD_H
-#define AGENTPROFILERECORD_H
+#ifndef SNMPREQUESTSETTINGS_H
+#define SNMPREQUESTSETTINGS_H
 
 #include <qstring.h>
 
 // The settings one SNMP request needs: where it goes, which protocol version, and how it
 // authenticates. The connection bar builds one of these for every request
-// (see connectionmodel.cpp). The name is historical: saved Agent Profiles (agents.conf) no
-// longer exist, and that file is left on disk untouched and unread.
-struct AgentProfileRecord
+// (see connectionmodel.cpp). Saved Agent Profiles (agents.conf) no longer exist; that file
+// is left on disk untouched and unread. The member names (profileId, name, readcomm, ...)
+// are the old field names, kept so request code did not have to change.
+struct SnmpRequestSettings
 {
     QString profileId;
     QString name;
@@ -28,4 +29,4 @@ struct AgentProfileRecord
     QString contextengineid;
 };
 
-#endif /* AGENTPROFILERECORD_H */
+#endif /* SNMPREQUESTSETTINGS_H */

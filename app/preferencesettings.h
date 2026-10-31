@@ -17,9 +17,6 @@ struct PreferencesSettings
     bool showAgentName = false;
     int trapHistoryLimit = 1000;
     int automaticLoading = 2;
-    QString selectedProfile = QStringLiteral("localhost");
-    QString selectedProfileId;
-    int selectedProtocol = 0;
     int requestPort = 161;   // used when the Target has no ":port"
     int requestTimeout = 3;
     int requestRetries = 1;

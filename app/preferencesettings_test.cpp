@@ -37,9 +37,6 @@ int main(int argc, char **argv)
               "trap display and automatic loading defaults preserved");
         check(defaults.trapHistoryLimit == 1000,
               "trap history has a bounded default");
-        check(defaults.selectedProfile == "localhost" &&
-              defaults.selectedProfileId.isEmpty() &&
-              defaults.selectedProtocol == 0, "agent selection defaults preserved");
         check(defaults.requestPort == 161 && defaults.requestTimeout == 3 && defaults.requestRetries == 1 &&
               defaults.bulkNonRepeaters == 0 &&
               defaults.bulkMaxRepetitions == 10,
@@ -58,9 +55,6 @@ int main(int argc, char **argv)
     expected.showAgentName = true;
     expected.trapHistoryLimit = 250;
     expected.automaticLoading = 3;
-    expected.selectedProfile = "router-lab";
-    expected.selectedProfileId = "11111111-2222-4333-8444-555555555555";
-    expected.selectedProtocol = 2;
     expected.requestPort = 1161;
     expected.requestTimeout = 11;
     expected.requestRetries = 5;
@@ -103,12 +97,6 @@ int main(int argc, char **argv)
               "automatic MIB preload list round-trips");
         check(actual.automaticLoading == expected.automaticLoading,
               "automatic MIB loading mode round-trips");
-        check(actual.selectedProfile == expected.selectedProfile,
-              "selected Agent Profile round-trips");
-        check(actual.selectedProfileId == expected.selectedProfileId,
-              "selected Agent Profile ID round-trips");
-        check(actual.selectedProtocol == expected.selectedProtocol,
-              "selected SNMP protocol round-trips");
         check(actual.requestPort == expected.requestPort &&
               actual.requestTimeout == expected.requestTimeout &&
               actual.requestRetries == expected.requestRetries &&
@@ -152,9 +140,6 @@ int main(int argc, char **argv)
         check(loaded.trapPort4 == 1162 && loaded.trapPort6 == 2162 &&
               !loaded.enableIpv4 && loaded.enableIpv6,
               "existing network section is compatible");
-        check(loaded.selectedProfile == "legacy-router" &&
-              loaded.selectedProfileId.isEmpty() &&
-              loaded.selectedProtocol == 1, "existing selection is compatible");
         check(loaded.trapHistoryLimit == 1000,
               "legacy settings receive bounded trap-history default");
         check(loaded.requestTimeout == 3 && loaded.requestRetries == 1 &&

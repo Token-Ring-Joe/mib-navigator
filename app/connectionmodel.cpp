@@ -141,7 +141,7 @@ ConnectionError ConnectionModel::build(
     if (!parsed.valid) return ConnectionError::BadTarget;
     if (credentialKey.isEmpty()) return ConnectionError::NoCredential;
 
-    AgentProfileRecord profile{};
+    SnmpRequestSettings profile{};
     profile.profileId = QStringLiteral("connection-bar");
     profile.name = parsed.host;
     profile.address = parsed.host;

@@ -169,9 +169,6 @@ void Preferences::Init(void)
     else if (automaticloading == 2) p->MibLoadingEnablePrompt->setChecked(true);
     else if (automaticloading == 3) p->MibLoadingDisable->setChecked(true);
 
-    curprofile = persisted.selectedProfile;
-    curprofileid = persisted.selectedProfileId;
-    curproto = persisted.selectedProtocol;
     requestPortSpin->setValue(persisted.requestPort);
     requestTimeoutSpin->setValue(persisted.requestTimeout);
     requestRetriesSpin->setValue(persisted.requestRetries);
@@ -228,9 +225,6 @@ void Preferences::Save()
     traphistorylimit = p->TrapHistoryLimit->value();
     values.trapHistoryLimit = traphistorylimit;
     values.automaticLoading = automaticloading;
-    values.selectedProfile = curprofile;
-    values.selectedProfileId = curprofileid;
-    values.selectedProtocol = curproto;
     values.requestPort = requestPortSpin->value();
     values.requestTimeout = requestTimeoutSpin->value();
     values.requestRetries = requestRetriesSpin->value();
@@ -474,40 +468,9 @@ bool Preferences::ShouldListenStdTrapPort6()
     return enableipv6 && trapport6 == STANDARD_TRAP_PORT;
 }
 
-void Preferences::SaveCurrentProfile(QString &name, int proto)
-{
-    SaveCurrentProfile(name, QString(), proto);
-}
-
 int Preferences::GetTrapHistoryLimit(void) const
 {
     return traphistorylimit;
-}
-
-void Preferences::SaveCurrentProfile(const QString &name,
-                                     const QString &profileId, int proto)
-{
-    curprofile = name;
-    curprofileid = profileId;
-    curproto = proto;
-    QSettings settings;
-    settings.setValue("ui/selectedprofile", curprofile);
-    if (!curprofileid.isEmpty())
-        settings.setValue("ui/selectedprofileid", curprofileid);
-    else
-        settings.remove("ui/selectedprofileid");
-    settings.setValue("ui/selectedproto", curproto);
-}
-
-QString Preferences::GetCurrentProfileId(void) const
-{
-    return curprofileid;
-}
-
-int Preferences::GetCurrentProfile(QString &name)
-{
-    name = curprofile;
-    return curproto;
 }
 
 void Preferences::SelectedPreferences(QTreeWidgetItem * item, QTreeWidgetItem *)

@@ -3,7 +3,7 @@
 
 #include <QString>
 
-#include "agentprofilerepository.h"
+#include "snmprequestsettings.h"
 #include "snmprequestconfig.h"
 
 enum class AgentSelectionError
@@ -16,7 +16,7 @@ enum class AgentSelectionError
 
 struct AgentRequestSelection
 {
-    AgentProfileRecord profile;
+    SnmpRequestSettings profile;
     int selectedProtocol = 0;
     EffectiveCredentialValues credentials;
     bool hasResolvedCredentials = false;

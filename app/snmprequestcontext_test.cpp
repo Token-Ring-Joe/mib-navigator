@@ -15,10 +15,10 @@ void check(bool condition, const char *description)
     }
 }
 
-AgentProfileRecord profile(const QString &address, int maxRepetitions,
+SnmpRequestSettings profile(const QString &address, int maxRepetitions,
                            int nonRepeaters)
 {
-    AgentProfileRecord record{};
+    SnmpRequestSettings record{};
     record.v1 = true;
     record.v2 = true;
     record.v3 = true;
@@ -42,7 +42,7 @@ int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
 
-    AgentProfileRecord selected = profile("192.0.2.20", 25, 4);
+    SnmpRequestSettings selected = profile("192.0.2.20", 25, 4);
     SnmpRequestConfig initialConfig;
     check(SnmpRequestConfig::FromProfile(selected, 1, &initialConfig),
           "initial SNMPv2c selection resolves");
@@ -65,7 +65,7 @@ int main(int argc, char **argv)
           "GET-BULK continuation parameters retained");
 
     SnmpRequestConfig walkConfig;
-    AgentProfileRecord walkProfile = profile("2001:db8::40", 40, 6);
+    SnmpRequestSettings walkProfile = profile("2001:db8::40", 40, 6);
     check(SnmpRequestConfig::FromProfile(walkProfile, 1, &walkConfig),
           "walk configuration resolves");
     SnmpRequestContext walk(walkConfig, SnmpRequestOperation::Walk);

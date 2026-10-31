@@ -5,7 +5,7 @@ QString SnmpRequestConfig::endpoint() const
     return address + QLatin1Char('/') + port;
 }
 
-bool SnmpRequestConfig::FromProfile(const AgentProfileRecord &profile,
+bool SnmpRequestConfig::FromProfile(const SnmpRequestSettings &profile,
                                     int selectedProtocol,
                                     SnmpRequestConfig *config)
 {
@@ -15,7 +15,7 @@ bool SnmpRequestConfig::FromProfile(const AgentProfileRecord &profile,
                            profile.secname, profile.seclevel), config);
 }
 
-bool SnmpRequestConfig::FromProfile(const AgentProfileRecord &profile,
+bool SnmpRequestConfig::FromProfile(const SnmpRequestSettings &profile,
                                     int selectedProtocol,
                                     const EffectiveCredentialValues &credentials,
                                     SnmpRequestConfig *config)

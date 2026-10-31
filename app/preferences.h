@@ -47,11 +47,6 @@ public:
     bool GetShowAgentName(void);
     int GetTrapHistoryLimit(void) const;
     int GetAutomaticLoading(void);
-    void SaveCurrentProfile(QString &name, int proto);
-    void SaveCurrentProfile(const QString &name, const QString &profileId,
-                            int proto);
-    int GetCurrentProfile(QString &name);
-    QString GetCurrentProfileId(void) const;
     QStringList DefaultMibPaths() const;
 
 public slots:
@@ -99,9 +94,6 @@ private:
     bool showagentname;
     int traphistorylimit;
     int automaticloading;
-    QString curprofile;
-    QString curprofileid;
-    int curproto;
 };
 
 #endif /* PREFERENCES_H */

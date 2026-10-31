@@ -11,9 +11,9 @@ void check(bool condition, const char *description)
     if (!condition) { QTextStream(stderr) << "FAIL: " << description << Qt::endl; ++failures; }
 }
 
-AgentProfileRecord record(const QString &address)
+SnmpRequestSettings record(const QString &address)
 {
-    AgentProfileRecord r{};
+    SnmpRequestSettings r{};
     r.name = address; r.profileId = "request";
     r.address = address; r.port = "1161";
     r.v1 = r.v2 = r.v3 = true;

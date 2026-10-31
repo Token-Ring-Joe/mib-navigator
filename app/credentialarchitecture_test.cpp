@@ -189,7 +189,7 @@ int main(int argc, char **argv)
     community.displayName = "read/write";
     community.readCommunity = CredentialSecret("inline-read");
     community.writeCommunity = CredentialSecret("inline-write");
-    AgentProfileRecord legacy{};
+    SnmpRequestSettings legacy{};
     legacy.address = "192.0.2.1"; legacy.port = "161";
     legacy.retries = 2; legacy.timeout = 5; legacy.maxrepetitions = 20;
     legacy.nonrepeaters = 1; legacy.readcomm = "inline-read";

@@ -79,7 +79,7 @@ set(SNMPB_APP_HEADERS
     agentrequestselection.h
     connectionbar.h
     connectionmodel.h
-    agentprofilerepository.h
+    snmprequestsettings.h
     comboboxes.h
     communitycredentialrepository.h
     communitycredentialservice.h
@@ -640,7 +640,7 @@ if(BUILD_TESTING)
     endif()
 
     add_executable(snmpb_credential_architecture_test
-         agentprofilerepository.h
+         snmprequestsettings.h
         credentialrecords.cpp credentialrecords.h
         snmprequestconfig.cpp snmprequestconfig.h
         usmcredentialrepository.cpp usmcredentialrepository.h
@@ -660,7 +660,7 @@ if(BUILD_TESTING)
 
     add_executable(snmpb_connection_model_test
         agentrequestselection.cpp agentrequestselection.h
-         agentprofilerepository.h
+         snmprequestsettings.h
         communitycredentialrepository.cpp communitycredentialrepository.h
         communitycredentialservice.cpp communitycredentialservice.h
         connectionmodel.cpp connectionmodel.h
