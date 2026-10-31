@@ -599,7 +599,9 @@ int main( int argc, char ** argv )
                             if (profileCombo && detectButton && collection) {
                                 collection->rebuildNow();
                                 collection->waitForBuild(60000);
-                                const QString before = profileCombo->currentText();
+                                // Both the Automatic profile for the Acme/Prod folder and the hand-made Test profile hold the
+                                // MIB the agent registers under; Detect prefers the Automatic one.
+                                const QString before = QStringLiteral("Acme / Prod");
                                 const int standards = profileCombo->findData(QStringLiteral("custom.other"));   // the empty second profile
                                 snmpb.MibLibraryObj()->selectProfile(QStringLiteral("custom.other"));
                                 targetBox->setEditText(smoke_live_target);
@@ -625,7 +627,7 @@ int main( int argc, char ** argv )
                                 detectWait.exec();
                                 smoke_output << "launch-smoke: DETECT before=\"" << before << "\" after=\"" << profileCombo->currentText() << "\"" << Qt::endl;
                                 check(profileCombo->currentText() == before,
-                                      "live: Detect read the device and switched to the profile that holds its MIBs");
+                                      "live: Detect read the device and switched to the Automatic profile that holds its MIBs");
                                 QCoreApplication::processEvents();
                                 check(detectButton->isEnabled(), "live: the Detect button is available again");
                                 bool logged = false;
@@ -673,6 +675,33 @@ int main( int argc, char ** argv )
                     // GOOD-MIB exists only in the scenarios that build a library with it.
                     const bool hasGoodMib = QFileInfo::exists(QDir(smoke_config_dir).filePath("MIB-Library/Acme/Prod/GOOD-MIB"));
                     if (hasGoodMib) {
+                        // Automatic profiles: the Library folder Acme/Prod is a profile without anyone creating it.
+                        QComboBox *autoCombo = mw.findChild<QComboBox *>("MibBrowserProfileSelector");
+                        const int autoIndex = autoCombo ? autoCombo->findData(QStringLiteral("auto:Acme/Prod")) : -1;
+                        check(autoIndex >= 0 && autoCombo->itemText(autoIndex) == "Acme / Prod",
+                              "an Automatic profile exists for the Acme/Prod folder without anyone creating it");
+                        bool reservedMakeProfiles = false;
+                        for (int i = 0; autoCombo && i < autoCombo->count(); ++i)
+                            reservedMakeProfiles = reservedMakeProfiles || autoCombo->itemData(i).toString().startsWith("auto:Standards") ||
+                                                   autoCombo->itemData(i).toString().startsWith("auto:Unassigned");
+                        check(!reservedMakeProfiles, "Standards and Unassigned never become Automatic profiles");
+                        if (autoIndex >= 0) {
+                            QEventLoop envWait; QTimer envLimit; envLimit.setSingleShot(true);
+                            QObject::connect(&envLimit, &QTimer::timeout, &envWait, &QEventLoop::quit);
+                            QString readyProfile;
+                            QObject::connect(snmpb.MibModuleObj(), &MibModule::profileRuntimeReady, &envWait,
+                                [&](const QString &id, const MibEffectivePlan &, MibEnvironmentPtr, const QStringList &, bool, bool) {
+                                    if (id == "auto:Acme/Prod") { readyProfile = id; envWait.quit(); } });
+                            envLimit.start(60000);
+                            snmpb.MibLibraryObj()->selectProfile(QStringLiteral("auto:Acme/Prod"));
+                            envWait.exec();
+                            bool hasGood = false;
+                            if (const MibEnvironmentPtr built = snmpb.MibModuleObj()->CurrentEnvironment())
+                                for (const auto &module : built->modules()) hasGood = hasGood || module.identity == "GOOD-MIB";
+                            check(readyProfile == "auto:Acme/Prod" && hasGood,
+                                  "selecting the Automatic profile builds an environment from the folder's MIBs");
+                            snmpb.MibLibraryObj()->selectProfile(QStringLiteral("custom.test"));
+                        }
                     searchBox->setText("goodValue");
                     emit searchBox->returnPressed();
                     check(searchTable->rowCount() == 1 && cell(0, 0) == "goodValue" && cell(0, 2) == "GOOD-MIB" &&

@@ -385,7 +385,7 @@ if(SNMPB_PYTHON)
                "PASS: live: the Watch tab shows the row and its change"
                "PASS: live: removing a watch removes its row"
                "PASS: live: the history remembers the credential used with the target"
-               "PASS: live: Detect read the device and switched to the profile that holds its MIBs"
+               "PASS: live: Detect read the device and switched to the Automatic profile that holds its MIBs"
                "PASS: live: the Detect button is available again"
                "PASS: live: the detection is in the Log with the profile it chose"
                "PASS: live: the Log tab lists every request"

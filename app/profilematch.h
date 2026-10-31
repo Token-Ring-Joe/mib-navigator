@@ -16,12 +16,14 @@ struct ProfileMatchProfile
 {
     QString id;
     QString name;
+    bool automatic = false;   // derived from a Vendor/Product folder
 };
 
 struct ProfileMatchCandidate
 {
     QString profileId;
     QString profileName;
+    bool automatic = false;
     QStringList viaModules;   // the modules that tie this profile to the device
 };
 

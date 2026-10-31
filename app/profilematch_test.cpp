@@ -61,6 +61,22 @@ int main(int argc, char **argv)
     ok &= check(r.kind == ProfileMatchResult::Kind::Enterprise && r.candidates.size() == 3,
                 "a sysObjectID that is just the enterprise number offers every profile of that vendor");
 
+    // ---- Automatic profiles are preferred over hand-made ones ---------------------------------------------
+    const auto withAutomatic = [](const QString &module) {
+        QList<ProfileMatchProfile> list;
+        if (module == "ALPHA-SWITCH") list << ProfileMatchProfile{"auto:Alpha/Switch", "Alpha / Switch", true}
+                                           << ProfileMatchProfile{"p.hand", "My hand-made one", false};
+        if (module == "ALPHA-ROUTER") list << ProfileMatchProfile{"auto:Alpha/Router", "Alpha / Router", true};
+        return list;
+    };
+    r = MatchProfileForSysObjectId(index, "1.3.6.1.4.1.100.1.5", withAutomatic);
+    ok &= check(r.candidates.size() == 1 && r.candidates.first().profileId == "auto:Alpha/Switch" && r.candidates.first().automatic,
+                "when an Automatic profile and a hand-made profile both hold the MIBs, the Automatic one is the answer");
+    r = MatchProfileForSysObjectId(index, "1.3.6.1.4.1.100.9.9", withAutomatic);
+    ok &= check(r.candidates.size() == 2 && !r.candidates.at(0).profileName.isEmpty() &&
+                std::all_of(r.candidates.cbegin(), r.candidates.cend(), [](const auto &c) { return c.automatic; }),
+                "an enterprise-level match offers only the Automatic profiles of that vendor");
+
     // ---- nothing to match ----------------------------------------------------------------------------------
     r = MatchProfileForSysObjectId(index, "1.3.6.1.4.1.300.1", profiles);
     ok &= check(r.kind == ProfileMatchResult::Kind::NoMatch && r.candidates.isEmpty() && r.modulesWithoutProfile.contains("GAMMA-MIB") &&

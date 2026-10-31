@@ -261,6 +261,16 @@ into smaller steps, each with its own working build.
     runs in the background; step 15 (persisting it) is not needed yet.
 15. **Persist compiled MIB data** (#9), only if measured search or startup
     performance requires it.
+15a. **Automatic Profiles.** *Done (2026-10-31):* every `Vendor/Product` folder of the Library is a
+    profile, named "Vendor / Product", with the stable id `auto:Vendor/Product`. Its members are the
+    MIB files in that folder at any depth; it looks in the product folder first, then the vendor
+    folder (files its products share), then the Library's Standards folder for imports. `Standards`
+    and `Unassigned` at the first level are reserved and never become profiles; files loose in the
+    Library or directly in a vendor folder belong to no product. They are derived, never saved,
+    cannot be renamed, deleted or edited member by member, and follow the folder when the Library
+    refreshes (`MibBuildAutomaticProfiles`, `snmpb.mib-automatic-profile`, and the end-to-end
+    scenario). Profiles made by hand are untouched and still work alongside them. Detect profile
+    prefers an Automatic profile over a hand-made one that holds the same MIBs.
 16. **Detect profile.** Reuses the collection-wide index from step 14. *Done (2026-10-31):*
     the **Detect** button next to the MIB Profile selector sends one GET for sysObjectID.0 and
     sysDescr.0 (only when clicked, never otherwise), then matches with

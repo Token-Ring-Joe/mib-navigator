@@ -8,8 +8,11 @@
 #include <QStringList>
 
 class MibDependencyIndex;
+struct MibDependencyFileRecord;
 
-enum class MibProfileType { Standards, Custom, Folder };
+// Automatic profiles are derived from the Library's Vendor/Product folders. They are never saved
+// and cannot be edited member by member: the folder is the single source of truth.
+enum class MibProfileType { Standards, Custom, Folder, Automatic };
 
 struct MibProviderPin {
     QString canonicalPath;
@@ -114,12 +117,16 @@ public:
     // records the new content hash so the root is not later reported as modified.
     // Returns how many roots were updated.
     int refreshRootHash(const QString &path, const QString &sha256, QString *error = nullptr);
+    // Replaces the derived Automatic profiles (see MibBuildAutomaticProfiles). They are held in
+    // memory only. Returns true when the list changed.
+    bool setAutomaticProfiles(const QList<MibProfileRecord> &profiles);
 private:
     static bool isBuiltIn(const QString &id);
     MibProfileRepository repository;
     QList<MibProfileRecord> builtInProfiles = MibProfileDefinitions::builtIns();
     QList<MibProfileRecord> customProfiles;
     QList<MibProfileRecord> folderProfiles;
+    QList<MibProfileRecord> automaticProfiles;
 };
 
 enum class MibProfileModuleAdditionStatus {
@@ -135,6 +142,14 @@ struct MibProfileModuleAdditionResult {
     QStringList addedModules;
     QString error;
 };
+
+// One Automatic profile for every Vendor/Product folder of the Library: files directly under
+// <root>/<Vendor>/<Product>/ (at any depth below it). "Standards" and "Unassigned" at the first
+// level are reserved: they take part in the Library but never become profiles. Files that sit
+// directly in a vendor folder, or loose in the root, belong to no product and are not included
+// in any profile; the vendor folder is searched for imports. Nothing here knows a vendor name.
+QList<MibProfileRecord> MibBuildAutomaticProfiles(const QString &libraryRoot,
+                                                  const QList<MibDependencyFileRecord> &files);
 
 MibProfileModuleAdditionResult MibAddModulesToEditableProfile(
     MibProfileService &service, const QString &profileId, const QStringList &moduleIdentities);

@@ -372,9 +372,22 @@ bool MibProfileService::persist(QString *error) const
 QList<MibProfileRecord> MibProfileService::profiles() const
 {
     QList<MibProfileRecord> result = builtInProfiles;
+    result.append(automaticProfiles);
     result.append(customProfiles);
     result.append(folderProfiles);
     return result;
+}
+
+bool MibProfileService::setAutomaticProfiles(const QList<MibProfileRecord> &profiles)
+{
+    const auto same = [](const MibProfileRecord &a, const MibProfileRecord &b) {
+        return a.id == b.id && a.name == b.name && a.roots == b.roots && a.orderedScopes == b.orderedScopes;
+    };
+    if (profiles.size() == automaticProfiles.size() &&
+        std::equal(profiles.cbegin(), profiles.cend(), automaticProfiles.cbegin(), same))
+        return false;
+    automaticProfiles = profiles;
+    return true;
 }
 
 const MibProfileRecord *MibProfileService::find(const QString &id) const
@@ -384,6 +397,8 @@ const MibProfileRecord *MibProfileService::find(const QString &id) const
     for (const MibProfileRecord &profile : customProfiles)
         if (profile.id == id) return &profile;
     for (const MibProfileRecord &profile : folderProfiles)
+        if (profile.id == id) return &profile;
+    for (const MibProfileRecord &profile : automaticProfiles)
         if (profile.id == id) return &profile;
     return nullptr;
 }
@@ -891,5 +906,58 @@ MibProfileDependencyRefreshResult MibResolveProfileDependencies(
     result.unresolved = unresolved.values();
     result.unresolved.sort(Qt::CaseSensitive);
     result.profile.unresolvedLegacyModules = result.unresolved;
+    return result;
+}
+
+QList<MibProfileRecord> MibBuildAutomaticProfiles(const QString &libraryRoot,
+                                                  const QList<MibDependencyFileRecord> &files)
+{
+    QList<MibProfileRecord> result;
+    const QString root = QFileInfo(libraryRoot).canonicalFilePath();
+    if (root.isEmpty()) return result;
+    const QDir rootDir(root);
+    QMap<QString, MibProfileRecord> byId;
+    for (const MibDependencyFileRecord &file : files) {
+        if (file.sha256.isEmpty() || file.importsByModule.isEmpty()) continue;   // unreadable or no module
+        const QString relative = QDir::fromNativeSeparators(rootDir.relativeFilePath(file.canonicalPath));
+        if (relative.startsWith(QLatin1String("../")) || relative == QLatin1String("..")) continue;   // outside the Library
+        const QStringList parts = relative.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+        if (parts.size() < 3) continue;   // needs Vendor/Product/file
+        const QString vendor = parts.at(0), product = parts.at(1);
+        if (vendor.startsWith(QLatin1Char('.')) || product.startsWith(QLatin1Char('.'))) continue;
+        if (vendor.compare(QLatin1String("Standards"), Qt::CaseInsensitive) == 0 ||
+            vendor.compare(QLatin1String("Unassigned"), Qt::CaseInsensitive) == 0) continue;
+        const QString id = QStringLiteral("auto:%1/%2").arg(vendor, product);
+        MibProfileRecord &profile = byId[id];
+        if (profile.id.isEmpty()) {
+            profile.id = id;
+            profile.name = QStringLiteral("%1 / %2").arg(vendor, product);
+            profile.type = MibProfileType::Automatic;
+            profile.manifestVersion = 1;
+            const QString productDir = QFileInfo(rootDir.filePath(vendor + QLatin1Char('/') + product)).canonicalFilePath();
+            const QString vendorDir = QFileInfo(rootDir.filePath(vendor)).canonicalFilePath();
+            // The product folder first, then the vendor folder (files shared by a vendor's products).
+            profile.orderedScopes = {{QStringLiteral("folder:") + vendor + QLatin1Char('/') + product, productDir},
+                                     {QStringLiteral("folder:") + vendor, vendorDir}};
+        }
+        MibProfileMember member;
+        member.canonicalPath = file.canonicalPath;
+        member.sha256 = file.sha256;
+        member.identities = file.importsByModule.keys();
+        member.identities.sort();
+        member.reason = MibProfileMemberReason::Added;
+        profile.roots.append(member);
+    }
+    for (auto it = byId.begin(); it != byId.end(); ++it) {
+        MibProfileRecord profile = it.value();
+        std::sort(profile.roots.begin(), profile.roots.end(), [](const MibProfileMember &a, const MibProfileMember &b) {
+            return a.canonicalPath < b.canonicalPath;
+        });
+        profile.explicitModules = MibProfileMemberIdentities(profile.roots);
+        result.append(profile);
+    }
+    std::sort(result.begin(), result.end(), [](const MibProfileRecord &a, const MibProfileRecord &b) {
+        return a.name.compare(b.name, Qt::CaseInsensitive) < 0;
+    });
     return result;
 }

@@ -20,10 +20,17 @@ QList<ProfileMatchCandidate> candidatesFor(
         for (const ProfileMatchProfile &profile : profiles) {
             auto it = std::find_if(candidates.begin(), candidates.end(),
                                    [&](const ProfileMatchCandidate &c) { return c.profileId == profile.id; });
-            if (it == candidates.end()) candidates.append({profile.id, profile.name, {module}});
+            if (it == candidates.end()) candidates.append({profile.id, profile.name, profile.automatic, {module}});
             else if (!it->viaModules.contains(module)) it->viaModules.append(module);
         }
     }
+    // An Automatic profile is built from exactly the product's folder, so it is the better answer
+    // than a profile somebody assembled by hand from the same MIBs.
+    const bool anyAutomatic = std::any_of(candidates.cbegin(), candidates.cend(),
+                                          [](const ProfileMatchCandidate &c) { return c.automatic; });
+    if (anyAutomatic)
+        candidates.erase(std::remove_if(candidates.begin(), candidates.end(),
+                                        [](const ProfileMatchCandidate &c) { return !c.automatic; }), candidates.end());
     return candidates;
 }
 }

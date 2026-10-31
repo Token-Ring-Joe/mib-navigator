@@ -607,6 +607,21 @@ if(BUILD_TESTING)
         add_test(NAME snmpb.profile-detector COMMAND $<TARGET_FILE:snmpb_profile_detector_test>)
     endif()
 
+    add_executable(snmpb_mib_automatic_profile_test
+        mibcandidatefilter.cpp mibcandidatefilter.h
+        miblibrary.cpp miblibrary.h mibcollection.cpp mibcollection.h mibprofile.cpp mibprofile.h
+        mibdependencyindex.cpp mibdependencyindex.h mibeffectiveplan.cpp mibeffectiveplan.h
+        mibrecords.h mibtreemodel.cpp mibtreemodel.h mibautomaticprofile_test.cpp)
+    set_target_properties(snmpb_mib_automatic_profile_test PROPERTIES AUTOMOC ON)
+    target_link_libraries(snmpb_mib_automatic_profile_test PRIVATE Qt6::Core)
+    if(WIN32)
+        add_test(NAME snmpb.mib-automatic-profile COMMAND ${CMAKE_COMMAND} -E env
+            "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
+            $<TARGET_FILE:snmpb_mib_automatic_profile_test>)
+    else()
+        add_test(NAME snmpb.mib-automatic-profile COMMAND $<TARGET_FILE:snmpb_mib_automatic_profile_test>)
+    endif()
+
     add_executable(snmpb_snmp_report_test snmpreport.cpp snmpreport.h snmpreport_test.cpp)
     target_link_libraries(snmpb_snmp_report_test PRIVATE Qt6::Core snmpb_snmp_pp snmpb_libtomcrypt)
     if(WIN32)

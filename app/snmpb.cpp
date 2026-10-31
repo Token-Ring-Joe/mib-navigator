@@ -323,6 +323,10 @@ void Snmpb::BindToGUI(QMainWindow* mw)
             modules->DependencyIndex()->moduleNames(), false, error);
         return !error || error->isEmpty();
     };
+    mibLibraryCallbacks.automaticProfiles = [this]() {
+        return MibBuildAutomaticProfiles(modules->DependencyIndex()->libraryRoot(),
+                                         modules->DependencyIndex()->files());
+    };
     mibLibraryCallbacks.effectivePlan = [this](const MibProfileRecord &profile) {
         return modules->BuildEffectivePlan(profile);
     };
@@ -758,7 +762,7 @@ void Snmpb::BindToGUI(QMainWindow* mw)
             profileModules->clear();
             for (const MibProfileRecord &profile : mibLibrary->profileService()->profiles())
                 for (const QString &name : modules->BuildEffectivePlan(profile).effectiveModules)
-                    (*profileModules)[name] << ProfileMatchProfile{profile.id, profile.name};
+                    (*profileModules)[name] << ProfileMatchProfile{profile.id, profile.name, profile.type == MibProfileType::Automatic};
             *profileModulesValid = true;
         }
         return profileModules->value(module);

@@ -51,6 +51,8 @@ public:
         std::function<bool(MibProfileService &, QString *)> retryLegacyProfiles;
         std::function<bool(QString *)> checkDependencies;
         std::function<MibEffectivePlan(const MibProfileRecord &)> effectivePlan;
+        // The Automatic profiles derived from the Library's Vendor/Product folders right now.
+        std::function<QList<MibProfileRecord>()> automaticProfiles;
     };
     explicit MibLibraryWidget(const QStringList &bundledPaths,
                               QWidget *parent = nullptr,
@@ -96,6 +98,8 @@ private slots:
     void openLibraryRoot();
     void openProfileFolder();
 private:
+    // Refreshes the derived Automatic profiles; true when the list changed.
+    bool applyAutomaticProfiles();
     void loadCachedCatalog();
     QString catalogCachePath() const;
     QStringList selectedModules() const;

@@ -712,6 +712,7 @@ void MibLibraryWidget::refreshImpl(bool prepareProfile)
     QElapsedTimer totalTimer; totalTimer.start();
     QElapsedTimer phaseTimer; phaseTimer.start();
     ++counters.automaticProfileScans;
+    const bool automaticChanged = applyAutomaticProfiles();
     profiles.migrateLegacyFolderProfiles();
     const qint64 automaticProfilesMs = phaseTimer.restart();
     const QStringList previouslySelected = selectedModules();
@@ -795,6 +796,7 @@ void MibLibraryWidget::refreshImpl(bool prepareProfile)
         ? tr("%n modules in library", nullptr, records.size())
         : tr("%n modules in library — %1", nullptr, records.size()).arg(sourceStatusText));
     ++counters.profilePopulations;
+    if (automaticChanged) emit profilesChanged();
     if (prepareProfile) {
         refreshProfiles(profileCombo && profileCombo->currentIndex() >= 0
             ? profileCombo->currentData().toString() : QString());
@@ -825,10 +827,16 @@ MibProfileRecord MibLibraryWidget::currentProfile() const
     return profile ? *profile : MibProfileRecord{};
 }
 
+bool MibLibraryWidget::applyAutomaticProfiles()
+{
+    return callbacks.automaticProfiles ? profiles.setAutomaticProfiles(callbacks.automaticProfiles()) : false;
+}
+
 void MibLibraryWidget::reloadProfiles()
 {
     QString error;
     profiles.reload(&error);
+    applyAutomaticProfiles();
     QString id = QSettings().value("mib-library/current-profile",
         MibProfileDefinitions::standardsId()).toString();
     id = MibProfileDefinitions::validCurrentId(id, profiles.profiles());
@@ -1128,7 +1136,12 @@ void MibLibraryWidget::profileChanged()
     addMemberButton->setEnabled(editable); removeMemberButton->setEnabled(editable);
     includeStandards->hide();
     profileSource->setText(tr("%n exact root file(s)", nullptr, selectedProfile.roots.size()));
-    profileGuidance->setText(tr("Profile roots are a saved snapshot of exact files. Dependencies are derived when the Profile is activated."));
+    profileGuidance->setText(selectedProfile.type == MibProfileType::Automatic
+        ? tr("Automatic profile: built from the MIB files in the folder %1 (and shared files in %2). It follows the folder: "
+             "add, remove or change a file there and refresh the Library. It cannot be edited member by member; "
+             "to choose your own set, create a Custom profile.")
+              .arg(selectedProfile.orderedScopes.value(0).id.mid(7), selectedProfile.orderedScopes.value(1).id.mid(7))
+        : tr("Profile roots are a saved snapshot of exact files. Dependencies are derived when the Profile is activated."));
     openProfileFolderButton->hide();
     const MibEffectivePlan plan = planFor(selectedProfile);
     refreshProfileLists(&plan);
