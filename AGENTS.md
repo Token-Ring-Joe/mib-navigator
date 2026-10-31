@@ -512,6 +512,14 @@ explicitly inspect for:
 Do not preserve a `QModelIndex` across a model reset unless its lifetime is
 provably safe.
 
+Linux's allocator often leaves freed memory intact, so a use-after-free can pass
+every Linux test and fail only on macOS. After changing code that keeps pointers
+or references into containers, run the affected tests in an AddressSanitizer
+build (configure `build-linux-asan` with `-fsanitize=address
+-fno-omit-frame-pointer`). Beware of `for (const auto &x : obj.items())` when
+`items()` returns a container by value: the loop works on a temporary copy, and a
+pointer taken from `x` dangles once the loop ends.
+
 Prefer stable identifiers and reacquire indexes after rebuilding models.
 
 ---
