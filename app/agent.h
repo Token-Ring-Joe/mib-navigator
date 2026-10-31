@@ -26,7 +26,6 @@
 #include "mibview.h"
 #include "trap.h"
 #include "mibselection.h"
-#include "agentprofile.h"
 #include "agentrequestselection.h"
 #include "connectionmodel.h"
 #include "snmprequestconfig.h"
@@ -62,8 +61,7 @@ public:
     int SelectTableInstance(const QString& oid, QString& outinstance);
 
     // The connection bar (Target, Credential, MIB Profile) is the authority for who a
-    // request goes to and how it authenticates. Without one the legacy hidden Agent
-    // Profile controls are used, which only automated tests still rely on.
+    // request goes to and how it authenticates.
     void SetConnectionBar(ConnectionBar *bar);
 
     inline USM *GetUSMObj(void) { return v3mp->get_usm(); }
@@ -93,8 +91,6 @@ private:
     void PresentInstanceResult(const SnmpInstanceResult &result);
 
 public slots:
-    void SelectProfileByName(const QString &profileName);
-    void SelectProfileById(const QString &profileId);
     void WalkFrom(const QString& oid);
     void Get(const QString& oid, bool usevblist = false);
     void GetNext(const QString& oid, bool usevblist = false);
@@ -114,11 +110,6 @@ public slots:
 
 protected slots:
     void TimerExpired(void);    
-    void ShowAgentSettings(void);
-    void SelectAgentProfile(QString *prefprofile = NULL, int prefproto = -1,
-                            QString *prefprofileid = NULL);
-    void SelectAgentProto(void);
-    void AgentProfileListChange(void);
     void VarbindsNew(void);
     void VarbindsEdit(void);
     void VarbindsDelete(void);

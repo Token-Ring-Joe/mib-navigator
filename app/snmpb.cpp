@@ -56,9 +56,6 @@
 #include "mibprofile.h"
 #include "miblegacymigration.h"
 
-#include "agentprofile.h"
-#include "agentprofileservice.h"
-#include "profilemetadataservice.h"
 #include "mibcollection.h"
 #include "usmprofile.h"
 #include "communitycredentialservice.h"
@@ -76,12 +73,9 @@
 #define SMI_CONFIG_FILE          "smi.conf"
 #define BOOT_COUNTER_CONFIG_FILE "boot_counter.conf"
 #define USM_USERS_CONFIG_FILE    "usm_users.conf"
-#define AGENTS_CONFIG_FILE       "agents.conf"
 #define LOG_CONFIG_FILE          "log.conf"
-#define PROFILE_METADATA_CONFIG_FILE "profile-metadata.conf"
 #define CREDENTIAL_IDENTITIES_CONFIG_FILE "credential-identities.conf"
 #define COMMUNITY_CREDENTIALS_CONFIG_FILE "community-credentials.conf"
-#define CREDENTIAL_BINDINGS_CONFIG_FILE "credential-bindings.conf"
 
 
 
@@ -192,11 +186,6 @@ void Snmpb::BindToGUI(QMainWindow* mw)
 
     w.setupUi(mw);
     DiagnosticLogger::log("UI", "main window UI setup complete");
-    // The Connections navigator is the visible authoritative selector. These
-    // controls remain hidden temporarily as compatibility state for legacy
-    // request consumers while selection is synchronized by stable profile ID.
-    w.AgentProperties->hide();
-    w.actionManageAgentProfiles->setVisible(false);
     prefs->RestoreWindowGeometry(*mw);
     EnsureAccessibleWindowGeometry(mw);
     static auto saver = std::bind(&Preferences::SaveWindowGeometry, std::ref(*mw));
@@ -226,23 +215,13 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     QElapsedTimer mibStartupTimer; mibStartupTimer.start();
     modules = new MibModule(this);
     DiagnosticLogger::log("Startup", QStringLiteral("MIB initialization complete elapsed_ms=%1").arg(mibStartupTimer.elapsed()));
-    profileService = new AgentProfileService(GetAgentsConfigFile(), this);
-    DiagnosticLogger::log("Connections", QStringLiteral("profiles loaded count=%1")
-                          .arg(profileService->profiles().size()));
     communityCredentialService = new CommunityCredentialService(
-        GetCommunityCredentialsConfigFile(), GetCredentialBindingsConfigFile(), this);
-    profileMetadataService = new ProfileMetadataService(
-        GetProfileMetadataConfigFile(), this);
-    DiagnosticLogger::log("Connections", QStringLiteral("profile metadata loaded count=%1")
-                          .arg(profileMetadataService->allMetadata().size()));
-    apm = new AgentProfileManager(this, profileService, profileMetadataService);
+        GetCommunityCredentialsConfigFile(), this);
     QElapsedTimer phaseTimer; phaseTimer.start(); prefs->Init();
     DiagnosticLogger::log("Startup", QStringLiteral("settings UI load complete elapsed_ms=%1").arg(phaseTimer.elapsed()));
     trap = new Trap(this);
     agent->Init();
     upm = new USMProfileManager(this);
-    connect(upm, &USMProfileManager::CredentialsChanged,
-            apm, &AgentProfileManager::RefreshCredentialChoices);
     editor = new MibEditor(this);
     MibLibraryWidget::Callbacks mibLibraryCallbacks;
     mibLibraryCallbacks.validate = [this](const QString &path, QString *error) {
@@ -650,28 +629,6 @@ void Snmpb::BindToGUI(QMainWindow* mw)
         QHeaderView::section { padding: 4px 6px; font-weight: 600; }
         QTreeView::item, QTableView::item, QListView::item { min-height: 20px; }
     )"));
-    connect(apm, &AgentProfileManager::NewProfileCompleted, this,
-            [this](const QString &profileId) {
-        const AgentProfileRecord *profile = profileService->findById(profileId);
-        if (!profile) return;
-        ProfileMetadataRecord metadata =
-            profileMetadataService->metadataForProfile(profileId);
-        metadata.hasActiveProtocol = true;
-        metadata.activeProtocol = profile->v1 ? 0 : (profile->v2 ? 1 : 2);
-        metadata.hasRequestSettingsMode = true;
-        metadata.requestSettingsMode = 1;
-        profileMetadataService->update(metadata);
-    });
-    connect(profileService, &AgentProfileService::profileDuplicated,
-            profileMetadataService, &ProfileMetadataService::copy);
-    connect(profileService, &AgentProfileService::profileDuplicated,
-            communityCredentialService, &CommunityCredentialService::copyBinding);
-    connect(profileService, &AgentProfileService::profileDeleted,
-            profileMetadataService, &ProfileMetadataService::remove);
-    connect(profileService, &AgentProfileService::profileDeleted,
-            communityCredentialService,
-            &CommunityCredentialService::removeProfileBinding);
-
     // Rehost the established feature widgets in a workbench shell. This only
     // changes presentation ownership: request, Profile, Environment, parser,
     // trap, editor, and graph services continue to own their existing state.
@@ -976,15 +933,12 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     // Connect some signals
     connect( w.TabW, SIGNAL( currentChanged(int) ),
              this, SLOT( TabSelected() ) );
-    connect( w.actionManageAgentProfiles, SIGNAL( triggered(bool) ),
-             this, SLOT( ManageAgentProfiles(bool) ) );
     connect( w.actionManageUSMProfiles, SIGNAL( triggered(bool) ),
              this, SLOT( ManageUSMProfiles(bool) ) );
     QAction *manageCommunities = w.optionsMenu->addAction(
         tr("Manage SNMPv1/v2c Community Credentials..."));
     connect(manageCommunities, &QAction::triggered, mw, [this, mw]() {
-        CommunityCredentialManager manager(communityCredentialService,
-                                           profileService, mw);
+        CommunityCredentialManager manager(communityCredentialService, mw);
         manager.execute();
     });
     if (auto *bar = mw->findChild<ConnectionBar *>(QStringLiteral("ConnectionBar"))) {
@@ -1144,11 +1098,6 @@ MibEditor* Snmpb::MibEditorObj(void)
     return (editor);
 }
 
-AgentProfileManager* Snmpb::APManagerObj(void)
-{
-    return (apm);
-}
-
 void Snmpb::ShowEditorDocument()
 {
     if (workbench) {
@@ -1165,16 +1114,6 @@ void Snmpb::Shutdown()
     DiagnosticLogger::log("Shutdown", "trap listener shutdown begin", false);
     if (agent) agent->Shutdown();
     DiagnosticLogger::log("Shutdown", "trap listener shutdown end", false);
-}
-
-AgentProfileService* Snmpb::AgentProfiles(void)
-{
-    return profileService;
-}
-
-ProfileMetadataService* Snmpb::ProfileMetadata(void)
-{
-    return profileMetadataService;
 }
 
 USMProfileManager* Snmpb::UPManagerObj(void)
@@ -1232,23 +1171,11 @@ QString Snmpb::GetUsmUsersConfigFile(void)
     return cfgdir.filePath(USM_USERS_CONFIG_FILE);
 }
 
-QString Snmpb::GetAgentsConfigFile(void)
-{
-    QSettings settings;
-    QDir cfgdir = QFileInfo(settings.fileName()).dir();
-    return cfgdir.filePath(AGENTS_CONFIG_FILE);
-}
-
 QString Snmpb::GetLogConfigFile(void)
 {
     QSettings settings;
     QDir cfgdir = QFileInfo(settings.fileName()).dir();
     return cfgdir.filePath(LOG_CONFIG_FILE);
-}
-
-void Snmpb::ManageAgentProfiles(bool)
-{
-    apm->Execute();
 }
 
 void Snmpb::ManageUSMProfiles(bool)
@@ -1335,13 +1262,6 @@ void Snmpb::AboutBox(bool)
                                                   dependencies));
 }
 
-QString Snmpb::GetProfileMetadataConfigFile(void)
-{
-    QSettings settings;
-    QDir cfgdir = QFileInfo(settings.fileName()).dir();
-    return cfgdir.filePath(PROFILE_METADATA_CONFIG_FILE);
-}
-
 QString Snmpb::GetCredentialIdentitiesConfigFile(void)
 {
     QSettings settings;
@@ -1354,12 +1274,5 @@ QString Snmpb::GetCommunityCredentialsConfigFile(void)
     QSettings settings;
     QDir cfgdir = QFileInfo(settings.fileName()).dir();
     return cfgdir.filePath(COMMUNITY_CREDENTIALS_CONFIG_FILE);
-}
-
-QString Snmpb::GetCredentialBindingsConfigFile(void)
-{
-    QSettings settings;
-    QDir cfgdir = QFileInfo(settings.fileName()).dir();
-    return cfgdir.filePath(CREDENTIAL_BINDINGS_CONFIG_FILE);
 }
 

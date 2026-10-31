@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <QColor>
 #include <QDate>
+#include <QLineEdit>
 #include <QDialog>
 #include <QEventLoop>
 #include <QSettings>
@@ -35,10 +36,8 @@
 #include "agent.h"
 #include "communitycredentialservice.h"
 #include "connectionbar.h"
-#include "connectionrequestsettings.h"
 #include "diagnosticlogger.h"
 #include "udpportowner.h"
-#include "profilemetadataservice.h"
 #include "preferencesettings.h"
 #include "mibmodule.h"
 #include "snmp_pp/notifyqueue.h"
@@ -369,10 +368,6 @@ void Agent::Init(void)
             s->MainUI()->QueryTable, &QPushButton::setEnabled);
     connect( s->MainUI()->MIBTree, SIGNAL( VarbindsFromOid(const QString&) ),
              this, SLOT( VarbindsFrom(const QString&) ) );
-    connect( s->MainUI()->AgentSettings, 
-             SIGNAL( clicked() ), this, SLOT( ShowAgentSettings() ));
-    connect( s->APManagerObj(), SIGNAL( AgentProfileListChanged() ), 
-             this, SLOT ( AgentProfileListChange() ) );
     connect( this, SIGNAL( StartWalk(bool) ), 
              s->MainUI()->MIBTree, SLOT ( SetWalkInProgress(bool) ) );
     connect( s->MainUI()->actionStop, SIGNAL( triggered() ),
@@ -380,26 +375,9 @@ void Agent::Init(void)
     connect( s->MainUI()->actionMultipleVarbinds, SIGNAL( triggered() ),
              this, SLOT( Varbinds() ) );
 
-    // Select the default profile from preferences
-    QString cp;
-    QString cpid = s->PreferencesObj()->GetCurrentProfileId();
-    int prefproto = s->PreferencesObj()->GetCurrentProfile(cp);
-    // Fill-in the list of agent profiles from profiles manager
-    AgentProfileListChange();
-    SelectAgentProfile(&cp, prefproto, &cpid);
-    s->MainUI()->MIBTree->SetCurrentAgentIsV1(
-        s->MainUI()->AgentProtoV1->isChecked()?true:false);
+    // The connection bar (Target, Credential, MIB Profile) supplies the request settings;
+    // it announces itself through SetConnectionBar().
     UpdateTableQueryAvailability();
-
-    // then connect the signals (order is important)
-    connect( s->MainUI()->AgentProfile, SIGNAL( currentIndexChanged( int ) ), 
-             this, SLOT ( SelectAgentProfile() ) );
-    connect( s->MainUI()->AgentProtoV1, SIGNAL( toggled(bool) ),
-             this, SLOT( SelectAgentProto() ) );
-    connect( s->MainUI()->AgentProtoV2, SIGNAL( toggled(bool) ),
-             this, SLOT( SelectAgentProto() ) );
-    connect( s->MainUI()->AgentProtoV3, SIGNAL( toggled(bool) ),
-             this, SLOT( SelectAgentProto() ) );
 
     vbui = new Ui_Varbinds();
     vbd = new QDialog(s->MainUI()->MIBTree); 
@@ -467,137 +445,6 @@ void Agent::Init(void)
     usm->load_users(s->GetUsmUsersConfigFile().toLatin1().data());
 }
 
-void Agent::ShowAgentSettings(void)
-{
-     s->APManagerObj()->SetSelectedAgentById(
-         s->MainUI()->AgentProfile->currentData().toString());
-     s->APManagerObj()->Execute();
-}
-
-void Agent::AgentProfileListChange(void)
-{
-    int prefproto = -1;
-    if (s->MainUI()->AgentProtoV1->isChecked()) prefproto = 0;
-    else if (s->MainUI()->AgentProtoV2->isChecked()) prefproto = 1;
-    else if (s->MainUI()->AgentProtoV3->isChecked()) prefproto = 2;
-
-    QString cap = s->MainUI()->AgentProfile->currentData().toString();
-    s->MainUI()->AgentProfile->clear();
-    const QList<AgentProfileRecord> profiles =
-        s->APManagerObj()->GetAgentProfileRecords();
-    for (const AgentProfileRecord &profile : profiles)
-        s->MainUI()->AgentProfile->addItem(profile.name, profile.profileId);
-    if (cap.isEmpty() == false)
-    {
-        int idx = s->MainUI()->AgentProfile->findData(cap);
-        s->MainUI()->AgentProfile->setCurrentIndex(idx>=0?idx:0);
-        if (idx < 0) prefproto = -1;
-    }
-    else
-        prefproto = -1;
-
-    SelectAgentProfile(NULL, prefproto);
-}
-
-void Agent::SelectAgentProto(void)
-{
-    int prefproto = -1;
-    if (s->MainUI()->AgentProtoV1->isChecked()) prefproto = 0;
-    else if (s->MainUI()->AgentProtoV2->isChecked()) prefproto = 1;
-    else if (s->MainUI()->AgentProtoV3->isChecked()) prefproto = 2;
-
-    s->MainUI()->MIBTree->SetCurrentAgentIsV1(prefproto==0?true:false);
-
-    SelectAgentProfile(NULL, prefproto);
-}
-
-void Agent::SelectAgentProfile(QString *prefprofile, int prefproto,
-                               QString *prefprofileid)
-{
-    const AgentProfileRecord *ap = NULL;
-    if (prefprofileid && !prefprofileid->isEmpty())
-        ap = s->APManagerObj()->GetAgentProfileRecord(*prefprofileid);
-    if (!ap && prefprofile)
-    {
-        const QString migratedId = AgentSelectionResolver::UniqueProfileIdForName(
-            s->APManagerObj()->GetAgentProfileRecords(), *prefprofile);
-        if (!migratedId.isEmpty())
-            ap = s->APManagerObj()->GetAgentProfileRecord(migratedId);
-    }
-    if (!ap)
-        ap = s->APManagerObj()->GetAgentProfileRecord(
-            s->MainUI()->AgentProfile->currentData().toString());
-    if (ap)
-    {
-        bool v1,v2,v3;
-        int selectedproto = -1;
-        v1 = ap->v1; v2 = ap->v2; v3 = ap->v3;
-
-        s->MainUI()->AgentProtoV1->setEnabled(v1);
-        s->MainUI()->AgentProtoV2->setEnabled(v2);
-        s->MainUI()->AgentProtoV3->setEnabled(v3);
-
-        if ((prefproto == 0) && v1)
-        {
-            s->MainUI()->AgentProtoV1->setChecked(true);
-            selectedproto = 0;
-        }
-        else 
-        if ((prefproto == 1) && v2)
-        {
-            s->MainUI()->AgentProtoV2->setChecked(true);
-            selectedproto = 1;
-        }
-        else
-        if ((prefproto == 2) && v3)
-        {
-            s->MainUI()->AgentProtoV3->setChecked(true);
-            selectedproto = 2;
-        }
-        else
-        if (v1)
-        {
-            s->MainUI()->AgentProtoV1->setChecked(true);
-            selectedproto = 0;
-        }
-        else
-        if (v2)
-        {
-            s->MainUI()->AgentProtoV2->setChecked(true);
-            selectedproto = 1;
-        }
-        else
-        if (v3)
-        {
-            s->MainUI()->AgentProtoV3->setChecked(true);
-            selectedproto = 2;
-        }
-
-        if (prefprofile || (prefprofileid && !prefprofileid->isEmpty()))
-        {
-            int index = s->MainUI()->AgentProfile->findData(
-                ap->profileId);
-            if (index >= 0)
-                s->MainUI()->AgentProfile->setCurrentIndex(index);
-            s->PreferencesObj()->SaveCurrentProfile(
-                ap->name, ap->profileId, selectedproto);
-        }
-        else
-        {
-            // The agent is selected by the user, save it in the preference file
-            s->PreferencesObj()->SaveCurrentProfile(
-                ap->name, ap->profileId, selectedproto);
-        }
-    }
-    else
-    {
-        s->MainUI()->AgentProtoV1->setEnabled(false);
-        s->MainUI()->AgentProtoV2->setEnabled(false);
-        s->MainUI()->AgentProtoV3->setEnabled(false);
-    }
-    UpdateTableQueryAvailability();
-}
-
 void Agent::UpdateTableQueryAvailability()
 {
     AgentRequestSelection selection;
@@ -644,31 +491,9 @@ AgentSelectionError Agent::ResolveCurrentSelection(
         return lastConnectionError == ConnectionError::None
             ? AgentSelectionError::None : AgentSelectionError::ProfileNotFound;
     }
-    int selectedProtocol = 0;
-    if (s->MainUI()->AgentProtoV3->isChecked())
-        selectedProtocol = 2;
-    else if (s->MainUI()->AgentProtoV2->isChecked())
-        selectedProtocol = 1;
-
-    const AgentSelectionError error = AgentSelectionResolver::ResolveById(
-        s->APManagerObj()->GetAgentProfileRecords(),
-        s->MainUI()->AgentProfile->currentData().toString(),
-        selectedProtocol, selection);
-    if (error == AgentSelectionError::None && selection && selectedProtocol < 2)
-    {
-        selection->credentials = s->CommunityCredentials()->resolve(
-            selection->profile).values;
-        selection->hasResolvedCredentials = true;
-    }
-    if (error == AgentSelectionError::None && selection)
-    {
-        QSettings settings;
-        selection->profile = ConnectionRequestSettings::effectiveProfile(
-            selection->profile,
-            s->ProfileMetadata()->metadataForProfile(selection->profile.profileId),
-            PreferencesSettings::load(settings));
-    }
-    return error;
+    // No connection bar yet (start-up): nothing can be requested.
+    lastConnectionError = ConnectionError::NoTarget;
+    return AgentSelectionError::ProfileNotFound;
 }
 
 Agent::~Agent()
@@ -693,37 +518,6 @@ void Agent::Shutdown()
     if (tableRunner) tableRunner->cancel();
     if (instanceRunner) instanceRunner->cancel();
     DiagnosticLogger::log("Traps", "Agent cooperative shutdown end", false);
-}
-
-void Agent::SelectProfileByName(const QString &profileName)
-{
-    const int index = s->MainUI()->AgentProfile->findText(profileName);
-    if (index >= 0)
-        s->MainUI()->AgentProfile->setCurrentIndex(index);
-}
-
-void Agent::SelectProfileById(const QString &profileId)
-{
-    DiagnosticLogger::log("Connections", QStringLiteral(
-        "hidden legacy control synchronization begin profile=%1").arg(profileId));
-    const int index = s->MainUI()->AgentProfile->findData(profileId);
-    if (index < 0) return;
-    int legacyProtocol = s->MainUI()->AgentProtoV3->isChecked() ? 2
-        : (s->MainUI()->AgentProtoV2->isChecked() ? 1 : 0);
-    const AgentProfileRecord *profile =
-        s->APManagerObj()->GetAgentProfileRecord(profileId);
-    if (!profile) return;
-    const int protocol = ConnectionRequestSettings::activeProtocol(
-        *profile, s->ProfileMetadata()->metadataForProfile(profileId),
-        legacyProtocol);
-    {
-        const QSignalBlocker blocker(s->MainUI()->AgentProfile);
-        s->MainUI()->AgentProfile->setCurrentIndex(index);
-    }
-    SelectAgentProfile(nullptr, protocol);
-    DiagnosticLogger::log("Connections", QStringLiteral(
-        "hidden legacy control synchronization end profile=%1 protocol=%2")
-        .arg(profileId).arg(protocol));
 }
 
 int Agent::SetupFromCurrentSelection(const QString& oid, SnmpTarget **t,
@@ -1735,7 +1529,7 @@ QString Agent::GetValueString(MibSelection &ms, Vb* vb)
 
 void Agent::Varbinds(void)
 {
-    vbui->GetBulkOp->setEnabled(s->MainUI()->AgentProtoV1->isChecked()!=true);
+    vbui->GetBulkOp->setEnabled(!(connectionBar && connectionBar->credentialProtocol() == 0));
     vbd->exec(); 
 }
 
@@ -1766,7 +1560,7 @@ void Agent::VarbindsFrom(const QString& oid)
         vbui->VarbindsList->setCurrentItem(qtwi); 
 
         vbui->SNMPOps->setEnabled(true);
-        vbui->GetBulkOp->setEnabled(s->MainUI()->AgentProtoV1->isChecked()!=true);
+        vbui->GetBulkOp->setEnabled(!(connectionBar && connectionBar->credentialProtocol() == 0));
     }
 
     vbd->exec(); 
@@ -1797,7 +1591,7 @@ void Agent::VarbindsNew(void)
             vbui->VarbindsList->addTopLevelItem(qtwi);
 
             vbui->SNMPOps->setEnabled(true);
-            vbui->GetBulkOp->setEnabled(s->MainUI()->AgentProtoV1->isChecked()!=true);
+            vbui->GetBulkOp->setEnabled(!(connectionBar && connectionBar->credentialProtocol() == 0));
         }
     }
 }

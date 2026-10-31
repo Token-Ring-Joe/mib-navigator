@@ -120,99 +120,6 @@
               <number>0</number>
              </property>
              <item>
-              <widget class="QGroupBox" name="AgentProperties">
-               <property name="title">
-                <string>Remote SNMP Agent</string>
-               </property>
-               <layout class="QGridLayout">
-                <property name="leftMargin">
-                 <number>1</number>
-                </property>
-                <property name="topMargin">
-                 <number>1</number>
-                </property>
-                <property name="rightMargin">
-                 <number>1</number>
-                </property>
-                <property name="bottomMargin">
-                 <number>1</number>
-                </property>
-                <property name="spacing">
-                 <number>3</number>
-                </property>
-                <item row="0" column="4">
-                 <widget class="QRadioButton" name="AgentProtoV3">
-                  <property name="sizePolicy">
-                   <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
-                    <horstretch>0</horstretch>
-                    <verstretch>0</verstretch>
-                   </sizepolicy>
-                  </property>
-                  <property name="text">
-                   <string notr="true">SNMPv3</string>
-                  </property>
-                 </widget>
-                </item>
-                <item row="0" column="3">
-                 <widget class="QRadioButton" name="AgentProtoV2">
-                  <property name="sizePolicy">
-                   <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
-                    <horstretch>0</horstretch>
-                    <verstretch>0</verstretch>
-                   </sizepolicy>
-                  </property>
-                  <property name="text">
-                   <string notr="true">SNMPv2c</string>
-                  </property>
-                 </widget>
-                </item>
-                <item row="0" column="0">
-                 <widget class="QComboBox" name="AgentProfile">
-                  <property name="sizePolicy">
-                   <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
-                    <horstretch>0</horstretch>
-                    <verstretch>0</verstretch>
-                   </sizepolicy>
-                  </property>
-                 </widget>
-                </item>
-                <item row="0" column="1">
-                 <widget class="QPushButton" name="AgentSettings">
-                  <property name="sizePolicy">
-                   <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
-                    <horstretch>0</horstretch>
-                    <verstretch>0</verstretch>
-                   </sizepolicy>
-                  </property>
-                  <property name="text">
-                   <string/>
-                  </property>
-                  <property name="icon">
-                   <iconset resource="snmpb.qrc">
-                    <normaloff>:/icon/cog</normaloff>:/icon/cog</iconset>
-                  </property>
-                 </widget>
-                </item>
-                <item row="0" column="2">
-                 <widget class="QRadioButton" name="AgentProtoV1">
-                  <property name="sizePolicy">
-                   <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
-                    <horstretch>0</horstretch>
-                    <verstretch>0</verstretch>
-                   </sizepolicy>
-                  </property>
-                  <property name="text">
-                   <string notr="true">SNMPv1</string>
-                  </property>
-                  <property name="autoRepeat">
-                   <bool>false</bool>
-                  </property>
-                 </widget>
-                </item>
-               </layout>
-              </widget>
-             </item>
-             <item>
               <widget class="QLabel" name="MIBTreeL">
                <property name="text">
                 <string>OID tree</string>
@@ -1315,7 +1222,6 @@
     <property name="title">
      <string>&amp;Options</string>
     </property>
-    <addaction name="actionManageAgentProfiles"/>
     <addaction name="actionManageUSMProfiles"/>
     <addaction name="separator"/>
     <addaction name="actionPreferences"/>
@@ -1460,11 +1366,6 @@
     <string>&amp;Extract MIB from RFC...</string>
    </property>
   </action>
-  <action name="actionManageAgentProfiles">
-   <property name="text">
-    <string>&amp;Manage Agent Profiles...</string>
-   </property>
-  </action>
   <action name="actionManageUSMProfiles">
    <property name="text">
     <string extracomment="&quot;USM Profiles&quot; are just accounts, username-password pairs">Manage SNMPv3 USM Profiles...</string>
@@ -1569,11 +1470,6 @@
  </customwidgets>
  <tabstops>
   <tabstop>TabW</tabstop>
-  <tabstop>AgentProfile</tabstop>
-  <tabstop>AgentSettings</tabstop>
-  <tabstop>AgentProtoV1</tabstop>
-  <tabstop>AgentProtoV2</tabstop>
-  <tabstop>AgentProtoV3</tabstop>
   <tabstop>MIBTree</tabstop>
   <tabstop>NodeInfo</tabstop>
   <tabstop>Query</tabstop>

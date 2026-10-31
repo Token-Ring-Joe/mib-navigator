@@ -33,7 +33,6 @@
 #include <QTabBar>
 #include <QTabWidget>
 #include "snmpb.h"
-#include "agentprofile.h"
 #include "mibeditor.h"
 #include "mibview.h"
 #include "mibmodule.h"
@@ -325,21 +324,6 @@ int main( int argc, char ** argv )
                       documentTabs && documentTabs->count() == 1,
                       "MIB editor opens as a contextual document");
             }
-
-            const QString smoke_profile = "ctest-local-profile";
-            snmpb.APManagerObj()->Add(smoke_profile, "127.0.0.1", "161",
-                                     true, false, false, "localhost");
-            check(snmpb.APManagerObj()->GetAgentProfileRecordByName(smoke_profile) != nullptr,
-                  "Agent Profile load/save works");
-
-            QTimer dialog_closer;
-            QObject::connect(&dialog_closer, &QTimer::timeout,
-                             close_visible_dialogs);
-            dialog_closer.start(10);
-            snmpb.ManageAgentProfiles(false);
-            dialog_closer.stop();
-            check(QFileInfo::exists(snmpb.GetAgentsConfigFile()),
-                  "Agent Profile Manager opened and persisted configuration");
 
             snmpb.PreferencesObj()->Save();
             settings.sync();

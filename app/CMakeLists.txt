@@ -3,16 +3,10 @@ set(SNMPB_APP_SOURCES
     agentrequestselection.cpp
     connectionbar.cpp
     connectionmodel.cpp
-    agentprofile.cpp
-    agentprofileoperations.cpp
-    agentprofilerepository.cpp
-    agentprofileservice.cpp
     comboboxes.cpp
-    communitybindingrepository.cpp
     communitycredentialrepository.cpp
     communitycredentialservice.cpp
     communitycredentialmanager.cpp
-    connectionrequestsettings.cpp
     credentialrecords.cpp
     diagnosticlogger.cpp
     mainwindowlayout.cpp
@@ -55,8 +49,6 @@ set(SNMPB_APP_SOURCES
     mibview.cpp
     preferences.cpp
     preferencesettings.cpp
-    profilemetadatarepository.cpp
-    profilemetadataservice.cpp
     snmprequestconfig.cpp
     snmprequestconfigadapter.cpp
     snmprequestcontext.cpp
@@ -87,16 +79,11 @@ set(SNMPB_APP_HEADERS
     agentrequestselection.h
     connectionbar.h
     connectionmodel.h
-    agentprofile.h
-    agentprofileoperations.h
     agentprofilerepository.h
-    agentprofileservice.h
     comboboxes.h
-    communitybindingrepository.h
     communitycredentialrepository.h
     communitycredentialservice.h
     communitycredentialmanager.h
-    connectionrequestsettings.h
     credentialrecords.h
     diagnosticlogger.h
     mainwindowlayout.h
@@ -140,8 +127,6 @@ set(SNMPB_APP_HEADERS
     mibview.h
     preferences.h
     preferencesettings.h
-    profilemetadatarepository.h
-    profilemetadataservice.h
     snmprequestconfig.h
     snmprequestconfigadapter.h
     snmprequestcontext.h
@@ -169,7 +154,6 @@ set(SNMPB_APP_HEADERS
 )
 
 set(SNMPB_APP_FORMS
-    agentprofile.ui
     find.ui
     gotoline.ui
     mainw.ui
@@ -426,21 +410,6 @@ if(BUILD_TESTING)
             $<TARGET_FILE:snmpb_stability_diagnostics_test>)
     endif()
 
-    add_executable(snmpb_connection_request_settings_test
-        agentprofilerepository.cpp agentprofilerepository.h
-        preferencesettings.cpp preferencesettings.h
-        connectionrequestsettings.cpp connectionrequestsettings.h
-        connectionrequestsettings_test.cpp)
-    target_link_libraries(snmpb_connection_request_settings_test PRIVATE Qt6::Core)
-    if(WIN32)
-        add_test(NAME snmpb.connection-request-settings COMMAND ${CMAKE_COMMAND} -E env
-            "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
-            $<TARGET_FILE:snmpb_connection_request_settings_test>)
-    else()
-        add_test(NAME snmpb.connection-request-settings COMMAND
-            $<TARGET_FILE:snmpb_connection_request_settings_test>)
-    endif()
-
     add_executable(snmpb_product_identity_test
         productidentity.cpp productidentity.h productidentity_test.cpp)
     target_include_directories(snmpb_product_identity_test PRIVATE
@@ -653,7 +622,6 @@ if(BUILD_TESTING)
     endif()
 
     add_executable(snmpb_community_credential_test
-        communitybindingrepository.cpp communitybindingrepository.h
         communitycredentialrepository.cpp communitycredentialrepository.h
         communitycredentialservice.cpp communitycredentialservice.h
         credentialrecords.cpp credentialrecords.h
@@ -672,9 +640,7 @@ if(BUILD_TESTING)
     endif()
 
     add_executable(snmpb_credential_architecture_test
-        agentprofileoperations.cpp agentprofileoperations.h
-        agentprofilerepository.cpp agentprofilerepository.h
-        agentprofileservice.cpp agentprofileservice.h
+         agentprofilerepository.h
         credentialrecords.cpp credentialrecords.h
         snmprequestconfig.cpp snmprequestconfig.h
         usmcredentialrepository.cpp usmcredentialrepository.h
@@ -694,14 +660,12 @@ if(BUILD_TESTING)
 
     add_executable(snmpb_connection_model_test
         agentrequestselection.cpp agentrequestselection.h
-        agentprofilerepository.cpp agentprofilerepository.h
-        communitybindingrepository.cpp communitybindingrepository.h
+         agentprofilerepository.h
         communitycredentialrepository.cpp communitycredentialrepository.h
         communitycredentialservice.cpp communitycredentialservice.h
         connectionmodel.cpp connectionmodel.h
         credentialrecords.cpp credentialrecords.h
         preferencesettings.cpp preferencesettings.h
-        profilemetadatarepository.cpp profilemetadatarepository.h
         snmprequestconfig.cpp snmprequestconfig.h
         usmcredentialrepository.cpp usmcredentialrepository.h
         usmcredentialservice.cpp usmcredentialservice.h
@@ -715,71 +679,6 @@ if(BUILD_TESTING)
     else()
         add_test(NAME snmpb.connection-model COMMAND
             $<TARGET_FILE:snmpb_connection_model_test>)
-    endif()
-
-    add_executable(snmpb_preferred_mib_test
-        preferredmibresolver.cpp preferredmibresolver.h
-        profilemetadatarepository.cpp profilemetadatarepository.h
-        preferredmibresolver_test.cpp)
-    target_link_libraries(snmpb_preferred_mib_test PRIVATE Qt6::Core)
-    if(WIN32)
-        add_test(NAME snmpb.preferred-mib COMMAND ${CMAKE_COMMAND} -E env
-            "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
-            $<TARGET_FILE:snmpb_preferred_mib_test>)
-    else()
-        add_test(NAME snmpb.preferred-mib COMMAND $<TARGET_FILE:snmpb_preferred_mib_test>)
-    endif()
-
-    add_executable(snmpb_profile_metadata_test
-        profilemetadatarepository.cpp profilemetadatarepository.h
-        profilemetadataservice.cpp profilemetadataservice.h
-        profilemetadata_test.cpp)
-    set_target_properties(snmpb_profile_metadata_test PROPERTIES AUTOMOC ON)
-    target_link_libraries(snmpb_profile_metadata_test PRIVATE Qt6::Core)
-    if(WIN32)
-        add_test(NAME snmpb.profile-metadata COMMAND ${CMAKE_COMMAND} -E env
-            "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
-            $<TARGET_FILE:snmpb_profile_metadata_test>)
-    else()
-        add_test(NAME snmpb.profile-metadata COMMAND
-            $<TARGET_FILE:snmpb_profile_metadata_test>)
-    endif()
-
-    add_executable(snmpb_agentprofile_service_test
-        agentprofileoperations.cpp
-        agentprofileoperations.h
-        agentprofilerepository.cpp
-        agentprofilerepository.h
-        agentprofileservice.cpp
-        agentprofileservice.h
-        agentprofileservice_test.cpp
-    )
-    set_target_properties(snmpb_agentprofile_service_test PROPERTIES AUTOMOC ON)
-    target_link_libraries(snmpb_agentprofile_service_test PRIVATE Qt6::Core)
-    if(WIN32)
-        add_test(NAME snmpb.agentprofile-service COMMAND ${CMAKE_COMMAND} -E env
-            "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
-            $<TARGET_FILE:snmpb_agentprofile_service_test>)
-    else()
-        add_test(NAME snmpb.agentprofile-service COMMAND
-            $<TARGET_FILE:snmpb_agentprofile_service_test>)
-    endif()
-
-    add_executable(snmpb_agentprofile_operations_test
-        agentprofileoperations.cpp
-        agentprofileoperations.h
-        agentprofilerepository.cpp
-        agentprofilerepository.h
-        agentprofileoperations_test.cpp
-    )
-    target_link_libraries(snmpb_agentprofile_operations_test PRIVATE Qt6::Core)
-    if(WIN32)
-        add_test(NAME snmpb.agentprofile-operations COMMAND ${CMAKE_COMMAND} -E env
-            "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
-            $<TARGET_FILE:snmpb_agentprofile_operations_test>)
-    else()
-        add_test(NAME snmpb.agentprofile-operations COMMAND
-            $<TARGET_FILE:snmpb_agentprofile_operations_test>)
     endif()
 
     add_executable(snmpb_workbench_shell_test
@@ -924,27 +823,6 @@ if(BUILD_TESTING)
     else()
         add_test(NAME snmpb.preferences-settings
             COMMAND $<TARGET_FILE:snmpb_preferences_settings_test>)
-    endif()
-
-    add_executable(snmpb_agentprofile_repository_test
-        agentprofilerepository.cpp
-        agentprofilerepository.h
-        agentprofilerepository_test.cpp
-    )
-    target_link_libraries(snmpb_agentprofile_repository_test PRIVATE Qt6::Core)
-
-    if(WIN32)
-        add_test(
-            NAME snmpb.agentprofile-repository
-            COMMAND ${CMAKE_COMMAND} -E env
-                "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
-                $<TARGET_FILE:snmpb_agentprofile_repository_test>
-        )
-    else()
-        add_test(
-            NAME snmpb.agentprofile-repository
-            COMMAND $<TARGET_FILE:snmpb_agentprofile_repository_test>
-        )
     endif()
 
     add_test(

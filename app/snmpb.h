@@ -29,9 +29,6 @@ class Trap;
 class Agent;
 class MibEditor;
 class LogSnmpb;
-class AgentProfileManager;
-class AgentProfileService;
-class ProfileMetadataService;
 class USMProfileManager;
 class UsmCredentialService;
 class CommunityCredentialService;
@@ -57,9 +54,6 @@ public:
     MibModule* MibModuleObj(void);
     MibEditor* MibEditorObj(void);
     MibLibraryWidget* MibLibraryObj(void) { return mibLibrary; }
-    AgentProfileManager* APManagerObj(void);
-    AgentProfileService* AgentProfiles(void);
-    ProfileMetadataService* ProfileMetadata(void);
     USMProfileManager* UPManagerObj(void);
     UsmCredentialService* UsmCredentials(void);
     CommunityCredentialService* CommunityCredentials(void);
@@ -72,16 +66,12 @@ public:
     QString GetBootCounterConfigFile(void);
     QString GetSmiConfigFile(void);
     QString GetUsmUsersConfigFile(void);
-    QString GetAgentsConfigFile(void);
     QString GetLogConfigFile(void);
-    QString GetProfileMetadataConfigFile(void);
     QString GetCredentialIdentitiesConfigFile(void);
     QString GetCommunityCredentialsConfigFile(void);
-    QString GetCredentialBindingsConfigFile(void);
 
 public slots:
     void TabSelected(void);
-    void ManageAgentProfiles(bool);
     void ManageUSMProfiles(bool);
     void ManagePreferences(bool);
     void AboutBox(bool);
@@ -91,9 +81,6 @@ private:
 
 private:
     Ui_MainW w;
-    AgentProfileManager *apm;
-    AgentProfileService *profileService;
-    ProfileMetadataService *profileMetadataService;
     USMProfileManager *upm;
     CommunityCredentialService *communityCredentialService;
     Preferences *prefs;

@@ -103,41 +103,6 @@ void UsmCredentialService::applyCommitted(
     emit credentialsChanged();
 }
 
-UsmDeleteAssessment UsmCredentialService::assessDelete(
-    const QString &id, const QList<AgentProfileRecord> &profiles,
-    int *referenceCount) const
-{
-    return assessDelete(id, profiles, {}, referenceCount);
-}
-
-UsmDeleteAssessment UsmCredentialService::assessDelete(
-    const QString &id, const QList<AgentProfileRecord> &profiles,
-    const QList<ProfileMetadataRecord> &metadata, int *referenceCount) const
-{
-    const int index = indexOfId(id);
-    if (referenceCount) *referenceCount = 0;
-    if (index < 0) return UsmDeleteAssessment::NotFound;
-    const QString name = credentials[index].securityName;
-    int sameName = 0, references = 0;
-    for (const auto &record : credentials)
-        if (record.securityName == name) ++sameName;
-    QHash<QString, ProfileMetadataRecord> metadataByProfile;
-    for (const auto &record : metadata)
-        metadataByProfile.insert(record.profileId, record);
-    for (const auto &profile : profiles) {
-        const ProfileMetadataRecord record = metadataByProfile.value(profile.profileId);
-        if (!record.usmCredentialId.isEmpty()) {
-            if (record.usmCredentialId == id) ++references;
-        } else if (profile.v3 && profile.secname == name) {
-            ++references;
-        }
-    }
-    if (referenceCount) *referenceCount = references;
-    if (references == 0) return UsmDeleteAssessment::Unreferenced;
-    return sameName == 1 ? UsmDeleteAssessment::Referenced
-                         : UsmDeleteAssessment::Ambiguous;
-}
-
 bool UsmCredentialService::isSecurityNameUnambiguous(
     const QString &securityName) const
 {
@@ -175,43 +140,6 @@ bool UsmCredentialService::remove(const QString &id)
     if (index < 0) return false;
     credentials.removeAt(index);
     return true;
-}
-
-UsmReferenceResult UsmCredentialService::validate(
-    const AgentProfileRecord &profile) const
-{
-    if (!profile.v3) return {UsmReferenceStatus::NotApplicable, {}};
-    if (profile.secname.isEmpty()) return {UsmReferenceStatus::Empty, {}};
-    QList<const UsmCredentialRecord *> matches;
-    for (const auto &record : credentials)
-        if (record.securityName == profile.secname) matches.append(&record);
-    if (matches.isEmpty()) return {UsmReferenceStatus::Missing, {}};
-    if (matches.size() != 1) return {UsmReferenceStatus::Ambiguous, {}};
-    const UsmCredentialRecord &record = *matches.first();
-    const bool authRequired = profile.seclevel >= 1;
-    const bool privacyRequired = profile.seclevel >= 2;
-    if ((authRequired && record.authProtocol == 0) ||
-        (privacyRequired && record.privacyProtocol == 0))
-        return {UsmReferenceStatus::IncompatibleSecurityLevel,
-                record.identity.credentialId};
-    return {UsmReferenceStatus::Valid, record.identity.credentialId};
-}
-
-UsmReferenceResult UsmCredentialService::validate(
-    const AgentProfileRecord &profile, const ProfileMetadataRecord &metadata) const
-{
-    if (metadata.usmCredentialId.isEmpty())
-        return validate(profile);
-    const UsmCredentialRecord *record = find(metadata.usmCredentialId);
-    if (!record)
-        return {UsmReferenceStatus::Missing, metadata.usmCredentialId};
-    const bool authRequired = profile.seclevel >= 1;
-    const bool privacyRequired = profile.seclevel >= 2;
-    if ((authRequired && record->authProtocol == 0) ||
-        (privacyRequired && record->privacyProtocol == 0))
-        return {UsmReferenceStatus::IncompatibleSecurityLevel,
-                metadata.usmCredentialId};
-    return {UsmReferenceStatus::Valid, metadata.usmCredentialId};
 }
 
 const UsmCredentialRecord *UsmCredentialService::find(const QString &id) const

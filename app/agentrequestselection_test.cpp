@@ -8,119 +8,56 @@ int failures = 0;
 
 void check(bool condition, const char *description)
 {
-    if (!condition)
-    {
-        QTextStream(stderr) << "FAIL: " << description << Qt::endl;
-        ++failures;
-    }
+    if (!condition) { QTextStream(stderr) << "FAIL: " << description << Qt::endl; ++failures; }
 }
 
-AgentProfileRecord profile(const QString &name, const QString &address,
-                           bool v1, bool v2, bool v3)
+AgentProfileRecord record(const QString &address)
 {
-    AgentProfileRecord record{};
-    record.name = name;
-    record.profileId = name + "-id";
-    record.address = address;
-    record.port = "161";
-    record.v1 = v1;
-    record.v2 = v2;
-    record.v3 = v3;
-    record.retries = 2;
-    record.timeout = 5;
-    record.readcomm = "public";
-    record.writecomm = "private";
-    record.maxrepetitions = 10;
-    record.nonrepeaters = 0;
-    record.secname = "user";
-    record.seclevel = 1;
-    return record;
+    AgentProfileRecord r{};
+    r.name = address; r.profileId = "request";
+    r.address = address; r.port = "1161";
+    r.v1 = r.v2 = r.v3 = true;
+    r.retries = 2; r.timeout = 5;
+    r.readcomm = "inline-read"; r.writecomm = "inline-write";
+    r.maxrepetitions = 10; r.nonrepeaters = 0;
+    r.secname = "inline-user"; r.seclevel = 1;
+    return r;
 }
 }
 
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
-    const QList<AgentProfileRecord> profiles = {
-        profile("v1-only", "192.0.2.1", true, false, false),
-        profile("v2-only", "192.0.2.2", false, true, false),
-        profile("v3-ipv6", "2001:db8::3", false, false, true)
-    };
 
+    // A selection carries the request's target, protocol version and credentials; requestConfig()
+    // turns it into the settings the SNMP layer uses.
     AgentRequestSelection selection;
-    check(AgentSelectionResolver::Resolve(profiles, "v1-only", 0,
-                                          &selection) ==
-              AgentSelectionError::None,
-          "valid SNMPv1 selection resolves");
+    selection.profile = record("192.0.2.1");
     SnmpRequestConfig config;
-    check(selection.requestConfig(&config) &&
-          config.version == SnmpRequestVersion::V1 &&
-          selection.profile.name == "v1-only",
-          "SNMPv1 profile lookup and configuration are deterministic");
+    const SnmpRequestVersion expected[] = {SnmpRequestVersion::V1, SnmpRequestVersion::V2c, SnmpRequestVersion::V3};
+    for (int protocol = 0; protocol < 3; ++protocol) {
+        selection.selectedProtocol = protocol;
+        check(selection.requestConfig(&config) && config.version == expected[protocol] &&
+              config.address == "192.0.2.1" && config.port == "1161" &&
+              config.retries == 2 && config.timeout == 5 && config.readCommunity == "inline-read",
+              "an unresolved selection falls back to the record's own values");
+    }
 
-    check(AgentSelectionResolver::Resolve(profiles, "v2-only", 1,
-                                          &selection) ==
-              AgentSelectionError::None &&
-          selection.requestConfig(&config) &&
-          config.version == SnmpRequestVersion::V2c &&
-          config.endpoint() == "192.0.2.2/161",
-          "valid SNMPv2c IPv4 selection resolves");
+    selection.hasResolvedCredentials = true;
+    selection.credentials = CredentialResolver::inlineValues("saved-read", "saved-write", "saved-user", 2);
+    selection.selectedProtocol = 1;
+    check(selection.requestConfig(&config) && config.readCommunity == "saved-read" &&
+          config.writeCommunity == "saved-write" && config.securityName == "saved-user" &&
+          config.securityLevel == 2 && config.address == "192.0.2.1",
+          "resolved credentials replace the record's inline values");
 
-    check(AgentSelectionResolver::Resolve(profiles, "v3-ipv6", 2,
-                                          &selection) ==
-              AgentSelectionError::None &&
-          selection.requestConfig(&config) &&
-          config.version == SnmpRequestVersion::V3 &&
-          config.endpoint() == "2001:db8::3/161",
-          "valid SNMPv3 IPv6 selection resolves");
+    selection.selectedProtocol = 3;
+    check(!selection.requestConfig(&config), "an invalid protocol is rejected");
+    check(!selection.requestConfig(nullptr), "a missing output is rejected");
 
-    check(AgentSelectionResolver::Resolve(profiles, "v1-only", 1,
-                                          &selection) ==
-              AgentSelectionError::UnsupportedProtocol,
-          "unsupported protocol is rejected using profile flags");
-    check(AgentSelectionResolver::Resolve(profiles, "v2-only", 0,
-                                          &selection) ==
-              AgentSelectionError::UnsupportedProtocol &&
-          AgentSelectionResolver::Resolve(profiles, "v2-only", 2,
-                                          &selection) ==
-              AgentSelectionError::UnsupportedProtocol,
-          "all protocol support flags participate in validation");
-    check(AgentSelectionResolver::Resolve(profiles, "missing", 0,
-                                          &selection) ==
-              AgentSelectionError::ProfileNotFound &&
-          AgentSelectionResolver::Resolve({}, "v1-only", 0,
-                                          &selection) ==
-              AgentSelectionError::ProfileNotFound,
-          "invalid profile name and empty profile list are rejected");
-    check(AgentSelectionResolver::Resolve(profiles, "v1-only", -1,
-                                          &selection) ==
-              AgentSelectionError::InvalidProtocol &&
-          AgentSelectionResolver::Resolve(profiles, "v1-only", 3,
-                                          &selection) ==
-              AgentSelectionError::InvalidProtocol,
-          "invalid protocol identifiers are rejected");
-
-    AgentProfileRecord sameA = profile("same", "192.0.2.20", true, true, false);
-    AgentProfileRecord sameB = profile("same", "192.0.2.21", true, true, false);
-    sameA.profileId = "same-a";
-    sameB.profileId = "same-b";
-    check(AgentSelectionResolver::ResolveById({sameA, sameB}, sameA.profileId,
-                                              1, &selection) ==
-              AgentSelectionError::None &&
-          selection.profile.address == "192.0.2.20",
-          "first same-name profile resolves independently by ID");
-    check(AgentSelectionResolver::ResolveById({sameA, sameB}, sameB.profileId,
-                                              1, &selection) ==
-              AgentSelectionError::None &&
-          selection.profile.address == "192.0.2.21",
-          "second same-name profile resolves independently by ID");
-    check(AgentSelectionResolver::UniqueProfileIdForName(profiles, "v2-only") ==
-              profiles[1].profileId,
-          "unique legacy selected name migrates to stable ID");
-    check(AgentSelectionResolver::UniqueProfileIdForName({sameA, sameB}, "same").isEmpty(),
-          "ambiguous legacy selected name is not silently migrated");
-
-    if (failures == 0)
-        QTextStream(stdout) << "All Agent selection tests passed." << Qt::endl;
-    return failures == 0 ? 0 : 1;
+    selection.profile = record("2001:db8::3");
+    selection.selectedProtocol = 2;
+    check(selection.requestConfig(&config) && config.endpoint() == "2001:db8::3/1161",
+          "IPv6 targets keep their address and port");
+    return failures ? 1 : 0;
 }

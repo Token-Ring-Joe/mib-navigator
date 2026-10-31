@@ -79,7 +79,6 @@ endif()
 
 set(expected_files
     "${SNMPB_SMOKE_DIR}/snmpb.sourceforge.net/SnmpB.ini"
-    "${SNMPB_SMOKE_DIR}/snmpb.sourceforge.net/agents.conf"
     "${SNMPB_SMOKE_DIR}/snmpb.sourceforge.net/smi.conf"
     "${SNMPB_SMOKE_DIR}/snmpb.sourceforge.net/boot_counter.conf"
     "${SNMPB_SMOKE_DIR}/snmpb.sourceforge.net/log.conf"
@@ -88,6 +87,14 @@ set(expected_files
 foreach(expected_file IN LISTS expected_files)
     if(NOT EXISTS "${expected_file}")
         message(FATAL_ERROR "Expected isolated configuration file missing: ${expected_file}")
+    endif()
+endforeach()
+
+# Saved Agent Profiles are retired. The application must neither create nor read agents.conf
+# (a user's existing file is left alone), so a fresh configuration never contains one.
+foreach(retired_file agents.conf device-tree.conf profile-metadata.conf credential-bindings.conf)
+    if(EXISTS "${SNMPB_SMOKE_DIR}/snmpb.sourceforge.net/${retired_file}")
+        message(FATAL_ERROR "A retired configuration file was created: ${retired_file}")
     endif()
 endforeach()
 

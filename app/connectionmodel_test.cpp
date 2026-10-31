@@ -83,7 +83,7 @@ int main(int argc, char **argv)
     }
 
     // ---- credentials and request building ------------------------------------------------
-    CommunityCredentialService communityService(dir.filePath("c.conf"), dir.filePath("b.conf"));
+    CommunityCredentialService communityService(dir.filePath("c.conf"));
     const QString lab = communityService.create(community("Lab", "labro"));
     const QString empty = communityService.create(community("Empty", ""));
     UsmCredentialRepository repository(dir.filePath("u.conf"));

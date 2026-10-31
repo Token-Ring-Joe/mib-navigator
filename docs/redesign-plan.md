@@ -175,14 +175,21 @@ into smaller steps, each with its own working build.
    pointed at the Devices activity open MIBs (`workbench/activity` values keep their
    meaning: 0 MIBs, 2 Queries, 3 Events). `device-tree.conf` and `agents.conf` are
    left on disk untouched.
-8b-2. *Still to do:* delete the Agent Profile manager dialog, service, repository and
-   operations, per-device metadata, and the hidden legacy controls in `Agent`
-   (`AgentProfile` combo, protocol radios). `AgentProfileRecord` is still the request
-   model that `SnmpRequestConfig` is built from, so it must be renamed or replaced
-   rather than deleted. The community-credential manager and USM credential service
-   still count Agent Profile references when deciding whether a credential can be
-   deleted; that counting goes with the profiles. Then a single Credentials screen
-   replaces the two managers.
+8b-2. *Done (2026-10-31):* removed the Agent Profile manager dialog, the hidden profile
+   combo and protocol radios and their request path in `Agent`, the saved-profile
+   service, repository and operations, per-device metadata, profile-to-credential
+   bindings, the preferred-MIB resolver, and the profile-based request settings
+   (about 45 files including tests). `agents.conf`, `profile-metadata.conf`,
+   `credential-bindings.conf` and `device-tree.conf` are neither read nor created and
+   are left on disk untouched (`snmpb.launch-smoke` asserts a fresh configuration
+   contains none of them). The credential services no longer track what references
+   them: deleting a credential is always safe because the connection bar then shows
+   "choose a credential". Kept: `AgentProfileRecord` (now in `agentprofilerecord.h`)
+   is still the one-request settings struct the SNMP layer is built from.
+8c. *Still to do (small cleanup):* rename `AgentProfileRecord` to a name that matches
+   its role and delete the `agentprofilerepository.h` compatibility shim; drop the
+   now-unused "selected Agent Profile" preference fields; replace the two credential
+   managers with the single Credentials screen.
 
 ### Phase 3: Features, in dependency order
 

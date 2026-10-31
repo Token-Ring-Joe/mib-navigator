@@ -23,6 +23,7 @@
 #include <QValidator>
 
 #include "mibselection.h"
+#include <QLineEdit>
 #include "agent.h"
 #include "mibenvironmentregistry.h"
 #include "mibvaluesemantics.h"

@@ -2,7 +2,6 @@
 #include "snmprequestconfig.h"
 #include "usmcredentialservice.h"
 #include "usmcredentialcoordinator.h"
-#include "agentprofileservice.h"
 
 #include <QCoreApplication>
 #include <QFile>
@@ -24,15 +23,6 @@ UsmCredentialRecord usm(const QString &name, int auth = 1, int privacy = 1)
     record.privacyProtocol = privacy;
     record.authSecret = CredentialSecret("auth-value");
     record.privacySecret = CredentialSecret("privacy-value");
-    return record;
-}
-
-AgentProfileRecord profile(const QString &name, int level = 1)
-{
-    AgentProfileRecord record{};
-    record.v3 = true;
-    record.secname = name;
-    record.seclevel = level;
     return record;
 }
 }
@@ -80,40 +70,19 @@ int main(int argc, char **argv)
     UsmCredentialService reloaded({usm("operator")}, repository);
     ok &= check(reloaded.records().first().identity.credentialId == stableId,
                 "stable identity round-trip");
-    ok &= check(reloaded.validate(profile("operator")).status ==
-                    UsmReferenceStatus::Valid,
-                "valid legacy security-name reference");
-    ok &= check(reloaded.validate(profile("missing")).status ==
-                    UsmReferenceStatus::Missing,
-                "missing reference remains diagnosable");
-    ok &= check(reloaded.validate(profile("operator", 2)).status ==
-                    UsmReferenceStatus::Valid,
-                "compatible auth/privacy level");
 
     const QByteArray authBefore = reloaded.records().first().authSecret.bytes();
     ok &= check(reloaded.rename(stableId, "renamed") &&
                 reloaded.records().first().identity.credentialId == stableId &&
                 reloaded.records().first().authSecret.bytes() == authBefore,
                 "rename preserves identity and secret value");
-    ok &= check(reloaded.validate(profile("operator")).status ==
-                    UsmReferenceStatus::Missing &&
-                reloaded.validate(profile("renamed")).status ==
-                    UsmReferenceStatus::Valid,
-                "rename reference behavior");
+    ok &= check(!reloaded.isSecurityNameUnambiguous("operator") &&
+                reloaded.isSecurityNameUnambiguous("renamed"),
+                "rename changes the name the service answers to");
     ok &= check(reloaded.saveIdentities(), "renamed identity save");
     UsmCredentialService renamedReload({usm("renamed")}, repository);
     ok &= check(renamedReload.records().first().identity.credentialId == stableId,
                 "rename remains stable across save/load");
-    ProfileMetadataRecord explicitBinding;
-    explicitBinding.profileId = "explicit-profile";
-    explicitBinding.usmCredentialId = stableId;
-    ok &= check(renamedReload.validate(profile("stale-shadow"), explicitBinding).status ==
-                    UsmReferenceStatus::Valid,
-                "explicit stable ID remains valid across credential rename");
-    explicitBinding.usmCredentialId = "broken-id";
-    ok &= check(renamedReload.validate(profile("renamed"), explicitBinding).status ==
-                    UsmReferenceStatus::Missing,
-                "broken explicit ID did not silently rebind by security name");
 
     QList<UsmCredentialRecord> working = renamedReload.records();
     working.first().authProtocol = 2;
@@ -197,51 +166,23 @@ int main(int argc, char **argv)
                 renamedReload.records().first().identity.credentialId == stableId,
                 "identity-based create/update/rename notifications");
 
-    const QString agentsFile = dir.filePath("agents.conf");
-    AgentProfileRepository(agentsFile).Save(
-        {profile("renamed-again"), profile("renamed-again")});
-    AgentProfileService profiles(agentsFile);
-    int references = 0;
-    ok &= check(renamedReload.assessDelete(
-                    stableId, profiles.profiles(), &references) ==
-                    UsmDeleteAssessment::Referenced && references == 2,
-                "referenced delete assessment");
-    AgentProfileRecord explicitProfile = profile("unrelated-shadow");
-    explicitProfile.profileId = "explicit-profile";
-    ProfileMetadataRecord deleteBinding;
-    deleteBinding.profileId = explicitProfile.profileId;
-    deleteBinding.usmCredentialId = stableId;
-    ok &= check(renamedReload.assessDelete(stableId, {explicitProfile}, {deleteBinding},
-                                           &references) ==
-                    UsmDeleteAssessment::Referenced && references == 1,
-                "stable metadata reference participates in delete safety");
-    ok &= check(profiles.renameSecurityNameReferences(
-                    "renamed-again", "propagated") &&
-                profiles.securityNameReferenceIds("propagated").size() == 2,
-                "rename propagates to multiple Agent Profiles");
     QList<UsmCredentialRecord> afterDelete = working;
     afterDelete.removeFirst();
     renamedReload.applyCommitted(afterDelete);
-    ok &= check(deletedSignals == 1 && profiles.profiles().size() == 2 &&
-                profiles.securityNameReferenceIds("propagated").size() == 2,
-                "confirmed delete notification preserves Agent Profiles");
+    ok &= check(deletedSignals == 1 && renamedReload.records().size() == 1,
+                "delete notification and removal");
 
     UsmCredentialService ambiguous({usm("duplicate"), usm("duplicate")}, repository);
-    ok &= check(ambiguous.validate(profile("duplicate")).status ==
-                    UsmReferenceStatus::Ambiguous &&
-                ambiguous.records()[0].identity.credentialId !=
+    ok &= check(ambiguous.records()[0].identity.credentialId !=
                     ambiguous.records()[1].identity.credentialId,
                 "ambiguous names are not merged");
     ok &= check(!ambiguous.isSecurityNameUnambiguous("duplicate"),
-                "ambiguous rename references are not eligible for propagation");
+                "two users with one name are reported as ambiguous");
     UsmCredentialService incompatible({usm("noauth", 0, 0)}, repository);
-    ok &= check(incompatible.validate(profile("noauth", 1)).status ==
-                    UsmReferenceStatus::IncompatibleSecurityLevel,
-                "security-level compatibility");
-    ok &= check(reloaded.remove(stableId) &&
-                reloaded.validate(profile("renamed")).status ==
-                    UsmReferenceStatus::Missing,
-                "delete leaves reference missing rather than rewriting profile");
+    ok &= check(UsmCredentialService::securityLevel(incompatible.records().first()) == 0,
+                "a user with no authentication is noAuthNoPriv");
+    ok &= check(reloaded.remove(stableId) && !reloaded.find(stableId),
+                "delete removes the credential");
 
     CommunityCredentialRecord community;
     community.identity = {"community-id", CredentialKind::Community};

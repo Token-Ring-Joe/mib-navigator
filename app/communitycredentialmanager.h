@@ -5,7 +5,6 @@
 #include <QDialog>
 
 class CommunityCredentialService;
-class AgentProfileService;
 class QListWidget;
 class QLineEdit;
 
@@ -14,7 +13,6 @@ class CommunityCredentialManager : public QDialog
     Q_OBJECT
 public:
     CommunityCredentialManager(CommunityCredentialService *credentials,
-                               AgentProfileService *profiles,
                                QWidget *parent = nullptr);
     void execute();
 private slots:
@@ -26,7 +24,6 @@ private slots:
 private:
     void rebuildList(int selected = 0);
     CommunityCredentialService *service;
-    AgentProfileService *profiles;
     QList<CommunityCredentialRecord> working;
     QListWidget *list;
     QLineEdit *name;

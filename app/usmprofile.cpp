@@ -22,8 +22,6 @@
 #include "usmcredentialruntime.h"
 #include "usmcredentialservice.h"
 #include "usmcredentialcoordinator.h"
-#include "agentprofileservice.h"
-#include "profilemetadataservice.h"
 #include <QMessageBox>
 
 USMProfileManager::USMProfileManager(Snmpb *snmpb)
@@ -130,16 +128,6 @@ void USMProfileManager::ExecuteEditor(bool createCredential)
                                      "The previous configuration was restored where possible."));
             return;
         }
-        for (const auto &oldRecord : before)
-            for (const auto &newRecord : after)
-                if (oldRecord.identity.credentialId == newRecord.identity.credentialId &&
-                    oldRecord.securityName != newRecord.securityName)
-                {
-                    if (credentialService->isSecurityNameUnambiguous(
-                            oldRecord.securityName))
-                        s->AgentProfiles()->renameSecurityNameReferences(
-                            oldRecord.securityName, newRecord.securityName);
-                }
         credentialService->applyCommitted(after);
         emit CredentialsChanged();
     }
@@ -237,21 +225,6 @@ void USMProfileManager::Delete(void)
     {
         if (currentprofile && (users[i] == currentprofile))
         {
-            int references = 0;
-            const UsmDeleteAssessment assessment = credentialService->assessDelete(
-                currentprofile->GetRecord().identity.credentialId,
-                s->AgentProfiles()->profiles(),
-                s->ProfileMetadata()->allMetadata(), &references);
-            if ((assessment == UsmDeleteAssessment::Referenced ||
-                 assessment == UsmDeleteAssessment::Ambiguous) &&
-                QMessageBox::warning(
-                    &upw, tr("Delete USM Credential"),
-                    tr("%1 Agent Profile(s) reference this credential. Deleting it "
-                       "will leave those profiles with a missing credential reference.")
-                        .arg(references),
-                    QMessageBox::Ok | QMessageBox::Cancel, QMessageBox::Cancel) !=
-                    QMessageBox::Ok)
-                return;
             // Delete the profile (removes from the list)
             delete users.takeAt(i);
             currentprofile = NULL;

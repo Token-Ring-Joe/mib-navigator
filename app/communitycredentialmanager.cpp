@@ -1,6 +1,5 @@
 #include "communitycredentialmanager.h"
 #include "communitycredentialservice.h"
-#include "agentprofileservice.h"
 #include <QDialogButtonBox>
 #include <QFormLayout>
 #include <QHBoxLayout>
@@ -12,9 +11,8 @@
 #include <QVBoxLayout>
 
 CommunityCredentialManager::CommunityCredentialManager(
-    CommunityCredentialService *credentialService,
-    AgentProfileService *profileService, QWidget *parent)
-    : QDialog(parent), service(credentialService), profiles(profileService)
+    CommunityCredentialService *credentialService, QWidget *parent)
+    : QDialog(parent), service(credentialService)
 {
     setWindowTitle(tr("Community Credentials")); resize(560, 320);
     auto *layout = new QHBoxLayout(this); list = new QListWidget(this);
@@ -100,19 +98,6 @@ void CommunityCredentialManager::duplicateCredential()
 void CommunityCredentialManager::deleteCredential()
 {
     if (current < 0 || current >= working.size()) return;
-    int references = 0;
-    const QString id = working[current].identity.credentialId;
-    const auto assessment = service->assessDelete(id, &references);
-    if (assessment == CommunityDeleteAssessment::Referenced)
-    {
-        QStringList names;
-        for (const AgentProfileRecord &profile : profiles->profiles())
-            if (service->binding(profile.profileId) == id) names.append(profile.name);
-        if (QMessageBox::warning(this, tr("Delete Community Credential"),
-            tr("This credential is referenced by: %1. Deleting it will leave a missing reusable credential binding.")
-                .arg(names.join(", ")), QMessageBox::Ok | QMessageBox::Cancel,
-            QMessageBox::Cancel) != QMessageBox::Ok) return;
-    }
     working.removeAt(current); rebuildList(qMin(current, working.size() - 1));
 }
 

@@ -39,6 +39,15 @@ AgentProfileRecord profile(const QString &name, const QString &address,
     record.contextengineid = "sync-engine";
     return record;
 }
+
+// A selection is a value: it copies the record and the protocol at the moment it is made.
+AgentRequestSelection select(const AgentProfileRecord &record, int protocol)
+{
+    AgentRequestSelection selection;
+    selection.profile = record;
+    selection.selectedProtocol = protocol;
+    return selection;
+}
 }
 
 int main(int argc, char **argv)
@@ -49,22 +58,16 @@ int main(int argc, char **argv)
         profile("replacement", "2001:db8::50", 1, 2, 7, 0)
     };
 
-    AgentRequestSelection selection;
-    check(AgentSelectionResolver::Resolve(profiles, "original", 1,
-                                          &selection) ==
-              AgentSelectionError::None,
-          "synchronous selection resolves once");
+    AgentRequestSelection selection = select(profiles[0], 1);
     SnmpRequestConfig captured;
     check(selection.requestConfig(&captured),
           "synchronous request configuration is produced");
 
     // Simulate mutable profile/UI state changing while the operation runs.
     profiles[0] = profiles[1];
-    AgentRequestSelection replacement;
-    check(AgentSelectionResolver::Resolve(profiles, "replacement", 2,
-                                          &replacement) ==
-              AgentSelectionError::None,
-          "replacement selection resolves independently");
+    AgentRequestSelection replacement = select(profiles[1], 2);
+    check(replacement.profile.address == "2001:db8::50",
+          "replacement selection is independent of the captured one");
 
     check(captured.version == SnmpRequestVersion::V2c &&
           captured.endpoint() == "192.0.2.40/10161",
@@ -84,12 +87,8 @@ int main(int argc, char **argv)
 
     for (int protocol : {0, 2})
     {
-        AgentRequestSelection versionSelection;
-        check(AgentSelectionResolver::Resolve(
-                  {profile("versioned", "2001:db8::60", 3, 11, 12, 1)},
-                  "versioned", protocol, &versionSelection) ==
-                  AgentSelectionError::None,
-              "versioned synchronous selection resolves");
+        AgentRequestSelection versionSelection =
+            select(profile("versioned", "2001:db8::60", 3, 11, 12, 1), protocol);
         SnmpRequestConfig config;
         versionSelection.requestConfig(&config);
         UdpAddress ipv6(config.endpoint().toLatin1().data());
