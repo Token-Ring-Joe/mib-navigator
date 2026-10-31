@@ -101,6 +101,8 @@ public:
     bool update(const MibProfileRecord &profile, QString *error = nullptr);
     bool importCustomProfile(const QString &stableId, const QString &name,
                              const QStringList &modules, QString *error = nullptr);
+    bool requiresLegacyConversion() const;
+    bool hasUnresolvedLegacyResidue() const;
     bool migrateLegacyProfiles(const MibDependencyIndex &index, QString *error = nullptr);
     // Compatibility conversion only: snapshots persisted legacy folder Profiles
     // once. It never refreshes current Profile membership.

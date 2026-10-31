@@ -28,6 +28,8 @@ set(SNMPB_APP_SOURCES
     devicedetailseditor.cpp
     diagnosticlogger.cpp
     mainwindowlayout.cpp
+    startupcoordinator.cpp
+    workbenchshell.cpp
     productidentity.cpp
     devicetree.cpp
     devicetreemodel.cpp
@@ -125,6 +127,8 @@ set(SNMPB_APP_HEADERS
     devicedetailseditor.h
     diagnosticlogger.h
     mainwindowlayout.h
+    startupcoordinator.h
+    workbenchshell.h
     productidentity.h
     devicetree.h
     devicetreemodel.h
@@ -945,6 +949,29 @@ if(BUILD_TESTING)
             "QT_QPA_PLATFORM=offscreen" $<TARGET_FILE:snmpb_device_pane_test>)
     endif()
 
+    add_executable(snmpb_workbench_shell_test
+        mainwindowlayout.cpp
+        mainwindowlayout.h
+        startupcoordinator.cpp
+        startupcoordinator.h
+        workbenchshell.cpp
+        workbenchshell.h
+        workbenchshell_test.cpp
+    )
+    set_target_properties(snmpb_workbench_shell_test PROPERTIES AUTOMOC ON)
+    target_link_libraries(snmpb_workbench_shell_test PRIVATE Qt6::Core Qt6::Widgets)
+    if(WIN32)
+        add_test(NAME snmpb.workbench-shell COMMAND ${CMAKE_COMMAND} -E env
+            "QT_QPA_PLATFORM=offscreen"
+            "QT_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins"
+            "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
+            $<TARGET_FILE:snmpb_workbench_shell_test>)
+    else()
+        add_test(NAME snmpb.workbench-shell COMMAND ${CMAKE_COMMAND} -E env
+            "QT_QPA_PLATFORM=offscreen"
+            $<TARGET_FILE:snmpb_workbench_shell_test>)
+    endif()
+
     add_executable(snmpb_table_traversal_test
         tabletraversal.cpp
         tabletraversal.h
@@ -1097,7 +1124,20 @@ if(BUILD_TESTING)
             -DSNMPB_SMOKE_DIR=${CMAKE_CURRENT_BINARY_DIR}/launch-smoke-config
             -P ${PROJECT_SOURCE_DIR}/cmake/RunSnmpbLaunchSmoke.cmake
     )
-    set_tests_properties(snmpb.launch-smoke PROPERTIES TIMEOUT 60)
+    # The script performs two isolated launches, each with its own 45-second
+    # timeout. Leave enough outer margin for both launches and CMake setup.
+    set_tests_properties(snmpb.launch-smoke PROPERTIES TIMEOUT 120)
+
+    foreach(close_state IN ITEMS CatalogLoading ProfilePreparing EnvironmentBuilding)
+        add_test(NAME snmpb.startup-close-${close_state}
+            COMMAND ${CMAKE_COMMAND} -E env
+                "QT_QPA_PLATFORM=offscreen"
+                "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
+                $<TARGET_FILE:snmpb>
+                --launch-smoke-test ${CMAKE_CURRENT_BINARY_DIR}/startup-close-${close_state}
+                --startup-close-state ${close_state})
+        set_tests_properties(snmpb.startup-close-${close_state} PROPERTIES TIMEOUT 60)
+    endforeach()
 
     snmpb_configure_qt_test_runtime(
         snmpb.mib-engine

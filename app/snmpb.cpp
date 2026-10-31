@@ -47,6 +47,8 @@
 #include "discovery.h"
 #include "devicepane.h"
 #include "mainwindowlayout.h"
+#include "workbenchshell.h"
+#include "startupcoordinator.h"
 #include "productidentity.h"
 #include "diagnosticlogger.h"
 #include "miblibrarywidget.h"
@@ -64,6 +66,8 @@
 #include "communitycredentialmanager.h"
 #include "usmcredentialservice.h"
 #include "preferences.h"
+#include <QPointer>
+#include <QThreadPool>
 
 // These are needed to get the libraries version strings for the about box
 #include "mibengine.h"
@@ -137,6 +141,9 @@ Snmpb::~Snmpb()
 
 void Snmpb::BindToGUI(QMainWindow* mw)
 {
+    mainWindow = mw;
+    startup = new StartupCoordinator(this);
+    const quint64 startupGeneration = startup->begin();
     if (start_issuccess == false)
     {
         QMessageBox::critical(nullptr, tr("MIB Navigator"), start_msg, QMessageBox::Ok);
@@ -162,6 +169,7 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     w.AgentProperties->hide();
     w.actionManageAgentProfiles->setVisible(false);
     prefs->RestoreWindowGeometry(*mw);
+    EnsureAccessibleWindowGeometry(mw);
     static auto saver = std::bind(&Preferences::SaveWindowGeometry, std::ref(*mw));
     connect(QApplication::instance(), &QCoreApplication::aboutToQuit, saver);
 
@@ -189,30 +197,6 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     QElapsedTimer mibStartupTimer; mibStartupTimer.start();
     modules = new MibModule(this);
     DiagnosticLogger::log("Startup", QStringLiteral("MIB initialization complete elapsed_ms=%1").arg(mibStartupTimer.elapsed()));
-    {
-        QSettings legacySettings;
-        MibProfileService migrationProfiles(MibProfileRepository(
-            QDir(MibCollection::legacyManagedRoot()).filePath("profiles-v1.json")));
-        const QString savedProfile = legacySettings.value("mib-library/current-profile").toString();
-        const bool savedProfileWasValid = !savedProfile.isEmpty() &&
-            migrationProfiles.find(savedProfile) != nullptr;
-        QElapsedTimer migrationTimer; migrationTimer.start();
-        const MibLegacyMigrationResult migration = MibLegacyMigration::migrate(
-            legacySettings, migrationProfiles, *modules->DependencyIndex());
-        QString exactMigrationError;
-        const bool exactMigrationComplete = migrationProfiles.migrateLegacyProfiles(
-            *modules->DependencyIndex(), &exactMigrationError);
-        if (migration.migrated && !savedProfileWasValid)
-            legacySettings.setValue("mib-library/current-profile", migration.profileId);
-        DiagnosticLogger::log("MIB", tr("legacy preload migration version=%1 already=%2 needed=%3 migrated=%4 inputs=%5 resolved=%6 duplicates=%7 unresolved=%8 profile=%9 elapsed_ms=%10%11")
-            .arg(MibLegacyMigration::Version).arg(migration.alreadyComplete).arg(migration.needed)
-            .arg(migration.migrated).arg(migration.inputCount).arg(migration.resolvedCount)
-            .arg(migration.duplicateCount).arg(migration.unresolvedCount).arg(migration.profileId)
-            .arg(migrationTimer.elapsed()).arg(migration.error.isEmpty() ? QString() : tr(" error=\"%1\"").arg(migration.error)));
-        DiagnosticLogger::log("MIB", tr("legacy Profile exact-file conversion complete=%1%2")
-            .arg(exactMigrationComplete)
-            .arg(exactMigrationError.isEmpty() ? QString() : tr(" error=\"%1\"").arg(exactMigrationError)));
-    }
     profileService = new AgentProfileService(GetAgentsConfigFile(), this);
     DiagnosticLogger::log("Connections", QStringLiteral("profiles loaded count=%1")
                           .arg(profileService->profiles().size()));
@@ -312,6 +296,12 @@ void Snmpb::BindToGUI(QMainWindow* mw)
         modules->RefreshDependencyIndex(&error);
         if (!error.isEmpty()) DiagnosticLogger::log("MIB", error);
     };
+    mibLibraryCallbacks.retryLegacyProfiles = [this](MibProfileService &profiles,
+                                                      QString *error) {
+        if (!profiles.hasUnresolvedLegacyResidue() &&
+            !profiles.requiresLegacyConversion()) return true;
+        return profiles.migrateLegacyProfiles(*modules->DependencyIndex(), error);
+    };
     mibLibraryCallbacks.checkDependencies = [this](QString *error) {
         modules->CheckProfileDependencies(QStringLiteral("mib-library"),
             modules->DependencyIndex()->moduleNames(), false, error);
@@ -375,9 +365,9 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     connect(modules, &MibModule::inventoryChanged, mibLibrary, &MibLibraryWidget::refresh);
     connect(modules, &MibModule::inventoryChanged, this, refreshLibraryDependencyStatus);
     connect(mibLibrary, &MibLibraryWidget::openModuleRequested, mw,
-            [this](const QString &path, bool readOnly) {
-        if (readOnly) editor->MibFileOpenReadOnly(path); else editor->MibFileOpen(path);
-        w.TabW->setCurrentIndex(2);
+            [this](const QString &path) {
+        editor->MibFileOpen(path);
+        ShowEditorDocument();
     });
     auto *browserProfile = new QComboBox(w.MIBTreeLayout);
     browserProfile->setObjectName(QStringLiteral("MibBrowserProfileSelector"));
@@ -409,6 +399,12 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     auto *tableButton = addQueryButton(tr("Table"), QStyle::SP_FileDialogDetailedView);
     auto *setButton = addQueryButton(tr("Set"), QStyle::SP_DialogApplyButton);
     auto *stopButton = addQueryButton(tr("Stop"), QStyle::SP_BrowserStop);
+    const QList<QToolButton *> mibDependentActions{getButton, getNextButton, getBulkButton,
+                                                   walkButton, tableButton, setButton};
+    for (QToolButton *button : mibDependentActions) {
+        button->setEnabled(false);
+        button->setToolTip(tr("Available after the MIB Environment is ready"));
+    }
     connect(getButton, &QToolButton::clicked, w.MIBTree, [this]() { w.MIBTree->QueryCurrent(0); });
     connect(getNextButton, &QToolButton::clicked, w.MIBTree, [this]() { w.MIBTree->QueryCurrent(1); });
     connect(getBulkButton, &QToolButton::clicked, w.MIBTree, [this]() { w.MIBTree->QueryCurrent(2); });
@@ -417,7 +413,11 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     connect(setButton, &QToolButton::clicked, w.MIBTree, &MibModelView::SetCurrent);
     connect(stopButton, &QToolButton::clicked, w.actionStop, &QAction::trigger);
     connect(w.MIBTree, &MibModelView::QueryTableAvailabilityChanged,
-            tableButton, &QToolButton::setEnabled);
+            tableButton, [this, tableButton](bool available) {
+        tableButton->setEnabled(available && startup &&
+            (startup->state() == StartupState::Ready ||
+             startup->state() == StartupState::NeedsAttention));
+    });
     connect(w.actionStop, &QAction::changed, stopButton,
             [stopButton, action=w.actionStop]() { stopButton->setEnabled(action->isEnabled()); });
     qobject_cast<QVBoxLayout *>(w.MIBTreeLayout->layout())->insertWidget(2, queryTools);
@@ -490,21 +490,28 @@ void Snmpb::BindToGUI(QMainWindow* mw)
         mw->statusBar()->showMessage(tr("Building MIB environment… %1").arg(name));
     });
     connect(modules,&MibModule::profileRuntimeReady,mw,
-        [this,mw](const QString &id,const MibEffectivePlan &plan,MibEnvironmentPtr,
+        [this,mw,mibDependentActions](const QString &id,const MibEffectivePlan &plan,MibEnvironmentPtr,
                const QStringList &,bool cacheHit,bool partial){
             if(id==MibProfileDefinitions::allId())w.MIBTree->showAllModules();
             else w.MIBTree->setVisibleModules(plan.effectiveModules);
             w.MIBTree->Populate();
             mw->statusBar()->showMessage(cacheHit?tr("MIB environment ready (cached)"):
                 partial?tr("MIB environment ready with findings"):tr("MIB environment ready"),5000);
+            for (QToolButton *button : mibDependentActions) {
+                button->setEnabled(true);
+                button->setToolTip({});
+            }
+            if (startup) startup->advance(startup->generation(),
+                partial ? StartupState::NeedsAttention : StartupState::Ready);
         });
     connect(modules,&MibModule::profileRuntimeFailed,mw,[this,mw](const QString &,const QString &error){
         mw->statusBar()->showMessage(tr("MIB environment build failed; previous environment remains active"),7000);
         DiagnosticLogger::log("MIB",tr("Unable to apply MIB profile: %1").arg(error));
+        if (startup) startup->advance(startup->generation(), StartupState::NeedsAttention,
+                                      tr("Environment: Needs attention"));
     });
-    phaseTimer.restart(); mibLibrary->selectProfile(browserProfile->currentData().toString());
     initializingMibProfile = false;
-    DiagnosticLogger::log("Startup", QStringLiteral("MIB profile initialization complete elapsed_ms=%1").arg(phaseTimer.elapsed()));
+    DiagnosticLogger::log("Startup", QStringLiteral("MIB profile initialization deferred until after shell display"));
     discovery = new Discovery(this);
 
     auto *contextWidget = new QWidget(w.widget);
@@ -784,9 +791,142 @@ void Snmpb::BindToGUI(QMainWindow* mw)
         devicePane->reloadTree();
     });
 
+    // Rehost the established feature widgets in a workbench shell. This only
+    // changes presentation ownership: request, Profile, Environment, parser,
+    // trap, editor, and graph services continue to own their existing state.
+    auto *resultsPage = new QWidget(mw);
+    resultsPage->setObjectName(QStringLiteral("WorkbenchResultsPage"));
+    auto *resultsLayout = new QVBoxLayout(resultsPage);
+    resultsLayout->setContentsMargins(4, 4, 4, 4);
+    auto *resultsHeader = new QHBoxLayout;
+    resultsHeader->addWidget(new QLabel(tr("Current operation results"), resultsPage));
+    resultsHeader->addStretch();
+    w.QueryTable->setParent(resultsPage);
+    resultsHeader->addWidget(w.QueryTable);
+    resultsLayout->addLayout(resultsHeader);
+    resultTable->setParent(resultsPage);
+    resultsLayout->addWidget(resultTable, 1);
+
+    auto *rawPage = new QWidget(mw);
+    rawPage->setObjectName(QStringLiteral("WorkbenchRawPage"));
+    auto *rawLayout = new QVBoxLayout(rawPage);
+    rawLayout->setContentsMargins(4, 4, 4, 4);
+    rawLayout->addWidget(new QLabel(tr("Raw SNMP and protocol output"), rawPage));
+    w.Query->setParent(rawPage);
+    rawLayout->addWidget(w.Query, 1);
+    w.QueryLayout->hide();
+
+    auto *problemsPage = new QWidget(mw);
+    problemsPage->setObjectName(QStringLiteral("WorkbenchProblemsPage"));
+    auto *problemsLayout = new QVBoxLayout(problemsPage);
+    problemsLayout->setContentsMargins(8, 8, 8, 8);
+    auto *problemHeading = new QLabel(tr("MIB Environment and Profile"), problemsPage);
+    QFont problemFont = problemHeading->font(); problemFont.setBold(true);
+    problemHeading->setFont(problemFont);
+    auto *problemState = new QLabel(tr("No actionable problems reported."), problemsPage);
+    problemState->setObjectName(QStringLiteral("WorkbenchProblemState"));
+    problemState->setWordWrap(true);
+    auto *problemHint = new QLabel(
+        tr("Profile ambiguity, missing or changed files, stale pins, and publication errors appear here."),
+        problemsPage);
+    problemHint->setWordWrap(true);
+    problemsLayout->addWidget(problemHeading);
+    problemsLayout->addWidget(problemState);
+    problemsLayout->addWidget(problemHint);
+    problemsLayout->addStretch();
+    connect(modules, &MibModule::profileRuntimeBuildStarted, problemState,
+            [problemState](const QString &) { problemState->setText(QObject::tr("Environment build in progress.")); });
+    connect(modules, &MibModule::profileRuntimeReady, problemState,
+            [problemState](const QString &, const MibEffectivePlan &, MibEnvironmentPtr,
+                           const QStringList &findings, bool, bool partial) {
+        problemState->setText(partial || !findings.isEmpty()
+            ? QObject::tr("Environment published with findings: %1").arg(findings.join(QStringLiteral("\n")))
+            : QObject::tr("No actionable problems reported."));
+    });
+    connect(modules, &MibModule::profileRuntimeFailed, problemState,
+            [problemState](const QString &, const QString &error) {
+        problemState->setText(QObject::tr("Environment publication failed. The previous Environment remains active.\n%1")
+                              .arg(error));
+    });
+
+    auto *diagnosticsPage = new QWidget(mw);
+    diagnosticsPage->setObjectName(QStringLiteral("WorkbenchDiagnosticsPage"));
+    auto *diagnosticsLayout = new QVBoxLayout(diagnosticsPage);
+    diagnosticsLayout->setContentsMargins(0, 0, 0, 0);
+    w.LogTab->setParent(diagnosticsPage);
+    diagnosticsLayout->addWidget(w.LogTab);
+
+    w.NodeInfoLayout->setObjectName(QStringLiteral("WorkbenchMibInspector"));
+    w.NodeInfoL->setText(tr("MIB Object Inspector"));
+    devicesDock->hide();
+    WorkbenchShell::Pages workbenchPages;
+    workbenchPages.tree = w.TreeTab;
+    workbenchPages.library = mibLibrary;
+    workbenchPages.editor = w.EditorTab;
+    workbenchPages.discovery = w.DiscoveryTab;
+    workbenchPages.events = w.TrapsTab;
+#if SNMPB_ENABLE_QWT
+    workbenchPages.graphs = w.GraphsTab;
+#endif
+    workbench = new WorkbenchShell(mw, w.widget,
+        qobject_cast<QGridLayout *>(w.widget->layout()), contextWidget, w.TabW,
+        workbenchPages, devicePane, w.NodeInfoLayout, resultsPage, problemsPage,
+            diagnosticsPage, rawPage, this);
+    startup->advance(startupGeneration, StartupState::ShellReady,
+                     tr("Loading MIB Catalogâ€¦"));
+    connect(workbench, &WorkbenchShell::mibLibraryModeRequested,
+            mibLibrary, &MibLibraryWidget::showWorkspaceMode);
+    connect(w.fileNewAction, &QAction::triggered, mw,
+            [this]() { ShowEditorDocument(); });
+    connect(w.fileOpenAction, &QAction::triggered, mw,
+            [this]() { ShowEditorDocument(); });
+
+    auto *statusEnvironment = new QLabel(tr("Environment: Building"), mw->statusBar());
+    statusEnvironment->setObjectName(QStringLiteral("WorkbenchStatusEnvironment"));
+    auto *statusEvents = new QLabel(
+        prefs->GetEnableIPv4() || prefs->GetEnableIPv6()
+            ? tr("Events: Capture enabled") : tr("Events: Stopped"), mw->statusBar());
+    statusEvents->setObjectName(QStringLiteral("WorkbenchStatusEvents"));
+    mw->statusBar()->addPermanentWidget(statusEnvironment);
+    mw->statusBar()->addPermanentWidget(statusEvents);
+    connect(modules, &MibModule::profileRuntimeBuildStarted, statusEnvironment,
+            [statusEnvironment](const QString &) { statusEnvironment->setText(QObject::tr("Environment: Building")); });
+    connect(modules, &MibModule::profileRuntimeReady, statusEnvironment,
+            [statusEnvironment](const QString &, const MibEffectivePlan &, MibEnvironmentPtr environment,
+                                const QStringList &, bool, bool partial) {
+        statusEnvironment->setText(!environment ? QObject::tr("Environment: Empty")
+            : partial ? QObject::tr("Environment: %1 modules · Needs attention").arg(environment->loadedCount())
+            : QObject::tr("Environment: %1 modules").arg(environment->loadedCount()));
+    });
+    connect(modules, &MibModule::profileRuntimeFailed, statusEnvironment,
+            [statusEnvironment](const QString &, const QString &) {
+        statusEnvironment->setText(QObject::tr("Environment: Error"));
+    });
+    connect(startup, &StartupCoordinator::stateChanged, statusEnvironment,
+            [statusEnvironment](StartupState state, const QString &detail) {
+        QString text = detail;
+        if (text.isEmpty()) {
+            if (state == StartupState::ShellReady || state == StartupState::CatalogLoading)
+                text = QObject::tr("Catalog: Loadingâ€¦");
+            else if (state == StartupState::ProfilePreparing)
+                text = QObject::tr("Profile: Preparingâ€¦");
+            else if (state == StartupState::EnvironmentBuilding)
+                text = QObject::tr("Environment: Buildingâ€¦");
+            else if (state == StartupState::Ready)
+                text = QObject::tr("Environment: Ready");
+            else if (state == StartupState::NeedsAttention || state == StartupState::Failed)
+                text = QObject::tr("Environment: Needs attention");
+        }
+        statusEnvironment->setText(text);
+    });
+
     QSettings windowSettings;
-    RestoreMainWindowStateWithRequiredDevicesDock(
-        mw, devicesDock, windowSettings.value("mainwindow/state").toByteArray());
+    const QByteArray savedWindowState = windowSettings.value("mainwindow/state").toByteArray();
+    if (!savedWindowState.isEmpty()) mw->restoreState(savedWindowState);
+    devicesDock->hide();
+    devicesDock->deleteLater();
+    devicesDock = nullptr;
+    workbench->restorePresentationState();
     DiagnosticLogger::log("UI", "saved QMainWindow state restore complete");
     if (windowSettings.contains("mainwindow/device-sidebar-sizes"))
         devicePane->verticalSplitter()->restoreState(
@@ -797,6 +937,7 @@ void Snmpb::BindToGUI(QMainWindow* mw)
                 settings.setValue("mainwindow/state", mw->saveState());
                 settings.setValue("mainwindow/device-sidebar-sizes",
                                   devicePane->verticalSplitter()->saveState());
+                if (workbench) workbench->savePresentationState();
             });
 
     // Connect some signals
@@ -821,6 +962,126 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     // Register every MIB tree to the MIB loader object
     w.MIBTree->RegisterToLoader(&loader);
     TabSelected();
+}
+
+void Snmpb::StartDeferredInitialization()
+{
+    if (!startup || !mibLibrary || !modules) return;
+    const quint64 generation = startup->generation();
+    if (!mibLibrary->initialRefreshReady()) {
+        if (!startupCatalogRequested) {
+            startupCatalogRequested = true;
+            startup->advance(generation, StartupState::CatalogLoading,
+                             tr("Catalog: Loadingâ€¦"));
+            connect(mibLibrary, &MibLibraryWidget::initialRefreshFinished, this,
+                [this, generation](qint64 preparationMs, qint64 publicationMs) {
+                if (!startup || !startup->accepts(generation)) return;
+                DiagnosticLogger::log("Startup", tr(
+                    "Catalog ready preparation_ms=%1 publication_ms=%2")
+                    .arg(preparationMs).arg(publicationMs));
+                StartDeferredInitialization();
+            });
+            mibLibrary->beginInitialRefresh(generation);
+        }
+        return;
+    }
+    startup->advance(generation, StartupState::CatalogReady,
+                     tr("Catalog ready â€” preparing Profileâ€¦"));
+
+    const QString settingsFile = QSettings().fileName();
+    const QString profilesPath = QDir(MibCollection::legacyManagedRoot())
+        .filePath(QStringLiteral("profiles-v1.json"));
+    const MibDependencyIndex dependencySnapshot = *modules->DependencyIndex();
+    const QPointer<Snmpb> context(this);
+    QThreadPool::globalInstance()->start(
+        [context, generation, settingsFile, profilesPath, dependencySnapshot]() mutable {
+        QElapsedTimer timer;
+        timer.start();
+        QSettings legacySettings(settingsFile, QSettings::IniFormat);
+        MibProfileService migrationProfiles{MibProfileRepository(profilesPath)};
+        const QString savedProfile = legacySettings.value(
+            QStringLiteral("mib-library/current-profile")).toString();
+        const bool savedProfileWasValid = !savedProfile.isEmpty() &&
+            migrationProfiles.find(savedProfile) != nullptr;
+        const MibLegacyMigrationResult migration = MibLegacyMigration::migrate(
+            legacySettings, migrationProfiles, dependencySnapshot);
+        QString exactMigrationError;
+        bool exactMigrationComplete = migrationProfiles.migrateLegacyFolderProfiles(
+            &exactMigrationError);
+        const bool conversionNeeded = migrationProfiles.requiresLegacyConversion();
+        if (exactMigrationComplete && conversionNeeded)
+            exactMigrationComplete = migrationProfiles.migrateLegacyProfiles(
+                dependencySnapshot, &exactMigrationError);
+        if (migration.migrated && !savedProfileWasValid)
+            legacySettings.setValue(QStringLiteral("mib-library/current-profile"),
+                                    migration.profileId);
+        const qint64 elapsed = timer.elapsed();
+        QMetaObject::invokeMethod(context,
+            [context, generation, migration, exactMigrationComplete,
+             exactMigrationError, conversionNeeded, elapsed, dependencySnapshot]() mutable {
+            if (!context || !context->startup ||
+                !context->startup->accepts(generation)) return;
+            DiagnosticLogger::log("MIB", QObject::tr(
+                "deferred legacy migration already=%1 migrated=%2 conversion-needed=%3 "
+                "conversion-complete=%4 unresolved-retry-deferred=1 elapsed_ms=%5%6")
+                .arg(migration.alreadyComplete).arg(migration.migrated)
+                .arg(conversionNeeded).arg(exactMigrationComplete).arg(elapsed)
+                .arg(exactMigrationError.isEmpty() ? QString() :
+                    QObject::tr(" error=\"%1\"").arg(exactMigrationError)));
+            context->mibLibrary->reloadProfiles();
+            const MibProfileRecord profile = context->mibLibrary->currentProfile();
+            DiagnosticLogger::log("Startup", QObject::tr(
+                "Profile loaded id=%1 manifest=%2 roots=%3 unresolved=%4")
+                .arg(profile.id).arg(MibProfileIsManifest(profile))
+                .arg(profile.roots.size()).arg(profile.unresolvedLegacyModules.size()));
+            if (profile.id.isEmpty()) {
+                context->startup->advance(generation, StartupState::Failed,
+                    QObject::tr("Profile: unavailable"));
+                return;
+            }
+            context->startup->advance(generation, StartupState::ProfilePreparing,
+                                      QObject::tr("Profile: Preparingâ€¦"));
+            QThreadPool::globalInstance()->start(
+                [context, generation, profile, dependencySnapshot]() mutable {
+                MibEffectivePlan plan;
+                if (!MibProfileIsManifest(profile)) {
+                    plan.profileId = profile.id;
+                    plan.profileName = profile.name;
+                    plan.authorityError = QObject::tr(
+                        "Profile still uses legacy authority and must be migrated before activation");
+                } else {
+                    MibEffectivePlanResolverInput input;
+                    input.id = profile.id;
+                    input.roots = profile.roots;
+                    input.orderedScopes = MibProfileScopePaths(profile);
+                    input.pins = profile.providerPins;
+                    plan = MibEffectiveRuntimePlanResolver().resolve(input, dependencySnapshot);
+                    plan.profileName = profile.name;
+                    plan.profileType = profile.type;
+                    if (!profile.unresolvedLegacyModules.isEmpty()) {
+                        plan.authorityError = QObject::tr(
+                            "Profile migration still has unresolved legacy intent: %1")
+                            .arg(profile.unresolvedLegacyModules.join(QStringLiteral(", ")));
+                        plan.missingModules.append(profile.unresolvedLegacyModules);
+                        plan.missingModules.removeDuplicates();
+                        plan.missingModules.sort(Qt::CaseSensitive);
+                    }
+                }
+                QMetaObject::invokeMethod(context, [context, generation, profile, plan]() {
+                    if (!context || !context->startup ||
+                        !context->startup->accepts(generation)) return;
+                    DiagnosticLogger::log("Startup", QObject::tr(
+                        "Profile prepared id=%1 authority-error=%2 files=%3")
+                        .arg(profile.id).arg(plan.authorityError.isEmpty() ? QStringLiteral("none")
+                                                                         : plan.authorityError)
+                        .arg(plan.runtimeFiles.size()));
+                    context->startup->advance(generation, StartupState::EnvironmentBuilding,
+                                              QObject::tr("Environment: Buildingâ€¦"));
+                    context->mibLibrary->publishPreparedProfile(profile.id, plan);
+                }, Qt::QueuedConnection);
+            });
+        }, Qt::QueuedConnection);
+    });
 }
 
 Ui_MainW* Snmpb::MainUI(void)
@@ -858,8 +1119,19 @@ AgentProfileManager* Snmpb::APManagerObj(void)
     return (apm);
 }
 
+void Snmpb::ShowEditorDocument()
+{
+    if (workbench) {
+        workbench->setActivity(WorkbenchActivity::Mibs);
+        workbench->openDocument(w.EditorTab);
+    } else {
+        w.TabW->setCurrentWidget(w.EditorTab);
+    }
+}
+
 void Snmpb::Shutdown()
 {
+    if (startup) startup->cancel();
     DiagnosticLogger::log("Shutdown", "trap listener shutdown begin", false);
     if (agent) agent->Shutdown();
     DiagnosticLogger::log("Shutdown", "trap listener shutdown end", false);

@@ -642,6 +642,23 @@ bool MibProfileService::migrateLegacyProfiles(const MibDependencyIndex &index, Q
     return false;
 }
 
+bool MibProfileService::requiresLegacyConversion() const
+{
+    const auto pending = [](const MibProfileRecord &profile) {
+        return !MibProfileIsManifest(profile);
+    };
+    return std::any_of(customProfiles.cbegin(), customProfiles.cend(), pending) ||
+           std::any_of(folderProfiles.cbegin(), folderProfiles.cend(), pending);
+}
+
+bool MibProfileService::hasUnresolvedLegacyResidue() const
+{
+    return std::any_of(customProfiles.cbegin(), customProfiles.cend(),
+        [](const MibProfileRecord &profile) {
+            return MibProfileIsManifest(profile) && !profile.unresolvedLegacyModules.isEmpty();
+        });
+}
+
 bool MibProfileService::migrateLegacyFolderProfiles(QString *error)
 {
     if (folderProfiles.isEmpty()) return true;

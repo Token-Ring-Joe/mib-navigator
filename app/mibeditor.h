@@ -49,7 +49,6 @@ public slots:
     void MibFileNew(void);
     void MibFileOpen(void);
     void MibFileOpen(QString fileName);
-    void MibFileOpenReadOnly(QString fileName);
     void MibFileSave(void);
     void MibFileSaveAs(void);
     void VerifyMIB(void);
@@ -83,7 +82,6 @@ private:
     QLabel *lfn;
     
     QString LoadedFile;
-    bool pristineReadOnly = false;
 
     int num_error;
     int num_warning;

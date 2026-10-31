@@ -47,6 +47,8 @@ int main(int argc,char**argv)
     ok&=check(profiles.find(userId)&&profiles.find(userId)->name=="Existing User Profile","existing profile preserved");
     const auto second=MibLegacyMigration::migrate(settings,profiles,index);
     ok&=check(second.alreadyComplete&&!second.migrated&&profiles.profiles().size()==4,"repeated startup is idempotent");
+    ok&=check(!profiles.requiresLegacyConversion()&&profiles.hasUnresolvedLegacyResidue(),
+        "schema-5 unresolved residue is retryable but does not require startup conversion");
     preloads(settings,{"OTHER-MIB"});
     const auto behindBack=MibLegacyMigration::migrate(settings,profiles,index);
     ok&=check(behindBack.alreadyComplete&&profiles.find(MibLegacyMigration::profileId())->explicitModules==
@@ -67,6 +69,14 @@ int main(int argc,char**argv)
     MibProfileService badProfiles{MibProfileRepository(temp.path())};
     const auto failure=MibLegacyMigration::migrate(failed,badProfiles,index);
     ok&=check(!failure.migrated&&!failure.error.isEmpty()&&!failed.contains(MibLegacyMigration::markerKey()),"profile persistence failure does not write marker");
+
+    const QString pendingPath=temp.filePath("pending-profiles.json");
+    writeFile(pendingPath,"{\"schemaVersion\":4,\"ordinaryProfilesMigrated\":true,\"profiles\":[{\"id\":\"old\",\"name\":\"Old\",\"type\":\"custom\",\"modules\":[\"A-MIB\"]}]}");
+    MibProfileService pending{MibProfileRepository(pendingPath)};
+    ok&=check(pending.requiresLegacyConversion(),"schema-1 through schema-4 authority still requests conversion");
+    QString pendingError;
+    ok&=check(pending.migrateLegacyProfiles(index,&pendingError)&&!pending.requiresLegacyConversion(),
+        "explicit legacy conversion produces a schema-5 manifest");
     std::cout<<"migration_inputs="<<first.inputCount<<" identities="
              <<migratedIdentityCount<<" elapsed_ms="<<migrationMsecs<<'\n';
     return ok?0:1;

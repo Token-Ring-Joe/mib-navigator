@@ -57,18 +57,18 @@ int main(int argc, char **argv)
     bool ok = true;
     QString error;
     MibLibraryRecord origin;
-    origin.status = MibLibraryStatus::Bundled;
-    ok &= check(MibLibraryOriginText(origin) == "Built-in", "built-in origin label");
+    origin.status = MibLibraryStatus::Standards;
+    ok &= check(MibLibraryOriginText(origin) == "Standards", "Standards origin label");
     origin.status = MibLibraryStatus::Installed; origin.sourceId = "iana";
     ok &= check(MibLibraryOriginText(origin) == "IANA", "IANA origin label");
     origin.sourceId.clear(); origin.sourceName.clear(); origin.localPath = "local.mib";
     ok &= check(MibLibraryOriginText(origin) == "Imported", "imported origin label");
-    origin.status = MibLibraryStatus::Bundled; origin.sourceName = "Bundled";
+    origin.status = MibLibraryStatus::Standards; origin.sourceName = "Standards";
     const MibLibraryFileInfo builtInInfo = MibLibraryFileInformation(origin);
-    ok &= check(builtInInfo.origin == "Built-in" && !builtInInfo.showProvider &&
+    ok &= check(builtInInfo.origin == "Standards" && !builtInInfo.showProvider &&
                 !builtInInfo.showSourceUrl && !builtInInfo.showTimestamp &&
                 !builtInInfo.showSha256 && !builtInInfo.showState,
-                "built-in file info hides redundant/non-applicable provenance");
+                "Standards file info hides redundant/non-applicable provenance");
     MibLibraryRecord ianaInfoRecord;
     ianaInfoRecord.moduleName = "IANA-FIXTURE-MIB";
     ianaInfoRecord.status = MibLibraryStatus::Installed;
@@ -195,7 +195,7 @@ END
     QByteArray unsafe = catalog.serialize().replace("vendor-file.my", "../escape");
     ok &= check(!MibCatalog::parse(unsafe, &parsed, &error), "catalog path traversal rejection");
 
-    QMap<QString, MibLibraryStatus> known{{"C", MibLibraryStatus::Bundled}};
+    QMap<QString, MibLibraryStatus> known{{"C", MibLibraryStatus::Standards}};
     MibDependencyPlan plan = MibDependencyResolver().resolve({"A"}, known, catalog);
     ok &= check(plan.orderedDownloads == QStringList({"B", "A"}),
                 "dependency-first deterministic deduplicated order");
@@ -336,7 +336,7 @@ END
     const auto inventory = library.inventory({bundled}, catalog, {localOne, localTwo});
     bool bundledFound = false, downloadedFound = false, localOneFound = false, localTwoFound = false;
     for (const auto &record : inventory) {
-        bundledFound |= record.moduleName == "BASE-MIB" && record.status == MibLibraryStatus::Bundled;
+        bundledFound |= record.moduleName == "BASE-MIB" && record.status == MibLibraryStatus::Standards;
         downloadedFound |= record.moduleName == "VENDOR-MIB" && record.status == MibLibraryStatus::Installed;
         localOneFound |= record.moduleName == localOne.name && record.localPath == localOne.path &&
             MibLibraryOriginText(record) == "Imported";
@@ -360,7 +360,15 @@ END
         "semantic validation failure leaves no installed file");
     MibCatalogEntry bundledCollision = entry("BASE-MIB"); bundledCollision.filename = "base-new.mib";
     ok &= check(!library.install(bundledCollision, mib("BASE-MIB"), {bundled}, nullptr, &error),
-                "bundled module cannot be overwritten");
+                "a download never overwrites a module that exists in the Standards folder");
+    ok &= check(error.contains("Standards folder") && !error.contains("immutable"),
+                "refusal explains that the module is in the user-owned Standards folder");
+    QString standardsFileForBase;
+    for (const auto &record : library.inventory({bundled}, catalog, {}))
+        if (record.moduleName == "BASE-MIB") standardsFileForBase = record.localPath;
+    ok &= check(!standardsFileForBase.isEmpty() &&
+                (QFile::permissions(standardsFileForBase) & QFileDevice::WriteUser),
+                "Standards module files are user-writable and therefore editable");
     ok &= check(!library.install(downloadable, content, {bundled}, nullptr, &error),
                 "duplicate install rejected");
     const QByteArray unsaved = mib("BUFFER-MIB") + "SYNTAX CounterS\n";

@@ -1,6 +1,7 @@
 #include "mibruntimestage.h"
 
 #include <QCryptographicHash>
+#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -46,6 +47,12 @@ bool safeIdentity(const QString &identity)
 
 QString defaultRoot()
 {
+    if (QCoreApplication::instance()) {
+        const QString isolated = QCoreApplication::instance()
+            ->property("snmpb.isolatedStateRoot").toString();
+        if (!isolated.isEmpty())
+            return QDir(isolated).filePath(QStringLiteral("cache/mib-runtime-v1"));
+    }
     return QDir(QStandardPaths::writableLocation(QStandardPaths::CacheLocation))
         .filePath(QStringLiteral("mib-runtime-v1"));
 }

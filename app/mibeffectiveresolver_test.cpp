@@ -207,6 +207,11 @@ int main(int argc, char **argv)
         return resolver.resolve(input, index);
     };
 
+    const auto emptyManifest = resolve("empty-manifest", {}, {});
+    ok &= check(emptyManifest.authorityError.isEmpty() && emptyManifest.runtimeFiles.isEmpty() &&
+                emptyManifest.explicitModules.isEmpty(),
+                "valid empty schema-5 manifest produces an authorized zero-root plan");
+
     const auto simple = resolve("simple", {simpleRoot}, {batch, standards});
     ok &= check(simple.isComplete() && simple.runtimeFiles.size() == 2 &&
                 fileProviding(simple, "PRIMARY-MIB")->origin == MibEffectivePlanFileOrigin::Root &&

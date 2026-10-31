@@ -46,6 +46,16 @@ if(MSVC)
     )
 endif()
 
+# The x86 rotate helpers in tomcrypt_macros.h use an "I" (compile-time constant)
+# asm constraint, which GCC/Clang only satisfy after inlining. Unoptimized
+# (Debug) builds do not inline, so use the portable C rotates there.
+if(NOT WIN32)
+    target_compile_definitions(snmpb_libtomcrypt
+        PRIVATE
+            $<$<CONFIG:Debug>:LTC_NO_ASM>
+    )
+endif()
+
 if(WIN32)
     target_link_libraries(snmpb_libtomcrypt
         PRIVATE

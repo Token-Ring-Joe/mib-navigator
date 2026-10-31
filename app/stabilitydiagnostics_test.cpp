@@ -14,6 +14,14 @@ bool check(bool condition, const char *message)
     if (!condition) std::cerr << "FAIL: " << message << '\n';
     return condition;
 }
+
+// The logger delivers to the widget with queued calls. One processEvents() does
+// not reliably flush them on every platform event loop (it does not on glib/xcb).
+void deliverQueuedCalls()
+{
+    QCoreApplication::sendPostedEvents();
+    QCoreApplication::processEvents();
+}
 }
 
 int main(int argc, char **argv)
@@ -27,14 +35,14 @@ int main(int argc, char **argv)
     DiagnosticLogger::attachLogWidget(&displayed);
     DiagnosticLogger::log("Test",
         "community=public password=hunter2 authSecret=alpha privacySecret=beta");
-    QCoreApplication::processEvents();
+    deliverQueuedCalls();
     ok &= check(displayed.toPlainText().contains("[Test]"),
                 "structured message appears in displayed log");
     DiagnosticLogger::clearDisplayedLog();
-    QCoreApplication::processEvents();
+    deliverQueuedCalls();
     ok &= check(displayed.toPlainText().isEmpty(), "Clear Log clears displayed session text");
     DiagnosticLogger::log("Test", "message after clear");
-    QCoreApplication::processEvents();
+    deliverQueuedCalls();
     ok &= check(displayed.toPlainText().contains("message after clear"),
                 "messages continue after Clear Log");
     const QString timestamp = DiagnosticLogger::structuredTimestamp();

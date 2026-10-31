@@ -119,6 +119,9 @@ int main(int argc, char **argv)
     receiver.shouldStart = true;
     service.start(&receiver); service.start(&receiver);
     check(receiver.stops == 2 && service.isRunning(), "repeated lifecycle stops previous receiver");
+    // The service does not own the receiver, and `receiver` is destroyed before
+    // `service`. Stop it here so ~TrapService() never touches a dead receiver.
+    service.stop();
 
     TrapPresentation view = TrapPresenter().present(record);
     check(view.summaryColumns.size() == 9 && view.varbindLines.size() == 1,

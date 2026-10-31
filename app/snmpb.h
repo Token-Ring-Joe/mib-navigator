@@ -44,6 +44,8 @@ class Preferences;
 class DevicePane;
 class QDockWidget;
 class MibLibraryWidget;
+class WorkbenchShell;
+class StartupCoordinator;
 
 class Snmpb: public QObject
 {
@@ -53,6 +55,7 @@ public:
     Snmpb(bool offline = false);
     ~Snmpb() override;
     void BindToGUI(QMainWindow *mw);
+    void StartDeferredInitialization();
     Ui_MainW* MainUI(void);
     Agent* AgentObj(void);
     Trap* TrapObj(void);
@@ -67,7 +70,9 @@ public:
     UsmCredentialService* UsmCredentials(void);
     CommunityCredentialService* CommunityCredentials(void);
     Preferences* PreferencesObj(void);
+    StartupCoordinator* StartupCoordinatorObj(void) { return startup; }
     void Shutdown();
+    void ShowEditorDocument();
 
     void CheckForConfigFiles(void);
     QString GetBootCounterConfigFile(void);
@@ -115,10 +120,14 @@ private:
     DevicePane *devicePane;
     QDockWidget *devicesDock;
     MibLibraryWidget *mibLibrary;
+    WorkbenchShell *workbench = nullptr;
+    StartupCoordinator *startup = nullptr;
+    QMainWindow *mainWindow = nullptr;
 
     QString start_msg;
     bool start_issuccess;
     bool initializingMibProfile = true;
+    bool startupCatalogRequested = false;
 };
 
 #endif /* SNMPB_H */

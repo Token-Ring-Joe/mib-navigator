@@ -30,6 +30,8 @@
 #include <QTabWidget>
 #include <QTextEdit>
 #include <QTimer>
+#include <QPointer>
+#include <QThreadPool>
 #include <QTreeWidget>
 #include <QVBoxLayout>
 
@@ -136,7 +138,7 @@ QString normalizeContactDisplayText(const QString &source)
 QString inventoryStatusText(MibLibraryStatus status)
 {
     switch (status) {
-    case MibLibraryStatus::Bundled:
+    case MibLibraryStatus::Standards:
     case MibLibraryStatus::Installed: return QObject::tr("Ready");
     case MibLibraryStatus::Available: return QObject::tr("Available");
     case MibLibraryStatus::Downloading: return QObject::tr("Downloading");
@@ -157,10 +159,9 @@ MibLibraryWidget::MibLibraryWidget(const QStringList &paths,
       , profiles(MibProfileRepository(QDir(MibCollection::legacyManagedRoot())
                      .filePath("profiles-v1.json")))
 {
-    MibCollection(library.rootPath()).initialize(bundledPaths);
     setObjectName("MibLibraryWorkspace");
     auto *outer = new QVBoxLayout(this);
-    auto *workspaceTabs = new QTabWidget(this);
+    workspaceTabs = new QTabWidget(this);
     workspaceTabs->setObjectName("MibLibraryTabs");
     outer->addWidget(workspaceTabs);
     auto *inventoryPage = new QWidget(workspaceTabs);
@@ -447,6 +448,10 @@ MibLibraryWidget::MibLibraryWidget(const QStringList &paths,
     connect(statusFilter, &QComboBox::currentIndexChanged, this, &MibLibraryWidget::applyFilter);
     connect(localRefresh, &QPushButton::clicked, this, [this]() {
         if (callbacks.collectionChanged) callbacks.collectionChanged();
+        QString migrationError;
+        if (callbacks.retryLegacyProfiles &&
+            !callbacks.retryLegacyProfiles(profiles, &migrationError) &&
+            !migrationError.isEmpty()) status->setText(migrationError);
         refresh();
     });
     connect(checkDependencies, &QPushButton::clicked, this, [this, checkDependencies]() {
@@ -470,6 +475,7 @@ MibLibraryWidget::MibLibraryWidget(const QStringList &paths,
     });
     connect(installDependenciesButton, &QPushButton::clicked, this, [this]() { downloadSelected(true); });
     connect(table, &QTableWidget::itemChanged, this, [this](QTableWidgetItem *item) {
+        if (initialPublishing) return;
         if (item && item->column() == 0) { updateSelectionUi(); resolveSelected(); }
     });
     connect(openEditorButton, &QPushButton::clicked, this, &MibLibraryWidget::openCurrentModule);
@@ -557,7 +563,118 @@ MibLibraryWidget::MibLibraryWidget(const QStringList &paths,
         downloadNext();
     });
     loadCachedCatalog();
-    refresh();
+    reloadProfiles();
+    status->setText(tr("Catalog loadingâ€¦"));
+    setOperationActive(true);
+}
+
+void MibLibraryWidget::beginInitialRefresh(quint64 generation)
+{
+    if (initialReady) { emit initialRefreshFinished(0, 0); return; }
+    initialGeneration = generation;
+    const QList<MibModuleRecord> localRecords = callbacks.localInventory
+        ? callbacks.localInventory() : QList<MibModuleRecord>{};
+    const MibLibraryService librarySnapshot = library;
+    const QStringList pathsSnapshot = bundledPaths;
+    const MibCatalog catalogSnapshot = catalog;
+    const QPointer<MibLibraryWidget> context(this);
+    QThreadPool::globalInstance()->start(
+        [context, generation, librarySnapshot, pathsSnapshot, catalogSnapshot,
+         localRecords]() mutable {
+        QElapsedTimer timer;
+        timer.start();
+        MibCollection(librarySnapshot.rootPath()).initialize(pathsSnapshot);
+        QList<MibLibraryRecord> prepared = librarySnapshot.inventory(
+            pathsSnapshot, catalogSnapshot, localRecords);
+        const qint64 elapsed = timer.elapsed();
+        QMetaObject::invokeMethod(context,
+            [context, generation, prepared = std::move(prepared), elapsed]() mutable {
+            if (!context || context->initialGeneration != generation) return;
+            context->records = prepared;
+            context->pendingInitialRecords = std::move(prepared);
+            context->pendingInitialSources = {context->tr("All origins")};
+            context->pendingInitialRow = 0;
+            context->initialPreparationMs = elapsed;
+            context->initialPublicationTimer.start();
+            context->initialPublishing = true;
+            context->table->setUpdatesEnabled(false);
+            context->table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Fixed);
+            context->table->setRowCount(context->pendingInitialRecords.size());
+            context->publishInitialChunk(generation);
+        }, Qt::QueuedConnection);
+    });
+}
+
+void MibLibraryWidget::publishRecord(int row, const MibLibraryRecord &record,
+                                     const QSet<QString> &selectedBefore)
+{
+    auto *checkItem = new QTableWidgetItem;
+    checkItem->setCheckState(selectedBefore.contains(record.moduleName)
+        ? Qt::Checked : Qt::Unchecked);
+    checkItem->setFlags((checkItem->flags() | Qt::ItemIsUserCheckable) & ~Qt::ItemIsEditable);
+    auto *moduleItem = new QTableWidgetItem(record.moduleName);
+    const QString failure = sessionState.failureReason(record.moduleName);
+    if (!failure.isEmpty()) {
+        moduleItem->setIcon(style()->standardIcon(QStyle::SP_MessageBoxCritical));
+        moduleItem->setToolTip(tr("Failed: %1").arg(failure));
+    }
+    const MibLibraryStatus displayedStatus = sessionState.status(record.moduleName, record.status);
+    auto *statusItem = new QTableWidgetItem(inventoryStatusText(displayedStatus));
+    auto *activeItem = new QTableWidgetItem(tr("Loading"));
+    if (displayedStatus == MibLibraryStatus::Unresolved ||
+        displayedStatus == MibLibraryStatus::Conflict ||
+        displayedStatus == MibLibraryStatus::Invalid ||
+        displayedStatus == MibLibraryStatus::Failed)
+        statusItem->setIcon(style()->standardIcon(QStyle::SP_MessageBoxWarning));
+    auto *revisionItem = new QTableWidgetItem(record.revision);
+    auto *originItem = new QTableWidgetItem(originText(record));
+    for (QTableWidgetItem *item : {moduleItem, statusItem, activeItem, revisionItem, originItem})
+        item->setFlags(item->flags() & ~Qt::ItemIsEditable);
+    table->setItem(row, 0, checkItem);
+    table->setItem(row, 1, moduleItem);
+    table->setItem(row, 2, statusItem);
+    table->setItem(row, 3, activeItem);
+    table->setItem(row, 4, revisionItem);
+    table->setItem(row, 5, originItem);
+}
+
+void MibLibraryWidget::publishInitialChunk(quint64 generation)
+{
+    if (initialGeneration != generation) return;
+    const int end = qMin(pendingInitialRow + 24, pendingInitialRecords.size());
+    for (; pendingInitialRow < end; ++pendingInitialRow) {
+        const MibLibraryRecord &record = pendingInitialRecords[pendingInitialRow];
+        publishRecord(pendingInitialRow, record);
+        const QString origin = originText(record);
+        if (!pendingInitialSources.contains(origin)) pendingInitialSources.append(origin);
+    }
+    if (pendingInitialRow < pendingInitialRecords.size()) {
+        QTimer::singleShot(0, this, [this, generation]() { publishInitialChunk(generation); });
+        return;
+    }
+    table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    table->setUpdatesEnabled(true);
+    initialPublishing = false;
+    sourceFilter->clear();
+    sourceFilter->addItems(pendingInitialSources);
+    applyFilter();
+    libraryEmptyState->setVisible(records.isEmpty());
+    status->setText(tr("%n modules in library", nullptr, records.size()));
+    setOperationActive(false);
+    pendingInitialRecords.clear();
+    pendingInitialSources.clear();
+    initialReady = true;
+    ++counters.inventoryBuilds;
+    ++counters.profilePopulations;
+    showCurrentInfo();
+    updateSelectionUi();
+    emit initialRefreshFinished(initialPreparationMs, initialPublicationTimer.elapsed());
+}
+
+void MibLibraryWidget::showWorkspaceMode(int mode)
+{
+    workspaceTabs->setCurrentIndex(qBound(0, mode, workspaceTabs->count() - 1));
+    activate();
 }
 
 void MibLibraryWidget::loadCachedCatalog()
@@ -587,6 +704,11 @@ void MibLibraryWidget::refreshCatalog()
 
 void MibLibraryWidget::refresh()
 {
+    refreshImpl(true);
+}
+
+void MibLibraryWidget::refreshImpl(bool prepareProfile)
+{
     QElapsedTimer totalTimer; totalTimer.start();
     QElapsedTimer phaseTimer; phaseTimer.start();
     ++counters.automaticProfileScans;
@@ -613,6 +735,8 @@ void MibLibraryWidget::refresh()
             ? activePlan.effectiveModules : activeProfile->explicitModules;
         activeModules = QSet<QString>(effective.cbegin(), effective.cend());
     }
+    table->setUpdatesEnabled(false);
+    table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Fixed);
     table->setRowCount(records.size());
     QStringList sources{tr("All origins")};
     for (int row = 0; row < records.size(); ++row) {
@@ -655,6 +779,8 @@ void MibLibraryWidget::refresh()
         if (!sources.contains(originText(record))) sources.append(originText(record));
     }
     const qint64 tableBuildMs = phaseTimer.restart();
+    table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    table->setUpdatesEnabled(true);
     const QString oldSource = sourceFilter->currentText();
     sourceFilter->clear(); sourceFilter->addItems(sources);
     sourceFilter->setCurrentText(oldSource); applyFilter();
@@ -671,8 +797,19 @@ void MibLibraryWidget::refresh()
         ? tr("%n modules in library", nullptr, records.size())
         : tr("%n modules in library — %1", nullptr, records.size()).arg(sourceStatusText));
     ++counters.profilePopulations;
-    refreshProfiles(profileCombo && profileCombo->currentIndex() >= 0
-        ? profileCombo->currentData().toString() : QString());
+    if (prepareProfile) {
+        refreshProfiles(profileCombo && profileCombo->currentIndex() >= 0
+            ? profileCombo->currentData().toString() : QString());
+    } else {
+        QString id = QSettings().value("mib-library/current-profile",
+            MibProfileDefinitions::allId()).toString();
+        id = MibProfileDefinitions::validCurrentId(id, profiles.profiles());
+        const QSignalBlocker blocker(profileCombo);
+        profileCombo->clear();
+        for (const MibProfileRecord &profile : profiles.profiles())
+            profileCombo->addItem(profile.name, profile.id);
+        profileCombo->setCurrentIndex(qMax(0, profileCombo->findData(id)));
+    }
     const qint64 profilesMs = phaseTimer.restart();
     showCurrentInfo();
     updateSelectionUi();
@@ -681,6 +818,57 @@ void MibLibraryWidget::refresh()
         .arg(totalTimer.elapsed()).arg(automaticProfilesMs).arg(localProjectionMs)
         .arg(inventoryMs).arg(tableBuildMs).arg(filterMs).arg(profilesMs)
         .arg(detailsMs).arg(records.size()));
+}
+
+MibProfileRecord MibLibraryWidget::currentProfile() const
+{
+    const MibProfileRecord *profile = profileCombo
+        ? profiles.find(profileCombo->currentData().toString()) : nullptr;
+    return profile ? *profile : MibProfileRecord{};
+}
+
+void MibLibraryWidget::reloadProfiles()
+{
+    QString error;
+    profiles.reload(&error);
+    QString id = QSettings().value("mib-library/current-profile",
+        MibProfileDefinitions::allId()).toString();
+    id = MibProfileDefinitions::validCurrentId(id, profiles.profiles());
+    const QSignalBlocker blocker(profileCombo);
+    profileCombo->clear();
+    for (const MibProfileRecord &profile : profiles.profiles())
+        profileCombo->addItem(profile.name, profile.id);
+    profileCombo->setCurrentIndex(qMax(0, profileCombo->findData(id)));
+    if (!error.isEmpty()) status->setText(error);
+}
+
+void MibLibraryWidget::publishPreparedProfile(const QString &id,
+                                              const MibEffectivePlan &plan)
+{
+    const int index = profileCombo->findData(id);
+    if (index < 0) return;
+    {
+        const QSignalBlocker blocker(profileCombo);
+        profileCombo->setCurrentIndex(index);
+    }
+    QSettings().setValue("mib-library/current-profile", id);
+    const MibProfileRecord *profile = profiles.find(id);
+    if (!profile) return;
+    const bool editable = profile->type == MibProfileType::Custom;
+    renameProfileButton->setEnabled(editable);
+    deleteProfileButton->setEnabled(editable);
+    addMemberButton->setEnabled(editable);
+    removeMemberButton->setEnabled(editable);
+    profileSource->setText(tr("%n exact root file(s)", nullptr, profile->roots.size()));
+    profileGuidance->setText(tr("Profile roots are a saved snapshot of exact files. Dependencies are derived when the Profile is activated."));
+    refreshProfileLists(&plan);
+    for (int row = 0; row < table->rowCount(); ++row) {
+        const QString module = table->item(row, 1)->text();
+        table->item(row, 3)->setText(plan.effectiveModules.contains(module)
+            ? tr("Included") : tr("Not included"));
+    }
+    updateSelectionUi();
+    emit profileSelectionChanged(id, plan);
 }
 
 void MibLibraryWidget::activate()
@@ -904,8 +1092,7 @@ void MibLibraryWidget::openCurrentModule()
 {
     const int row = table->currentRow();
     if (row >= 0 && row < records.size() && !records[row].localPath.isEmpty())
-        emit openModuleRequested(records[row].localPath,
-                                 records[row].status == MibLibraryStatus::Bundled);
+        emit openModuleRequested(records[row].localPath);
 }
 
 void MibLibraryWidget::refreshProfiles(const QString &selectId)
@@ -976,6 +1163,9 @@ void MibLibraryWidget::browseLibraryRoot()
     libraryRootEdit->setText(library.rootPath());
     profiles.migrateLegacyFolderProfiles();
     if (callbacks.collectionChanged) callbacks.collectionChanged();
+    QString migrationError;
+    if (callbacks.retryLegacyProfiles)
+        callbacks.retryLegacyProfiles(profiles, &migrationError);
     refresh(); refreshProfiles();
     if (!result.conflicts.isEmpty())
         QMessageBox::warning(this, tr("MIB Library conflicts"),
@@ -1008,6 +1198,9 @@ void MibLibraryWidget::importFiles()
         return;
     }
     if (callbacks.collectionChanged) callbacks.collectionChanged();
+    QString migrationError;
+    if (callbacks.retryLegacyProfiles)
+        callbacks.retryLegacyProfiles(profiles, &migrationError);
     refresh();
     status->setText(tr("Imported %1 file(s) to the Library; %2 identical file(s) already existed; %3 conflict(s) were preserved. Active Profile membership was not changed.")
         .arg(result.importedCopied).arg(result.identicalSkipped).arg(result.conflicts.size()));
@@ -1049,7 +1242,17 @@ void MibLibraryWidget::refreshProfileLists(const MibEffectivePlan *providedPlan)
     memberList->clear();
     if (!profile->roots.isEmpty()) {
         for (const auto &member : profile->roots) {
-            const auto state = MibProfileMemberCurrentState(member);
+            MibProfileMemberState state = QFileInfo::exists(member.canonicalPath)
+                ? MibProfileMemberState::Changed : MibProfileMemberState::Missing;
+            for (const QString &identity : member.identities) {
+                const MibEffectivePlanMember *resolved = effective.member(identity);
+                if (resolved && resolved->provider.sha256 == member.sha256 &&
+                    QFileInfo(resolved->provider.canonicalPath).absoluteFilePath().compare(
+                        QFileInfo(member.canonicalPath).absoluteFilePath(), Qt::CaseInsensitive) == 0) {
+                    state = MibProfileMemberState::Current;
+                    break;
+                }
+            }
             const QString stateText = state == MibProfileMemberState::Current ? tr("OK")
                 : state == MibProfileMemberState::Missing ? tr("Missing")
                 : state == MibProfileMemberState::Changed ? tr("Changed") : tr("Catalog stale");

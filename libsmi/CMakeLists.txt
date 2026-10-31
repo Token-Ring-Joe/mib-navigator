@@ -59,6 +59,9 @@ if(WIN32)
     )
 else()
     target_include_directories(snmpb_libsmi PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+    # The generated parser declares smiparse() with an empty parameter list.
+    # C23 (the GCC 15 default) reads that as (void), so build as C17.
+    set_target_properties(snmpb_libsmi PROPERTIES C_STANDARD 17 C_EXTENSIONS ON)
 endif()
 
 # Build libsmi's native MIB validation utility.
@@ -84,6 +87,7 @@ if(WIN32)
     )
 else()
     target_include_directories(snmpb_smilint PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+    set_target_properties(snmpb_smilint PROPERTIES C_STANDARD 17 C_EXTENSIONS ON)
 endif()
 
 target_link_libraries(snmpb_smilint

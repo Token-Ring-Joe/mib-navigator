@@ -237,7 +237,8 @@ MibEffectivePlan MibEffectivePlanResolver::resolve(const MibProfileRecord &profi
     plan.profileName = profile.name;
     plan.profileType = profile.type;
     plan.libraryGeneration = library.generation();
-    const bool exactProfile = !profile.members.isEmpty() || !profile.unresolvedLegacyModules.isEmpty();
+    const bool exactProfile = MibProfileIsManifest(profile) || !profile.members.isEmpty() ||
+                              !profile.unresolvedLegacyModules.isEmpty();
     if (!exactProfile) {
         plan.authorityError = QObject::tr(
             "Profile has legacy identity-only membership and must be migrated before use");
@@ -680,6 +681,7 @@ MibEffectivePlan MibEffectiveRuntimePlanResolver::resolve(
     }
 
     MibProfileRecord manifest;
+    manifest.manifestVersion = 1;
     manifest.id = input.id.isEmpty() ? QStringLiteral("resolver-v1") : input.id;
     manifest.name = QStringLiteral("Resolved runtime plan");
     manifest.type = MibProfileType::Custom;

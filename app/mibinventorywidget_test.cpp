@@ -6,6 +6,7 @@
 #include <QCheckBox>
 #include <QDir>
 #include <QFile>
+#include <QElapsedTimer>
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
@@ -18,6 +19,7 @@
 #include <QTableWidget>
 #include <QTabWidget>
 #include <QTemporaryDir>
+#include <QThread>
 #include <QTreeWidget>
 #include <QGroupBox>
 #include <QComboBox>
@@ -55,6 +57,7 @@ int main(int argc, char **argv)
     QSettings().remove("mib-library/dependencies-status-width");
     QSettings().remove("mib-library/inventory-details-splitter");
     QTemporaryDir temp;
+    application.setProperty("snmpb.isolatedStateRoot", temp.filePath("state"));
     const QString fixtureRoot = temp.filePath("MIBRoot");
     const QString standardsRoot = QDir(fixtureRoot).filePath("Standards");
     QDir().mkpath(standardsRoot);
@@ -136,6 +139,23 @@ int main(int argc, char **argv)
         plan.effectiveModules = plan.explicitModules; plan.sha256 = "test-plan"; return plan;
     };
     MibLibraryWidget widget({}, nullptr, &transport, callbacks);
+    int initialPublications = 0;
+    bool publishedOnGuiThread = false;
+    QObject::connect(&widget, &MibLibraryWidget::initialRefreshFinished,
+                     [&]() {
+        ++initialPublications;
+        publishedOnGuiThread = QThread::currentThread() == application.thread();
+    });
+    widget.beginInitialRefresh(1);
+    widget.beginInitialRefresh(2);
+    QElapsedTimer initialWait; initialWait.start();
+    while (!widget.initialRefreshReady() && initialWait.elapsed() < 5000) {
+        application.processEvents();
+        QThread::msleep(1);
+    }
+    ok &= check(widget.initialRefreshReady() && initialPublications == 1 &&
+                publishedOnGuiThread,
+                "stale Catalog preparation is rejected and current result publishes once on GUI thread");
     int runtimeSelectionRequests = 0;
     QObject::connect(&widget, &MibLibraryWidget::profileSelectionChanged,
                      [&runtimeSelectionRequests](const QString &, const MibEffectivePlan &) {
@@ -217,6 +237,9 @@ int main(int argc, char **argv)
     ok &= check(applicationSourceText.contains("modules->CheckProfileDependencies(QStringLiteral(\"mib-library\")") &&
                 applicationSourceText.contains("modules->DependencyIndex()->moduleNames()"),
                 "MIB Library owns the library-wide Check Dependencies action");
+    ok &= check(!applicationSourceText.contains("MibFileOpenReadOnly") &&
+                !viewSourceText.contains("MibFileOpenReadOnly"),
+                "no MIB file is opened read-only: every MIB stays editable so errors can be fixed");
     ok &= check(moduleSourceText.contains("Legacy module editor ignored; use a Profile") &&
                 !moduleSourceText.contains("PersistWanted"),
                 "retired Available/Loaded arrows cannot recreate shadow legacy authority");
@@ -260,16 +283,16 @@ int main(int argc, char **argv)
             ok &= check(!(table->item(row,column)->flags() & Qt::ItemIsEditable),
                         "Inventory item is read-only");
     ok &= check(table && !table->item(0,5)->text().isEmpty(), "module origin displayed");
-    QString opened; bool readOnly = false;
+    QString opened;
     QObject::connect(&widget, &MibLibraryWidget::openModuleRequested,
-                     [&](const QString &path, bool immutable) { opened = path; readOnly = immutable; });
+                     [&](const QString &path) { opened = path; });
     table->setCurrentCell(0, 0);
     QMetaObject::invokeMethod(table, "cellDoubleClicked", Qt::DirectConnection,
                               Q_ARG(int, 0), Q_ARG(int, 0));
     ok &= check(opened.endsWith("/Standards/A-MIB") ||
                 opened.endsWith("\\Standards\\A-MIB"),
                 "double click opens selected working Standards file");
-    ok &= check(!readOnly, "local library module opens as editable");
+    ok &= check(!opened.isEmpty(), "every library module opens in the editor, which is always editable");
     auto *moduleInfo = widget.findChild<QLabel *>("MibLibraryInfo_module");
     ok &= check(moduleInfo && moduleInfo->text() == "A-MIB", "Info reflects selected record");
     ok &= check(widget.findChild<QLabel *>("MibLibraryInfo_moduleOid")->text() ==
@@ -284,6 +307,12 @@ int main(int argc, char **argv)
     normalizationCallbacks.effectivePlan = callbacks.effectivePlan;
     MibLibraryWidget normalizationWidget({temp.path()}, nullptr, &transport,
                                          normalizationCallbacks);
+    normalizationWidget.beginInitialRefresh(1);
+    QElapsedTimer normalizationWait; normalizationWait.start();
+    while (!normalizationWidget.initialRefreshReady() && normalizationWait.elapsed() < 5000) {
+        application.processEvents();
+        QThread::msleep(1);
+    }
     normalizationWidget.findChild<QTableWidget *>("MibLibraryTable")->setCurrentCell(0, 0);
     ok &= check(normalizationWidget.findChild<QLabel *>("MibLibraryInfo_organization")->text() ==
                 "Org Group",
@@ -366,7 +395,16 @@ int main(int argc, char **argv)
     ok &= check(header->property("checkState").toInt() == Qt::Checked &&
                 count->text() == "3 selected for download" && table->item(0, 0)->checkState() == Qt::Checked,
                 "unchecked header selects filtered rows without clearing hidden selection");
-    table->item(2, 0)->setCheckState(Qt::Unchecked); application.processEvents();
+    // Rows are sorted by module name and the fixture also imports DECLARED-IMPORT-MIB,
+    // so address the visible IANA row by name instead of by position.
+    int visibleFilteredRow = -1;
+    for (int row = 0; row < table->rowCount(); ++row)
+        if (table->item(row, 1)->text() == "IANA-ONE-MIB") visibleFilteredRow = row;
+    ok &= check(visibleFilteredRow >= 0 && !table->isRowHidden(visibleFilteredRow),
+                "IANA-ONE-MIB is a visible filtered row");
+    if (visibleFilteredRow >= 0)
+        table->item(visibleFilteredRow, 0)->setCheckState(Qt::Unchecked);
+    application.processEvents();
     ok &= check(header->property("checkState").toInt() == Qt::PartiallyChecked,
                 "individual filtered checkbox updates header to partial");
     clickHeaderCheckbox(header); application.processEvents();
@@ -500,6 +538,7 @@ int main(int argc, char **argv)
         return liveCached;
     };
     MibLibraryWidget synchronizationWidget({}, nullptr, &transport, synchronizationCallbacks);
+    synchronizationWidget.refresh();
     auto *syncSelector = synchronizationWidget.findChild<QComboBox *>("MibProfileEditorSelector");
     synchronizationWidget.selectProfile(MibProfileDefinitions::standardsId());
     auto *syncTable = synchronizationWidget.findChild<QTableWidget *>("MibLibraryTable");
@@ -537,8 +576,11 @@ int main(int argc, char **argv)
                 syncAvailableFilter->text() == "NORTEL" && syncMemberFilter->text() == "BASE" &&
                 syncIncludeStandards->isChecked() == standardsStateBefore,
                 "profile identity, filters, and standards-base state survive refresh");
-    ok &= check(synchronizationWidget.profileService()->find(MibProfileDefinitions::standardsId())
-                    ->explicitModules == MibProfileDefinitions::standardsModules(),
+    QStringList synchronizedStandards = synchronizationWidget.profileService()
+        ->find(MibProfileDefinitions::standardsId())->explicitModules;
+    QStringList expectedStandards = MibProfileDefinitions::standardsModules();
+    synchronizedStandards.sort(); expectedStandards.sort();
+    ok &= check(synchronizedStandards == expectedStandards,
                 "explicit profile membership survives synchronization refresh");
     int learnedRows = 0; bool staleMissing = false;
     for (int row = 0; row < syncRequired->count(); ++row) {

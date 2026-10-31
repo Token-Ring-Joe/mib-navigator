@@ -12,7 +12,7 @@
 #include <functional>
 
 enum class MibLibraryStatus {
-    Bundled, Installed, Available, Downloading, Failed, Invalid, Unresolved,
+    Standards, Installed, Available, Downloading, Failed, Invalid, Unresolved,
     Conflict
 };
 

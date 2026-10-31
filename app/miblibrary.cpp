@@ -390,7 +390,7 @@ QList<MibLibraryRecord> MibLibraryService::inventory(const QStringList &bundledP
         }
     };
     Q_UNUSED(bundledPaths)
-    scan({standardsPath()}, MibLibraryStatus::Bundled, QStringLiteral("Bundled"));
+    scan({standardsPath()}, MibLibraryStatus::Standards, QStringLiteral("Standards"));
     QStringList localPaths = MibCollection(root).runtimeSearchPaths();
     const QString standardsPrefix = QDir::cleanPath(standardsPath()) + QDir::separator();
     localPaths.erase(std::remove_if(localPaths.begin(), localPaths.end(),
@@ -446,8 +446,8 @@ bool MibLibraryService::install(const MibCatalogEntry &entry, const QByteArray &
         if (error) *error = "Downloaded module identity does not match catalog"; return false;
     }
     for (const MibLibraryRecord &item : inventory(bundledPaths))
-        if (item.moduleName == entry.moduleName && item.status == MibLibraryStatus::Bundled) {
-            if (error) *error = "Bundled module is immutable"; return false;
+        if (item.moduleName == entry.moduleName && item.status == MibLibraryStatus::Standards) {
+            if (error) *error = "This module already exists in the Standards folder. Edit it there, or remove it first."; return false;
         }
     QDir().mkpath(downloadedPath()); QDir().mkpath(metadataPath());
     const QString cachePath = QDir(root).filePath("cache"); QDir().mkpath(cachePath);
@@ -488,7 +488,7 @@ bool MibLibraryService::install(const MibCatalogEntry &entry, const QByteArray &
 QString MibLibraryStatusText(MibLibraryStatus status)
 {
     switch (status) {
-    case MibLibraryStatus::Bundled: return "Bundled";
+    case MibLibraryStatus::Standards: return "Standards";
     case MibLibraryStatus::Installed: return "Downloaded / Installed";
     case MibLibraryStatus::Available: return "Available";
     case MibLibraryStatus::Downloading: return "Downloading";
@@ -501,7 +501,7 @@ QString MibLibraryStatusText(MibLibraryStatus status)
 
 QString MibLibraryOriginText(const MibLibraryRecord &record)
 {
-    if (record.status == MibLibraryStatus::Bundled) return QStringLiteral("Built-in");
+    if (record.status == MibLibraryStatus::Standards) return QStringLiteral("Standards");
     if (record.sourceId.compare(IanaMibSourceProvider::id(), Qt::CaseInsensitive) == 0 ||
         record.sourceName.compare(QStringLiteral("IANA"), Qt::CaseInsensitive) == 0)
         return QStringLiteral("IANA");
@@ -525,7 +525,7 @@ MibLibraryFileInfo MibLibraryFileInformation(const MibLibraryRecord &record,
     info.timestamp = record.downloadedAt.isValid()
         ? record.downloadedAt.toLocalTime().toString(Qt::ISODate) : QString();
     info.sha256 = record.sha256;
-    info.showProvider = record.status != MibLibraryStatus::Bundled && !info.provider.isEmpty();
+    info.showProvider = record.status != MibLibraryStatus::Standards && !info.provider.isEmpty();
     info.showSourceUrl = !info.sourceUrl.isEmpty();
     info.showTimestamp = record.downloadedAt.isValid();
     info.showSha256 = !info.sha256.isEmpty();

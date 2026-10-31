@@ -29,6 +29,9 @@
 #include <QTextStream>
 #include <QTimer>
 #include <QElapsedTimer>
+#include <QAction>
+#include <QTabBar>
+#include <QTabWidget>
 #include "snmpb.h"
 #include "agentprofile.h"
 #include "mibeditor.h"
@@ -38,6 +41,7 @@
 #include "snmpbapp.h"
 #include "productidentity.h"
 #include "diagnosticlogger.h"
+#include "startupcoordinator.h"
 
 QString file_to_open;
 
@@ -46,6 +50,7 @@ int main( int argc, char ** argv )
     bool launch_smoke_test = false;
     QString smoke_config_dir;
     QString smoke_mib_file;
+    QString startup_close_state;
     for (int i = 1; i < argc; ++i)
     {
         const QString argument = QString::fromLocal8Bit(argv[i]);
@@ -57,6 +62,10 @@ int main( int argc, char ** argv )
         else if (argument == "--smoke-mib" && i + 1 < argc)
         {
             smoke_mib_file = QString::fromLocal8Bit(argv[++i]);
+        }
+        else if (argument == "--startup-close-state" && i + 1 < argc)
+        {
+            startup_close_state = QString::fromLocal8Bit(argv[++i]);
         }
     }
 
@@ -122,6 +131,20 @@ int main( int argc, char ** argv )
     startup_dialog_closer.stop();
     mw.show();
     DiagnosticLogger::log("Startup", QStringLiteral("main window show request elapsed_ms=%1").arg(mainWindowTimer.elapsed()));
+    if (!startup_close_state.isEmpty())
+    {
+        const auto requestedState = [startup_close_state]() {
+            if (startup_close_state == "CatalogLoading") return StartupState::CatalogLoading;
+            if (startup_close_state == "ProfilePreparing") return StartupState::ProfilePreparing;
+            return StartupState::EnvironmentBuilding;
+        }();
+        QObject::connect(snmpb.StartupCoordinatorObj(), &StartupCoordinator::stateChanged,
+                         &mw, [&mw, requestedState](StartupState state, const QString &) {
+            if (state == requestedState) QTimer::singleShot(0, &mw, &QWidget::close);
+        });
+        QTimer::singleShot(45000, &app, [&app]() { app.exit(2); });
+    }
+    QTimer::singleShot(0, &snmpb, &Snmpb::StartDeferredInitialization);
     app.connect(&app, SIGNAL( lastWindowClosed() ), &app, SLOT( quit() ));
     QObject::connect(&app, &QGuiApplication::lastWindowClosed, [] {
         DiagnosticLogger::log("Shutdown", "QApplication lastWindowClosed", false);
@@ -136,10 +159,10 @@ int main( int argc, char ** argv )
         (!file_to_open.isEmpty() || QCoreApplication::arguments().count() > 1))
     {
         snmpb.MibEditorObj()->MibFileOpen(file_to_open.isEmpty()?QCoreApplication::arguments().at(1):file_to_open);
-        snmpb.MainUI()->TabW->setCurrentIndex(2); // Select the Editor Tab
+        snmpb.ShowEditorDocument();
     }
 
-    if (launch_smoke_test)
+    if (launch_smoke_test && startup_close_state.isEmpty())
     {
         const auto runSmoke = [&]() {
             bool passed = true;
@@ -162,9 +185,31 @@ int main( int argc, char ** argv )
                       QFileInfo(smoke_config_dir).absoluteFilePath()),
                   "QSettings uses the isolated directory");
             check(mw.isVisible(), "main window is visible");
-            QDockWidget *devicesDock = mw.findChild<QDockWidget *>("DevicesDock");
-            check(devicesDock && devicesDock->widget(),
-                  "Devices dock created and integrated");
+            check(mw.findChild<QWidget *>("WorkbenchActivityRail") &&
+                  mw.findChild<QWidget *>("WorkbenchSidebar") &&
+                  mw.findChild<QWidget *>("IntegratedDeviceSidebar"),
+                  "workbench activity rail and Device sidebar created");
+            check(mw.findChild<QDockWidget *>("WorkbenchInspectorDock") &&
+                  mw.findChild<QDockWidget *>("WorkbenchBottomDock"),
+                  "workbench Inspector and bottom panels created");
+            QTabWidget *workbenchDocuments = mw.findChild<QTabWidget *>("WorkbenchDocuments");
+            QTabWidget *bottomTabs = mw.findChild<QTabWidget *>("WorkbenchBottomTabs");
+            check(workbenchDocuments && workbenchDocuments->tabBar()->isHidden(),
+                  "legacy primary tab navigation is retired");
+            check(bottomTabs && bottomTabs->count() == 4 &&
+                  bottomTabs->tabText(0) == "Results" &&
+                  bottomTabs->tabText(1) == "Problems" &&
+                  bottomTabs->tabText(2) == "Diagnostics" &&
+                  bottomTabs->tabText(3) == "Raw",
+                  "bottom Results, Problems, Diagnostics, and Raw views are integrated");
+            QAction *eventsActivity = mw.findChild<QAction *>("WorkbenchActivityEvents");
+            QAction *mibsActivity = mw.findChild<QAction *>("WorkbenchActivityMIBs");
+            if (eventsActivity) eventsActivity->trigger();
+            check(eventsActivity && snmpb.MainUI()->TabW->currentWidget() == snmpb.MainUI()->TrapsTab,
+                  "Events activity maps to the existing capture workspace");
+            if (mibsActivity) mibsActivity->trigger();
+            check(mibsActivity && snmpb.MainUI()->TabW->currentWidget() == snmpb.MainUI()->TreeTab,
+                  "MIBs activity restores the Tree workflow");
             check(snmpb.MibModuleObj()->CurrentEnvironment() &&
                   !snmpb.MibModuleObj()->CurrentEnvironment()->modules().isEmpty(),
                   "Profile Environment materialized bundled MIB modules");
@@ -174,15 +219,22 @@ int main( int argc, char ** argv )
             snmpb.MainUI()->MIBTree->SelectFromOid("1.3.6.1.2.1.1");
             check(snmpb.MainUI()->MIBTree->currentIndex().isValid(),
                   "MIB OID selection works");
+            check(!snmpb.MainUI()->NodeInfo->toPlainText().isEmpty(),
+                  "MIB inspector follows Tree selection");
 
             if (!smoke_mib_file.isEmpty())
             {
                 snmpb.MibEditorObj()->MibFileOpen(smoke_mib_file);
+                snmpb.ShowEditorDocument();
                 snmpb.MibEditorObj()->VerifyMIB();
                 check(!snmpb.MainUI()->MIBFile->toPlainText().isEmpty(),
                       "MIB editor opened and verified a local module");
                 check(snmpb.MainUI()->MIBLogL->text().startsWith("Verification complete."),
                       "MIB editor parsing completed");
+                QTabBar *documentTabs = mw.findChild<QTabBar *>("WorkbenchOpenDocuments");
+                check(snmpb.MainUI()->TabW->currentWidget() == snmpb.MainUI()->EditorTab &&
+                      documentTabs && documentTabs->count() == 1,
+                      "MIB editor opens as a contextual document");
             }
 
             const QString smoke_profile = "ctest-local-profile";
