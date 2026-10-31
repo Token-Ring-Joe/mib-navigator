@@ -153,9 +153,11 @@ function(run_scenario name)
         set(smoke_mib "${library}/Acme/${S_EDIT_FILE}")
         set(edit_args --smoke-edit-from "${S_EDIT_FROM}" --smoke-edit-to "${S_EDIT_TO}")
     endif()
-    # The ";" in PATH must survive being stored in a list variable, so it is escaped.
+    # PATH is passed to the application as one argument. It is kept in a list variable, so every
+    # ";" in it (Windows PATH is full of them) is escaped first or it would split into arguments.
+    string(REPLACE ";" "\\;" escaped_path "PATH=${SNMPB_QT_BIN_DIR};$ENV{PATH}")
     set(app_command "${CMAKE_COMMAND}" -E env --unset=SMIPATH "QT_QPA_PLATFORM=offscreen"
-        "PATH=${SNMPB_QT_BIN_DIR}\\;$ENV{PATH}"
+        "${escaped_path}"
         "${SNMPB_EXECUTABLE}" --launch-smoke-test "${dir}"
         --smoke-mib "${smoke_mib}" ${edit_args})
     if(S_LIVE)
