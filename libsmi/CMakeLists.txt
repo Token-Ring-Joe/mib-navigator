@@ -14,6 +14,11 @@ add_library(snmpb_libsmi STATIC
 
 if(WIN32)
     target_sources(snmpb_libsmi PRIVATE win/win.c)
+    # The feature checks below are skipped on Windows. Without these two definitions util.h falls
+    # back to "#define strtoull strtoul", which is only 32 bits wide on Windows, so 64-bit numbers
+    # such as Counter64's 18446744073709551615 in SNMPv2-SMI were reported as out of range.
+    # MSVC's runtime provides both functions.
+    target_compile_definitions(snmpb_libsmi PRIVATE HAVE_STRTOULL=1 HAVE_STRTOLL=1)
 else()
     include(CheckFunctionExists)
     include(CheckIncludeFile)
