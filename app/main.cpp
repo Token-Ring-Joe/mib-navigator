@@ -44,6 +44,8 @@
 #include "startupcoordinator.h"
 #include "mibproblem.h"
 #include <QCheckBox>
+#include <QPlainTextEdit>
+#include <QPixmap>
 #include <QLabel>
 #include <QTableWidget>
 #include "mibenvironment.h"
@@ -317,6 +319,26 @@ int main( int argc, char ** argv )
             check(QFileInfo::exists(snmpb.GetBootCounterConfigFile()),
                   "SNMPv3 boot counter initialized locally");
 
+            // Pictures of the Problems tab as the application really draws it, so automated
+            // validation can look at the layout instead of asking a person to send screenshots.
+            if (QTableWidget *table = mw.findChild<QTableWidget *>("WorkbenchProblemTable")) {
+                QCheckBox *notes = mw.findChild<QCheckBox *>("WorkbenchProblemShowNotes");
+                QPlainTextEdit *detail = mw.findChild<QPlainTextEdit *>("WorkbenchProblemDetail");
+                QTabWidget *bottom = mw.findChild<QTabWidget *>("WorkbenchBottomTabs");
+                if (bottom) bottom->setCurrentIndex(1);
+                mw.resize(1500, 1000);
+                QCoreApplication::processEvents();
+                mw.grab().save(QDir(smoke_config_dir).filePath("problems-tab.png"));
+                if (notes) notes->setChecked(true);
+                QCoreApplication::processEvents();
+                if (table->rowCount() > 0 && detail) {
+                    table->selectRow(0);
+                    QCoreApplication::processEvents();
+                    check(detail->toPlainText().contains("Why:"),
+                          "Selecting a Problems row fills the detail pane");
+                }
+                mw.grab().save(QDir(smoke_config_dir).filePath("problems-tab-notes.png"));
+            }
             mw.close();
             smoke_log.close();
             app.exit(passed ? 0 : 1);

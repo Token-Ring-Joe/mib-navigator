@@ -44,12 +44,8 @@
 #include "mibmodule.h"
 #include "agent.h"
 #include "trap.h"
-#if SNMPB_ENABLE_QWT
-#include "graphmanager.h"
-#endif
 #include "logsnmpb.h"
 #include "mibeditor.h"
-#include "discovery.h"
 #include "devicepane.h"
 #include "mainwindowlayout.h"
 #include "workbenchshell.h"
@@ -64,7 +60,6 @@
 #include "agentprofileservice.h"
 #include "profilemetadataservice.h"
 #include "profiletransfer.h"
-#include "discoverydestination.h"
 #include "mibcollection.h"
 #include "usmprofile.h"
 #include "communitycredentialservice.h"
@@ -77,9 +72,6 @@
 // These are needed to get the libraries version strings for the about box
 #include "mibengine.h"
 #include "tomcrypt.h"
-#if SNMPB_ENABLE_QWT
-#include "qwt.h"
-#endif
 #include "snmp_pp/config_snmp_pp.h"
 
 #define SMI_CONFIG_FILE          "smi.conf"
@@ -87,23 +79,12 @@
 #define USM_USERS_CONFIG_FILE    "usm_users.conf"
 #define AGENTS_CONFIG_FILE       "agents.conf"
 #define LOG_CONFIG_FILE          "log.conf"
-#define GRAPHS_CONFIG_FILE       "graphs.conf"
 #define DEVICE_TREE_CONFIG_FILE  "device-tree.conf"
 #define PROFILE_METADATA_CONFIG_FILE "profile-metadata.conf"
 #define CREDENTIAL_IDENTITIES_CONFIG_FILE "credential-identities.conf"
 #define COMMUNITY_CREDENTIALS_CONFIG_FILE "community-credentials.conf"
 #define CREDENTIAL_BINDINGS_CONFIG_FILE "credential-bindings.conf"
 
-#if SNMPB_ENABLE_QWT
-#define SNMPB_QWT_ABOUT_LINE \
-    "QWT [v%5] (<a href=http://qwt.sourceforge.net>http://qwt.sourceforge.net</a>)<br>"
-#define SNMPB_QT_ABOUT_LINE \
-    "QT [v%6] (<a href=http://qt.io>http://qt.io</a>)"
-#else
-#define SNMPB_QWT_ABOUT_LINE ""
-#define SNMPB_QT_ABOUT_LINE \
-    "QT [v%5] (<a href=http://qt.io>http://qt.io</a>)"
-#endif
 
 
 namespace {
@@ -256,8 +237,6 @@ void Snmpb::BindToGUI(QMainWindow* mw)
         GetProfileMetadataConfigFile(), this);
     DiagnosticLogger::log("Connections", QStringLiteral("profile metadata loaded count=%1")
                           .arg(profileMetadataService->allMetadata().size()));
-    devicePlacementService = new DeviceTreePlacementService(
-        GetDeviceTreeConfigFile(), this);
     apm = new AgentProfileManager(this, profileService, profileMetadataService);
     QElapsedTimer phaseTimer; phaseTimer.start(); prefs->Init();
     DiagnosticLogger::log("Startup", QStringLiteral("settings UI load complete elapsed_ms=%1").arg(phaseTimer.elapsed()));
@@ -266,11 +245,6 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     upm = new USMProfileManager(this);
     connect(upm, &USMProfileManager::CredentialsChanged,
             apm, &AgentProfileManager::RefreshCredentialChoices);
-#if SNMPB_ENABLE_QWT
-    gm = new GraphManager(this);
-#else
-    w.TabW->setTabVisible(w.TabW->indexOf(w.GraphsTab), false);
-#endif
     editor = new MibEditor(this);
     MibLibraryWidget::Callbacks mibLibraryCallbacks;
     mibLibraryCallbacks.validate = [this](const QString &path, QString *error) {
@@ -592,7 +566,6 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     });
     initializingMibProfile = false;
     DiagnosticLogger::log("Startup", QStringLiteral("MIB profile initialization deferred until after shell display"));
-    discovery = new Discovery(this);
 
     auto *contextWidget = new QWidget(w.widget);
     contextWidget->setObjectName(QStringLiteral("CurrentDeviceContext"));
@@ -771,10 +744,6 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     });
     connect(devicePane, &DevicePane::organizationPersisted,
             apm, &AgentProfileManager::PersistProfiles);
-    connect(devicePane, &DevicePane::organizationPersisted,
-            discovery, &Discovery::RefreshDestinationFolders);
-    connect(devicePlacementService, &DeviceTreePlacementService::placementChanged,
-            devicePane, [this](const QString &) { devicePane->reloadTree(); });
     connect(apm, &AgentProfileManager::AgentProfileListChanged,
             devicePane, [this]() {
                 devicePane->setProfiles(apm->GetAgentProfileRecords());
@@ -922,9 +891,17 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     problemTable->setSelectionMode(QAbstractItemView::SingleSelection);
     problemTable->setWordWrap(true);
     problemTable->verticalHeader()->hide();
-    problemTable->horizontalHeader()->setStretchLastSection(true);
-    problemTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
-    problemTable->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
+    {
+        QHeaderView *header = problemTable->horizontalHeader();
+        header->setStretchLastSection(false);
+        for (int column : {0, 1, 2, 5}) header->setSectionResizeMode(column, QHeaderView::Interactive);
+        header->setSectionResizeMode(3, QHeaderView::Stretch);   // Why
+        header->setSectionResizeMode(4, QHeaderView::Stretch);   // What it affects
+        header->resizeSection(0, 80);
+        header->resizeSection(1, 170);
+        header->resizeSection(2, 170);
+        header->resizeSection(5, 210);
+    }
     problemTable->setTextElideMode(Qt::ElideNone);
     connect(problemTable->horizontalHeader(), &QHeaderView::sectionResized, problemTable,
             [problemTable]() { problemTable->resizeRowsToContents(); });
@@ -932,12 +909,18 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     auto *problemDetail = new QPlainTextEdit(problemsPage);
     problemDetail->setObjectName(QStringLiteral("WorkbenchProblemDetail"));
     problemDetail->setReadOnly(true);
-    problemDetail->setMaximumHeight(120);
+    problemDetail->setMinimumHeight(48);
     problemDetail->setPlaceholderText(tr("Select a row to read the full explanation."));
     problemsLayout->addWidget(problemState);
     problemsLayout->addLayout(problemToolbar);
-    problemsLayout->addWidget(problemTable, 1);
-    problemsLayout->addWidget(problemDetail);
+    auto *problemSplitter = new QSplitter(Qt::Vertical, problemsPage);
+    problemSplitter->setObjectName(QStringLiteral("WorkbenchProblemSplitter"));
+    problemSplitter->setChildrenCollapsible(false);
+    problemSplitter->addWidget(problemTable);
+    problemSplitter->addWidget(problemDetail);
+    problemSplitter->setStretchFactor(0, 4);
+    problemSplitter->setStretchFactor(1, 1);
+    problemsLayout->addWidget(problemSplitter, 1);
 
     // The list shown here is a plain copy of the Environment's problem report, so it
     // never holds a pointer into the Environment or the model that built it.
@@ -994,7 +977,6 @@ void Snmpb::BindToGUI(QMainWindow* mw)
                 problemTable->setItem(row, column, item);
             }
         }
-        problemTable->resizeColumnsToContents();
         problemTable->resizeRowsToContents();
     };
     connect(showNotes, &QCheckBox::toggled, problemsPage,
@@ -1024,7 +1006,13 @@ void Snmpb::BindToGUI(QMainWindow* mw)
         const int index = first->data(Qt::UserRole).toInt();
         if (index < 0 || index >= problemList->size()) return;
         const MibProblem problem = problemList->at(index);
-        if (problem.file.isEmpty() || !QFileInfo::exists(problem.file)) return;
+        if (problem.file.isEmpty() || !QFileInfo::exists(problem.file)) {
+            DiagnosticLogger::log("UI", QStringLiteral("Problems row opened without a file: %1 / %2")
+                                  .arg(problem.category, problem.module));
+            return;
+        }
+        DiagnosticLogger::log("UI", QStringLiteral("Problems row opens %1 at line %2 (%3)")
+                              .arg(problem.file).arg(problem.line).arg(problem.category));
         editor->MibFileOpen(problem.file);
         editor->GoToLine(problem.line);
         ShowEditorDocument();
@@ -1037,6 +1025,10 @@ void Snmpb::BindToGUI(QMainWindow* mw)
                 const QStringList &, bool, bool) {
         *problemList = environment ? environment->problems() : QList<MibProblem>{};
         *problemLoadedCount = environment ? static_cast<int>(environment->loadedCount()) : 0;
+        const MibProblemSummary reported = MibSummarizeProblems(*problemList);
+        DiagnosticLogger::log("UI", QStringLiteral(
+            "Problems tab updated modules=%1 errors=%2 warnings=%3 notes=%4")
+            .arg(*problemLoadedCount).arg(reported.errors).arg(reported.warnings).arg(reported.notes));
         describeProblems();
         repopulateProblems();
     });
@@ -1068,11 +1060,7 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     workbenchPages.tree = w.TreeTab;
     workbenchPages.library = mibLibrary;
     workbenchPages.editor = w.EditorTab;
-    workbenchPages.discovery = w.DiscoveryTab;
     workbenchPages.events = w.TrapsTab;
-#if SNMPB_ENABLE_QWT
-    workbenchPages.graphs = w.GraphsTab;
-#endif
     workbench = new WorkbenchShell(mw, w.widget,
         qobject_cast<QGridLayout *>(w.widget->layout()), contextWidget, w.TabW,
         workbenchPages, devicePane, w.NodeInfoLayout, resultsPage, problemsPage,
@@ -1347,11 +1335,6 @@ ProfileMetadataService* Snmpb::ProfileMetadata(void)
     return profileMetadataService;
 }
 
-DeviceTreePlacementService* Snmpb::DevicePlacements(void)
-{
-    return devicePlacementService;
-}
-
 USMProfileManager* Snmpb::UPManagerObj(void)
 {
     return (upm);
@@ -1421,13 +1404,6 @@ QString Snmpb::GetLogConfigFile(void)
     return cfgdir.filePath(LOG_CONFIG_FILE);
 }
 
-QString Snmpb::GetGraphsConfigFile(void)
-{
-    QSettings settings;
-    QDir cfgdir = QFileInfo(settings.fileName()).dir();
-    return cfgdir.filePath(GRAPHS_CONFIG_FILE);
-}
-
 void Snmpb::ManageAgentProfiles(bool)
 {
     apm->Execute();
@@ -1495,16 +1471,8 @@ void Snmpb::TabSelected(void)
         connect( MainUI()->actionFindNext, SIGNAL( triggered() ),
                 editor, SLOT( ExecuteFindNext() ) );
         MainUI()->actionMultipleVarbinds->setEnabled(false);
-    } else if (currentTab == w.DiscoveryTab) {
-        SetEditorMenus(false);
-        MainUI()->actionMultipleVarbinds->setEnabled(false);
     } else if (currentTab == w.TrapsTab) {
         SetEditorMenus(false);
-        MainUI()->actionMultipleVarbinds->setEnabled(false);
-    } else if (currentTab == w.GraphsTab) {
-        SetEditorMenus(false);
-        disconnect(MainUI()->actionFind, SIGNAL( triggered() ), 0, 0);
-        disconnect(MainUI()->actionFindNext, SIGNAL( triggered() ), 0, 0);
         MainUI()->actionMultipleVarbinds->setEnabled(false);
     } else if (currentTab == w.LogTab) {
         SetEditorMenus(false);
@@ -1520,9 +1488,6 @@ void Snmpb::AboutBox(bool)
         .arg(SCRYPT)
         .arg(MibEngine::instance().libraryVersion())
         .arg(qVersion());
-#if SNMPB_ENABLE_QWT
-    dependencies += QStringLiteral("; Qwt %1").arg(QWT_VERSION_STR);
-#endif
     QMessageBox::about(MainUI()->TabW, tr("About MIB Navigator"),
                        ProductIdentity::aboutHtml(SNMPB_VERSION_STRING,
                                                   dependencies));

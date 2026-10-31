@@ -5,8 +5,8 @@ QString ProductIdentity::aboutHtml(const QString &version,
 {
     return QStringLiteral(
         "<h2>MIB Navigator</h2><p><b>Version %1</b></p>"
-        "<p>A cross-platform SNMP MIB browser, device query, discovery, trap, "
-        "and graphing application.</p>"
+        "<p>A cross-platform SNMP MIB browser with device query and trap "
+        "support.</p>"
         "<h3>Project</h3><p>MIB Navigator source/project: "
         "<a href=\"%2\">%2</a></p>"
         "<h3>Original SnmpB project</h3>"

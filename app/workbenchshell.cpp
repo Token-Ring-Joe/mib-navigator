@@ -246,7 +246,7 @@ WorkbenchShell::WorkbenchShell(QMainWindow *window, QWidget *centralRoot,
         QFrame#WorkbenchActivityRail QToolButton:checked { background: palette(highlight); color: palette(highlighted-text); border-left: 3px solid palette(highlight); }
         QStackedWidget#WorkbenchSidebar { border-right: 1px solid palette(mid); background: palette(base); }
         QLabel#WorkbenchSidebarHeading { padding: 2px 0 5px 0; }
-        QLabel#WorkbenchSidebarDescription { color: palette(mid); padding-bottom: 5px; }
+        QLabel#WorkbenchSidebarDescription { color: palette(text); font-style: italic; padding-bottom: 5px; }
         QStackedWidget#WorkbenchSidebar QPushButton { text-align: left; padding: 5px 7px; border: 0; }
         QStackedWidget#WorkbenchSidebar QPushButton:checked { background: palette(highlight); color: palette(highlighted-text); }
     )"));
@@ -287,10 +287,6 @@ QWidget *WorkbenchShell::makeQueriesSidebar()
     auto *operations = sidebarButton(page, tr("Ad-hoc Operations"), QStringLiteral("QueryModeAdHoc"));
     operations->setChecked(true);
     connect(operations, &QPushButton::clicked, this, [this]() { openDocument(workbenchPages.tree); });
-    if (workbenchPages.graphs) {
-        auto *graphs = sidebarButton(page, tr("Graphs"), QStringLiteral("QueryModeGraphs"));
-        connect(graphs, &QPushButton::clicked, this, [this]() { openDocument(workbenchPages.graphs); });
-    }
     qobject_cast<QVBoxLayout *>(page->layout())->addStretch();
     return page;
 }
@@ -310,7 +306,7 @@ QWidget *WorkbenchShell::defaultDocument(WorkbenchActivity value) const
 {
     switch (value) {
     case WorkbenchActivity::Mibs: return workbenchPages.tree;
-    case WorkbenchActivity::Devices: return workbenchPages.discovery;
+    case WorkbenchActivity::Devices: return workbenchPages.tree;
     case WorkbenchActivity::Queries: return workbenchPages.tree;
     case WorkbenchActivity::Events: return workbenchPages.events;
     }
@@ -332,7 +328,7 @@ void WorkbenchShell::openDocument(QWidget *document)
     documentTabs->setCurrentIndex(index);
     inspectorPanel->setVisible(currentActivity == WorkbenchActivity::Mibs &&
                                document == workbenchPages.tree);
-    const bool durable = document == workbenchPages.editor || document == workbenchPages.graphs;
+    const bool durable = document == workbenchPages.editor;
     if (!durable) {
         openDocumentTabs->setCurrentIndex(-1);
         return;
@@ -340,8 +336,7 @@ void WorkbenchShell::openDocument(QWidget *document)
     int tab = openedDocuments.indexOf(document);
     if (tab < 0) {
         openedDocuments.append(document);
-        tab = openDocumentTabs->addTab(document == workbenchPages.editor
-            ? tr("MIB Editor") : tr("Graph"));
+        tab = openDocumentTabs->addTab(tr("MIB Editor"));
     }
     openDocumentTabs->show();
     openDocumentTabs->setCurrentIndex(tab);

@@ -127,14 +127,27 @@ into smaller steps, each with its own working build.
    `modernize/qt6-cmake`, and tag `v1.0`, identical to the local refs.*
 3. **Finish or set aside in-progress work.** The uncommitted
    `startupcoordinator.*` and `workbenchshell.*` files and related edits. The
-   user decides; the user commits.
+   user decides; the user commits. *Done (2026-10-30): kept, with the MIB
+   tolerance and Problems work, as the baseline.*
 4. **Mark the baseline.** The user commits or tags a known-good copy (for
-   example `before-redesign`).
+   example `before-redesign`). *Done (2026-10-30): commit `0554781`, tag
+   `before-redesign`. Debug and Release: 57/57 tests, 5/5 libsmi goldens.*
 
 ### Phase 1: Removals
 
-5. Remove Graphs and the vendored Qwt target.
-6. Remove Discovery.
+5. Remove Graphs and the vendored Qwt target. *Done (2026-10-30), in two parts
+   because Qwt is 2,837 tracked files, far over the 50-file guardrail.* **5a:**
+   Graphs removed from the application (22 files deleted), the Qwt build target
+   and option removed, and the dead graph-era `Agent::GetSyncValue` removed.
+   **5b:** after the owner explicitly approved the file count, the `qwt/` and
+   `third_party/qwt-6.3.0/` directories (2,837 files) were deleted, along with
+   the Qwt rules in the legacy qmake `Makefile` and `snmpb.pro`, the Qwt entry in
+   `docs/third-party-dependencies.md`, and the Qwt notes in `readme.txt`.
+6. Remove Discovery. *Done (2026-10-30): 8 files deleted, the Discovery tab and
+   its settings controls removed, the Devices activity opens the Tree until the
+   layout step replaces it, and the unused `DeviceTreePlacementService`
+   (only Discovery called it) removed. Saved Discovery settings are left in the
+   user's settings file untouched.*
 
 ### Phase 2: Layout and connection model
 

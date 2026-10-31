@@ -70,9 +70,7 @@ int main(int argc, char **argv)
     pages.tree = new QWidget(documents); documents->addTab(pages.tree, "Tree");
     pages.library = new QWidget(documents); documents->addTab(pages.library, "Library");
     pages.editor = new QWidget(documents); documents->addTab(pages.editor, "Editor");
-    pages.discovery = new QWidget(documents); documents->addTab(pages.discovery, "Discovery");
     pages.events = new QWidget(documents); documents->addTab(pages.events, "Traps");
-    pages.graphs = new QWidget(documents); documents->addTab(pages.graphs, "Graphs");
     layout->addWidget(context, 0, 0);
     layout->addWidget(documents, 1, 0);
     window.setCentralWidget(root);
@@ -99,7 +97,7 @@ int main(int argc, char **argv)
     shell.setActivity(WorkbenchActivity::Devices);
     check(shell.activity() == WorkbenchActivity::Devices &&
           shell.sidebarStack()->currentIndex() == 1 &&
-          documents->currentWidget() == pages.discovery,
+          documents->currentWidget() == pages.tree,
           "Devices activity did not route sidebar and document");
     shell.setActivity(WorkbenchActivity::Queries);
     check(documents->currentWidget() == pages.tree,
@@ -124,9 +122,6 @@ int main(int argc, char **argv)
           "Editor did not open as a durable central document");
     shell.openDocument(pages.editor);
     check(durableTabs->count() == 1, "Editor document was duplicated");
-    shell.openDocument(pages.graphs);
-    check(durableTabs->count() == 2 && documents->currentWidget() == pages.graphs,
-          "Graph did not open as a contextual document");
 
     shell.bottomDock()->hide();
     shell.inspectorDock()->show();

@@ -676,8 +676,8 @@ Conceptually:
         +-- SNMP++
         +-- crypto/platform dependencies
 
-The vendored Qwt library is being removed together with Graphs. Do not add new
-uses of it.
+The vendored Qwt library and Graphs have been removed. Do not reintroduce them;
+Watch replaces Graphs.
 
 Do not casually fold third-party implementation source directly back into the
 application target.

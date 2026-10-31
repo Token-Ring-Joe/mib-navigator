@@ -25,9 +25,7 @@ public:
         QWidget *tree = nullptr;
         QWidget *library = nullptr;
         QWidget *editor = nullptr;
-        QWidget *discovery = nullptr;
         QWidget *events = nullptr;
-        QWidget *graphs = nullptr;
     };
 
     WorkbenchShell(QMainWindow *window, QWidget *centralRoot, QGridLayout *centralLayout,

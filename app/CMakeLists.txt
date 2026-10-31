@@ -12,18 +12,6 @@ set(SNMPB_APP_SOURCES
     communitycredentialmanager.cpp
     connectionrequestsettings.cpp
     credentialrecords.cpp
-    discovery.cpp
-    discoveryscanplan.cpp
-    discoverydestination.cpp
-    graphmodel.cpp
-    graphdefinitioneditor.cpp
-    graphasyncrunner.cpp
-    graphplotpresenter.cpp
-    graphmanager.cpp
-    graphlabelresolver.cpp
-    graphpollingstate.cpp
-    graphrepository.cpp
-    graphservice.cpp
     devicepane.cpp
     devicedetailseditor.cpp
     diagnosticlogger.cpp
@@ -111,18 +99,6 @@ set(SNMPB_APP_HEADERS
     communitycredentialmanager.h
     connectionrequestsettings.h
     credentialrecords.h
-    discovery.h
-    discoveryscanplan.h
-    discoverydestination.h
-    graphmodel.h
-    graphdefinitioneditor.h
-    graphasyncrunner.h
-    graphplotpresenter.h
-    graphmanager.h
-    graphlabelresolver.h
-    graphpollingstate.h
-    graphrepository.h
-    graphservice.h
     devicepane.h
     devicedetailseditor.h
     diagnosticlogger.h
@@ -203,7 +179,6 @@ set(SNMPB_APP_FORMS
     find.ui
     gotoline.ui
     mainw.ui
-    plot.ui
     preferences.ui
     replace.ui
     usmprofile.ui
@@ -234,11 +209,6 @@ set_target_properties(snmpb PROPERTIES
 if(APPLE)
     set_target_properties(snmpb PROPERTIES OUTPUT_NAME "MIB Navigator")
 endif()
-
-target_compile_definitions(snmpb
-    PRIVATE
-        SNMPB_ENABLE_QWT=$<BOOL:${SNMPB_ENABLE_QWT}>
-)
 
 if(UNIX AND NOT APPLE)
     target_compile_definitions(snmpb
@@ -272,9 +242,6 @@ if(MSVC)
         $<$<CONFIG:Release>:/DEBUG>
         $<$<CONFIG:Release>:/OPT:REF>
         $<$<CONFIG:Release>:/OPT:ICF>)
-endif()
-if(SNMPB_ENABLE_QWT)
-    target_link_libraries(snmpb PRIVATE Qwt::Qwt)
 endif()
 
 find_package(Qt6 6.10 REQUIRED COMPONENTS LinguistTools)
@@ -492,43 +459,6 @@ if(BUILD_TESTING)
             $<TARGET_FILE:snmpb_product_identity_test>)
     endif()
 
-    add_executable(snmpb_graph_v2_test
-        mibengine.cpp mibengine.h
-        agentprofilerepository.cpp agentprofilerepository.h
-        credentialrecords.cpp credentialrecords.h
-        graphmodel.cpp graphmodel.h graphrepository.cpp graphrepository.h
-        graphdefinitioneditor.cpp graphdefinitioneditor.h
-        graphasyncrunner.cpp graphasyncrunner.h
-        graphplotpresenter.cpp graphplotpresenter.h
-        graphpollingstate.cpp graphpollingstate.h
-        graphlabelresolver.cpp graphlabelresolver.h
-        mibenvironment.cpp mibenvironment.h mibenvironmentextractor.cpp mibenvironmentextractor.h
-        mibenvironmentregistry.cpp mibenvironmentregistry.h
-        graphservice.cpp graphservice.h
-        snmprequestconfig.cpp snmprequestconfig.h
-        snmprequestconfigadapter.cpp snmprequestconfigadapter.h
-        snmprequestcontext.cpp snmprequestcontext.h
-        snmptransport.cpp snmptransport.h
-        snmptableoperation.cpp snmptableoperation.h
-        tabletraversal.cpp tabletraversal.h
-        graph_v2_test.cpp)
-    target_link_libraries(snmpb_graph_v2_test PRIVATE
-        Qt6::Core Qt6::Widgets Qwt::Qwt snmpb_libsmi snmpb_snmp_pp snmpb_libtomcrypt)
-    set_target_properties(snmpb_graph_v2_test PROPERTIES AUTOMOC ON)
-    target_compile_definitions(snmpb_graph_v2_test PRIVATE SNMPB_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
-    if(WIN32)
-        add_test(NAME snmpb.graph-v2 COMMAND ${CMAKE_COMMAND} -E env
-            "QT_QPA_PLATFORM=offscreen"
-            "QT_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins"
-            "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
-            $<TARGET_FILE:snmpb_graph_v2_test>)
-    else()
-        add_test(NAME snmpb.graph-v2 COMMAND ${CMAKE_COMMAND} -E env
-            "QT_QPA_PLATFORM=offscreen"
-            "QT_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins"
-            $<TARGET_FILE:snmpb_graph_v2_test>)
-    endif()
-
     add_executable(snmpb_mib_service_test
         mibengine.cpp mibengine.h
         mibdiagnosticcollector.cpp mibdiagnosticcollector.h
@@ -573,7 +503,7 @@ if(BUILD_TESTING)
         mibengine.cpp mibengine.h
         mibenvironment.cpp mibenvironment.h mibenvironmentextractor.cpp mibenvironmentextractor.h
         mibenvironmentregistry.cpp mibenvironmentregistry.h mibeffectiveplan.h
-        graphlabelresolver.cpp graphlabelresolver.h trappresenter.cpp trappresenter.h traprecord.h
+        trappresenter.cpp trappresenter.h traprecord.h
         mibvaluesemantics.cpp mibvaluesemantics.h
         snmprequestconfig.cpp snmprequestconfig.h snmprequestcontext.cpp snmprequestcontext.h
         mibnode.cpp mibnode.h mibview.cpp mibview.h mibtreemodel.cpp mibtreemodel.h
@@ -680,21 +610,6 @@ if(BUILD_TESTING)
         add_test(NAME snmpb.trap-pipeline COMMAND $<TARGET_FILE:snmpb_trap_pipeline_test>)
     endif()
 
-    add_executable(snmpb_discovery_operation_test
-        discoveryscanplan.cpp discoveryscanplan.h
-        snmprequestconfig.cpp snmprequestconfig.h
-        snmptableoperation.cpp snmptableoperation.h
-        snmptransport.cpp snmptransport.h
-        snmprequestconfigadapter.cpp snmprequestconfigadapter.h
-        snmprequestcontext.cpp snmprequestcontext.h
-        tabletraversal.cpp tabletraversal.h
-        discoveryoperation_test.cpp)
-    target_link_libraries(snmpb_discovery_operation_test PRIVATE
-        Qt6::Core snmpb_libsmi snmpb_snmp_pp snmpb_libtomcrypt)
-    add_test(NAME snmpb.discovery-operation COMMAND ${CMAKE_COMMAND} -E env
-        "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
-        $<TARGET_FILE:snmpb_discovery_operation_test>)
-
     add_executable(snmpb_snmp_operations_test
         snmprequestconfig.cpp snmprequestconfig.h
         snmprequestconfigadapter.cpp snmprequestconfigadapter.h
@@ -756,20 +671,6 @@ if(BUILD_TESTING)
     else()
         add_test(NAME snmpb.credential-architecture COMMAND
             $<TARGET_FILE:snmpb_credential_architecture_test>)
-    endif()
-
-    add_executable(snmpb_discovery_destination_test
-        agentprofilerepository.cpp agentprofilerepository.h
-        devicetree.cpp devicetree.h devicetreerepository.cpp devicetreerepository.h
-        discoverydestination.cpp discoverydestination.h discoverydestination_test.cpp)
-    set_target_properties(snmpb_discovery_destination_test PROPERTIES AUTOMOC ON)
-    target_link_libraries(snmpb_discovery_destination_test PRIVATE Qt6::Core)
-    if(WIN32)
-        add_test(NAME snmpb.discovery-destination COMMAND ${CMAKE_COMMAND} -E env
-            "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
-            $<TARGET_FILE:snmpb_discovery_destination_test>)
-    else()
-        add_test(NAME snmpb.discovery-destination COMMAND $<TARGET_FILE:snmpb_discovery_destination_test>)
     endif()
 
     add_executable(snmpb_preferred_mib_test
@@ -1170,7 +1071,6 @@ if(BUILD_TESTING)
         snmpb.stability-diagnostics
         snmpb.connection-request-settings
         snmpb.product-identity
-        snmpb.graph-v2
         snmpb.mib-service
         snmpb.mib-environment
         snmpb.mib-environment-large
@@ -1181,11 +1081,9 @@ if(BUILD_TESTING)
         snmpb.mib-profile
         snmpb.mib-inventory-widget
         snmpb.trap-pipeline
-        snmpb.discovery-operation
         snmpb.snmp-operations
         snmpb.community-credential
         snmpb.credential-architecture
-        snmpb.discovery-destination
         snmpb.preferred-mib
         snmpb.profile-transfer
         snmpb.profile-metadata

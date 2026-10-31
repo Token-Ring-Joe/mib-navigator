@@ -16,8 +16,6 @@ configure_file(
 include(CTest)
 include(GNUInstallDirs)
 
-option(SNMPB_ENABLE_QWT "Build MIB Navigator with Qwt 6.3.0 graph presentation" ON)
-
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -29,9 +27,6 @@ message(STATUS "MIB Navigator Qt/CMake environment configured successfully")
 add_subdirectory(libsmi)
 add_subdirectory(libtomcrypt)
 add_subdirectory(snmp++)
-if(SNMPB_ENABLE_QWT)
-    add_subdirectory(third_party/qwt-6.3.0)
-endif()
 add_subdirectory(app)
 
 set(SNMPB_LICENSE_INSTALL_DIR "${CMAKE_INSTALL_DATADIR}/snmpb/licenses")
@@ -57,11 +52,6 @@ install(FILES app/icons/feathericons/LICENSE.txt
 install(FILES app/icons/ionicons/LICENSE.txt
     DESTINATION "${SNMPB_LICENSE_INSTALL_DIR}/icons/ionicons")
 install(FILES NOTICE.md DESTINATION .)
-install(FILES
-    third_party/qwt-6.3.0/COPYING
-    third_party/qwt-6.3.0/README
-    DESTINATION "${SNMPB_LICENSE_INSTALL_DIR}/qwt-6.3.0"
-)
 install(FILES
     docs/portable-package-readme.txt
     docs/release-candidate-validation.md

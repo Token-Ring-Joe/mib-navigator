@@ -11,7 +11,6 @@ set(required_files
     "share/snmpb/licenses/libsmi/COPYING"
     "share/snmpb/licenses/LibTomCrypt/LICENSE"
     "share/snmpb/licenses/SNMP++/LICENSE"
-    "share/snmpb/licenses/qwt-6.3.0/COPYING"
     "share/snmpb/licenses/icons/open-iconic/LICENSE.txt"
     "share/snmpb/licenses/icons/devicons/LICENSE.txt"
     "share/snmpb/licenses/icons/feathericons/LICENSE.txt"

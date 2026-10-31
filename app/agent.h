@@ -55,9 +55,6 @@ public:
     Oid ConfigPduFromSettings(const SnmpRequestConfig& config,
                               const QString& oid, Pdu *p,
                               bool usevblist = false);
-    
-    // Used by graph update timer
-    unsigned long GetSyncValue(const QString& oid);
 
     int SelectTableInstance(const QString& oid, QString& outinstance);
 
