@@ -286,3 +286,24 @@ During transition from the development prototype, `Library/Standards` and
 overwrites or deletion. Existing `Profiles/<name>` directories remain in place
 and are recognized as legacy Automatic profiles. A directory rename is treated
 as removal of the old Automatic profile and discovery of a new one.
+
+## Real-collection fixes (2026-10-31)
+
+Loading a real vendor folder (Extreme Fabric Engine, 98 files) exposed three problems, each now
+covered by a tolerance scenario in `snmpb.tolerance-scenarios`:
+
+- **Two selected files declaring one module** (two revisions of `INET-ADDRESS-MIB` side by side)
+  stopped the whole profile with "Multiple exact providers declare ...". The resolver now keeps the
+  first file by path, sets the other aside for that module, and reports a "Duplicate providers"
+  warning naming both (`duplicate-selected-files`).
+- **A profile made from one vendor folder could not see the standard MIBs** its files import
+  (`SNMPv2-MIB`, `IF-MIB`, `ENTITY-MIB`, ...), so most of the profile failed. Every profile now
+  gets the Library's `Standards` folder as the last place to look for an import
+  (`MibResolverInputForProfile`, one function used by both the start-up and the normal path;
+  `standards-fallback`).
+- **A parser crash**: a `TEXTUAL-CONVENTION` whose `SYNTAX` is a type the library does not define
+  (here `TimeTicks`, absent from a bad `SNMPv2-SMI` copy) dereferenced NULL in the generated
+  parser. The module is now kept with an unknown base type and the problem is reported
+  (`unknown-type-in-textual-convention`; removing the fix makes this scenario crash). The fix is in
+  `libsmi/lib/parser-smi.c` and mirrored in `parser-smi.y`; the generated file is patched by hand,
+  as for the earlier JETDIRECT3-MIB fix, and not regenerated.

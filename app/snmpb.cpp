@@ -1258,11 +1258,8 @@ void Snmpb::StartDeferredInitialization()
                     plan.authorityError = QObject::tr(
                         "Profile still uses legacy authority and must be migrated before activation");
                 } else {
-                    MibEffectivePlanResolverInput input;
-                    input.id = profile.id;
-                    input.roots = profile.roots;
-                    input.orderedScopes = MibProfileScopePaths(profile);
-                    input.pins = profile.providerPins;
+                    const MibEffectivePlanResolverInput input =
+                        MibResolverInputForProfile(profile, dependencySnapshot.libraryRoot());
                     plan = MibEffectiveRuntimePlanResolver().resolve(input, dependencySnapshot);
                     plan.profileName = profile.name;
                     plan.profileType = profile.type;

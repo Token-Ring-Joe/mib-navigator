@@ -73,6 +73,24 @@ dupMIB MODULE-IDENTITY
 END
 ]=])
 string(REPLACE "Copy A." "Copy B, different content." DUP_MIB_B "${DUP_MIB_A}")
+# A TEXTUAL-CONVENTION whose SYNTAX is TimeTicks, in a library whose SNMPv2-SMI lacks TimeTicks
+# (see BROKEN_SMI). The parser used to dereference NULL here and crash the whole application; it
+# did so on a real vendor ATM-TC-MIB.
+set(BAD_TC_MIB [=[BAD-TC-MIB DEFINITIONS ::= BEGIN
+IMPORTS MODULE-IDENTITY, enterprises, TimeTicks FROM SNMPv2-SMI
+        TEXTUAL-CONVENTION FROM SNMPv2-TC;
+badTcMIB MODULE-IDENTITY
+    LAST-UPDATED "202601010000Z"
+    ORGANIZATION "Test"
+    CONTACT-INFO "none"
+    DESCRIPTION "Uses TimeTicks, which the library's SNMPv2-SMI does not define."
+    ::= { enterprises 90020 }
+BadTicks ::= TEXTUAL-CONVENTION
+    STATUS current
+    DESCRIPTION "TimeTicks is unknown in this library."
+    SYNTAX TimeTicks
+END
+]=])
 set(IMPORTER_MIB [=[IMPORTER-MIB DEFINITIONS ::= BEGIN
 IMPORTS MODULE-IDENTITY, enterprises FROM SNMPv2-SMI
         dupMIB FROM DUP-MIB;
@@ -92,12 +110,15 @@ END
 #   [EDIT_FILE <relative/path> EDIT_FROM <text> EDIT_TO <text>]
 #                                          open that file in the editor, replace the text, save, and
 #                                          wait for the profile to rebuild (logged as BEFORE/AFTER-EDIT)
+#   [NO_STANDARDS_SCOPE]                   the profile names only the Acme folder, not Standards, as a
+#                                          profile made from one vendor folder does
+#   [BROKEN_SMI]                           the Standards SNMPv2-SMI is a bad copy that lacks TimeTicks
 #   [LIVE]                                 also start the loopback-only test agent and issue a real Get
 #                                          through the connection bar (needs SNMPB_PYTHON)
 #   REQUIRE_EXIT_ZERO | ALLOW_EXIT_ONE
 #   EXPECT <regex> ...)                    each must match launch-smoke.log
 function(run_scenario name)
-    cmake_parse_arguments(S "REQUIRE_EXIT_ZERO;ALLOW_EXIT_ONE;LIVE" ""
+    cmake_parse_arguments(S "REQUIRE_EXIT_ZERO;ALLOW_EXIT_ONE;LIVE;NO_STANDARDS_SCOPE;BROKEN_SMI" ""
         "FILES;ROOTS;MODIFIED_ROOTS;UNRESOLVED;EXPECT;REJECT;EDIT_FILE;EDIT_FROM;EDIT_TO" ${ARGN})
     set(dir "${SNMPB_TOLERANCE_DIR}/${name}")
     set(library "${dir}/MIB-Library")
@@ -105,6 +126,11 @@ function(run_scenario name)
     foreach(module SNMPv2-SMI SNMPv2-TC SNMPv2-CONF SNMPv2-MIB)
         file(COPY "${SNMPB_SOURCE_DIR}/libsmi/mibs/ietf/${module}" DESTINATION "${library}/Standards")
     endforeach()
+    if(S_BROKEN_SMI)
+        file(READ "${library}/Standards/SNMPv2-SMI" smi_text)
+        string(REPLACE "TimeTicks ::=" "TimeTicksGone ::=" smi_text "${smi_text}")
+        file(WRITE "${library}/Standards/SNMPv2-SMI" "${smi_text}")
+    endif()
     foreach(spec IN LISTS S_FILES)
         string(REPLACE "=" ";" parts "${spec}")
         list(GET parts 0 relative)
@@ -145,11 +171,14 @@ function(run_scenario name)
             ",{\"id\":\"custom.other\",\"manifestVersion\":1,\"name\":\"Other profile\",\"roots\":[],"
             "\"scope\":[{\"id\":\"collection:Standards\",\"path\":\"${library}/Standards\"}],\"type\":\"custom\"}")
     endif()
+    set(standards_scope ",{\"id\":\"collection:Standards\",\"path\":\"${library}/Standards\"}")
+    if(S_NO_STANDARDS_SCOPE)
+        set(standards_scope "")
+    endif()
     file(WRITE "${dir}/state/mibs/profiles-v1.json"
         "{\"ordinaryProfilesMigrated\":true,\"schemaVersion\":5,\"profiles\":[{\"id\":\"custom.test\","
         "\"manifestVersion\":1,\"name\":\"Test profile\",\"roots\":[${roots_json}],"
-        "\"scope\":[{\"id\":\"collection:Acme\",\"path\":\"${library}/Acme\"},"
-        "{\"id\":\"collection:Standards\",\"path\":\"${library}/Standards\"}],"
+        "\"scope\":[{\"id\":\"collection:Acme\",\"path\":\"${library}/Acme\"}${standards_scope}],"
         "\"type\":\"custom\"${unresolved_json}}${extra_profiles_json}]}")
     file(WRITE "${dir}/snmpb.sourceforge.net/SnmpB.ini"
         "[mib-library]\nroot=${library}\ncurrent-profile=custom.test\n")
@@ -263,6 +292,32 @@ run_scenario(duplicate-providers REQUIRE_EXIT_ZERO
            "category=\"Duplicate providers\" module=DUP-MIB"
            "Alpha/DUP-MIB was used because it comes first by path"
            "Also found: [^\"]*Beta/DUP-MIB")
+
+# 6b. Two selected files declare the same module (two revisions side by side in one folder, as in
+#     real vendor collections): one is used, the other is set aside, and the profile still loads.
+run_scenario(duplicate-selected-files REQUIRE_EXIT_ZERO
+    FILES "Prod/DUP-REV-A=DUP_MIB_A" "Prod/DUP-REV-B=DUP_MIB_B" "Prod/GOOD-MIB=GOOD_MIB"
+    ROOTS "DUP-MIB@Prod/DUP-REV-A" "DUP-MIB@Prod/DUP-REV-B" "GOOD-MIB@Prod/GOOD-MIB"
+    EXPECT "ENVIRONMENT status=[A-Za-z]+ loaded=[1-9]"
+           "category=\"Duplicate providers\" module=DUP-MIB"
+           "DUP-REV-A was used because it comes first by path"
+    REJECT "Profile Environment build failed" "Multiple exact providers")
+
+# 6c. A MIB the parser cannot fully understand must never crash the application.
+run_scenario(unknown-type-in-textual-convention REQUIRE_EXIT_ZERO BROKEN_SMI
+    FILES "Prod/GOOD-MIB=GOOD_MIB" "Prod/BAD-TC-MIB=BAD_TC_MIB"
+    ROOTS "GOOD-MIB@Prod/GOOD-MIB" "BAD-TC-MIB@Prod/BAD-TC-MIB"
+    EXPECT "ENVIRONMENT status=[A-Za-z]+ loaded=[1-9]"
+           "module=BAD-TC-MIB"
+    REJECT "Profile Environment build failed")
+
+# 6d. A profile made from one vendor folder still gets the Library's Standards folder as the
+#     last place to look for imports, so it loads completely instead of reporting the standard
+#     MIBs as missing.
+run_scenario(standards-fallback REQUIRE_EXIT_ZERO NO_STANDARDS_SCOPE
+    FILES "Prod/GOOD-MIB=GOOD_MIB" ROOTS "GOOD-MIB@Prod/GOOD-MIB"
+    EXPECT "ENVIRONMENT status=Complete loaded=2 failed=0 errors=0 warnings=0"
+    REJECT "Missing dependency" "only outside this profile")
 
 # 7. One selected file is gone: reported as an error, the other root still loads.
 run_scenario(missing-root-file REQUIRE_EXIT_ZERO

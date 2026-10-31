@@ -2427,13 +2427,23 @@ typeDeclarationRHS:	Syntax
 				 */
 				$$ = $11;
 			    } else {
-				if (!($11))
-				    smiPrintError(thisParserPtr, ERR_INTERNAL);
 				/*
 				 * Otherwise, we have to allocate a
 				 * new Type struct, inherited from $10.
 				 */
-				$$ = duplicateType($11, 0, thisParserPtr);
+				if (!($11)) {
+				    smiPrintError(thisParserPtr, ERR_INTERNAL);
+				    /*
+				     * The SYNTAX could not be understood.
+				     * Keep the TEXTUAL-CONVENTION, with an unknown
+				     * base type, instead of dereferencing NULL
+				     * (this crashed on a vendor ATM-TC-MIB).
+				     */
+				    $$ = addType(NULL, SMI_BASETYPE_UNKNOWN, 0,
+						 thisParserPtr);
+				} else {
+				    $$ = duplicateType($11, 0, thisParserPtr);
+				}
 			    }
 			    setTypeDescription($$, $7, thisParserPtr);
 			    if ($9) {

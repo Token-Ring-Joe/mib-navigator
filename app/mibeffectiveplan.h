@@ -145,6 +145,13 @@ struct MibEffectivePlanResolverInput {
     QMap<QString, MibProviderPin> pins;
 };
 
+// The one place that decides what the resolver is given for a profile: its roots, its folders in
+// order, its pins, and then the Library's Standards folder as the last place to look. Vendor MIBs
+// import standard ones (SNMPv2-MIB, IF-MIB, ENTITY-MIB, ...), so every profile can reach them
+// without carrying its own copies. Both the start-up path and the normal path use this.
+MibEffectivePlanResolverInput MibResolverInputForProfile(const MibProfileRecord &profile,
+                                                         const QString &libraryRoot);
+
 struct MibEffectivePlanFile {
     QString canonicalPath;
     QString sha256;

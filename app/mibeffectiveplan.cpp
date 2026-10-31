@@ -554,6 +554,38 @@ MibEffectivePlan MibEffectiveRuntimePlanResolver::resolve(
                      : QObject::tr("Exact user-selected root")});
     }
 
+    // Several selected files can declare the same module: different revisions of a standard MIB
+    // sitting side by side in a vendor folder are common. One module must have one provider in
+    // the environment, so keep the first file by path, set the others aside for that module, and
+    // report it. This must never stop the profile from loading.
+    {
+        QMap<QString, QString> keptBy;   // module -> key of the file that provides it
+        const QStringList order = selected.keys();
+        for (const QString &fileKey : order) {
+            auto it = selected.find(fileKey);
+            QStringList kept, setAside;
+            for (const QString &identity : std::as_const(it->member.identities)) {
+                if (keptBy.contains(identity)) setAside << identity;
+                else { keptBy.insert(identity, fileKey); kept << identity; }
+            }
+            if (setAside.isEmpty()) continue;
+            for (const QString &identity : std::as_const(setAside)) {
+                const QString keptPath = selected.value(keptBy.value(identity)).member.canonicalPath;
+                QList<MibIndexedProvider> candidates;
+                for (const auto &provider : library.providersFor(identity))
+                    if (samePath(provider.canonicalPath, keptPath) || samePath(provider.canonicalPath, it->member.canonicalPath))
+                        candidates.append(provider);
+                diagnostics.append({identity, {}, QStringLiteral("ROOT"), candidates,
+                    MibPlanResolutionTier::Ambiguous, keptPath,
+                    QObject::tr("Several selected files declare this module; %1 was used because it comes first "
+                                "by path, and %2 was set aside for this module")
+                        .arg(keptPath, it->member.canonicalPath)});
+            }
+            if (kept.isEmpty()) selected.remove(fileKey);
+            else it->member.identities = kept;
+        }
+    }
+
     bool progress = true;
     while (progress) {
         progress = false;
@@ -801,4 +833,18 @@ MibDependencyCheckResult MibBoundedDependencyLoader::load(
     for (const QString &identity : std::as_const(pending))
         result.failures.append({identity, MibDependencyFailureKind::ParserSemanticFailure, QObject::tr("Planned provider did not materialize")});
     result.elapsedMsecs = timer.elapsed(); return result;
+}
+
+MibEffectivePlanResolverInput MibResolverInputForProfile(const MibProfileRecord &profile,
+                                                         const QString &libraryRoot)
+{
+    MibEffectivePlanResolverInput input;
+    input.id = profile.id;
+    input.roots = profile.roots;
+    input.orderedScopes = MibProfileScopePaths(profile);
+    const QString standardsFolder = QFileInfo(QDir(libraryRoot).filePath(QStringLiteral("Standards"))).canonicalFilePath();
+    if (!libraryRoot.isEmpty() && !standardsFolder.isEmpty() && !input.orderedScopes.contains(standardsFolder))
+        input.orderedScopes.append(standardsFolder);
+    input.pins = profile.providerPins;
+    return input;
 }
