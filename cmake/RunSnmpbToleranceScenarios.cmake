@@ -323,6 +323,10 @@ if(SNMPB_PYTHON)
                "PASS: live: the Watch tab shows the row and its change"
                "PASS: live: removing a watch removes its row"
                "PASS: live: the history remembers the credential used with the target"
+               "PASS: live: the Log tab lists every request"
+               "PASS: live: a successful Get is logged with its target, identity and object count"
+               "PASS: live: a request that got no answer is logged as a timeout"
+               "PASS: live: the log never contains a community string"
                "PASS: live: a wrong-type answer shows a plain-English warning naming both types"
                "PASS: live: the Results table shows the received type and raw value beside the interpretation"
         REJECT "FAIL")

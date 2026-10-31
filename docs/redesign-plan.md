@@ -225,7 +225,17 @@ into smaller steps, each with its own working build.
 11. **Traps**: Copy source IP, plus raw/interpreted varbinds from step 9.
 12. **Log / PDU view**, starting with plain-English SNMPv3 REPORT translation
     (unknown user, wrong auth, decryption failure, time window, unknown engine
-    ID). Full packet decode is optional later.
+    ID). Full packet decode is optional later. *Done (2026-10-31):* the REPORT
+    translation (`snmpreport.*`) covers all six usmStats counters and the snmpMPD
+    counters, and appears in the status line above Results, the Watch row, and the
+    Log. The **Log** tab (bottom panel) records every request this session: time,
+    operation, target, identity (for example "SNMPv3 synoptics (authPriv)"), the
+    object, how it ended (OK, Failed, Timeout, Refused by device, Stopped), how many
+    objects, how long it took, and the plain-English detail. It never contains a
+    community or passphrase, can be copied as tab-separated text for a ticket, and
+    keeps the newest 1000 entries. Not done: the table and instance-picker requests
+    are not logged yet, Watch polls are not logged, and there is no raw packet
+    decode.
 13. **MIB Problems view** (competitive features #1 and #6 merged). Actionable
     messages for missing imports, unresolved symbols, duplicate and conflicting
     providers, and parse diagnostics. Show where each definition came from and

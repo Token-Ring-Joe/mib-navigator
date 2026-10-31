@@ -49,6 +49,7 @@
 #include "mibselection.h"
 #include "mibvaluesemantics.h"
 #include "snmpreport.h"
+#include "requestlog.h"
 #include <QLabel>
 #include <QStatusBar>
 #include <QStyle>
@@ -594,6 +595,31 @@ void Agent::BeginRequest(const SnmpRequestConfig &config,
     activeRequestContext =
         std::make_unique<SnmpRequestContext>(config, operation,
                                              MibEnvironmentRegistry::active());
+    if (requestLog) {
+        static const char *const names[] = {"Get", "GetNext", "GetBulk", "Walk", "Set"};
+        const QString identity = config.version == SnmpRequestVersion::V3
+            ? tr("SNMPv3 %1 (%2)").arg(config.securityName,
+                  config.securityLevel == 2 ? QStringLiteral("authPriv")
+                  : config.securityLevel == 1 ? QStringLiteral("authNoPriv") : QStringLiteral("noAuthNoPriv"))
+            : config.version == SnmpRequestVersion::V1 ? QStringLiteral("SNMPv1") : QStringLiteral("SNMPv2c");
+        QString name = QStringLiteral("Request");
+        switch (operation) {
+        case SnmpRequestOperation::Get: name = names[0]; break;
+        case SnmpRequestOperation::GetNext: name = names[1]; break;
+        case SnmpRequestOperation::GetBulk: name = names[2]; break;
+        case SnmpRequestOperation::Walk: name = names[3]; break;
+        case SnmpRequestOperation::Set: name = names[4]; break;
+        default: break;
+        }
+        activeLogId = requestLog->begin(name, QStringLiteral("%1:%2").arg(config.address, config.port), identity,
+                                        QString::fromLatin1(theoid.get_printable()));
+    }
+}
+
+void Agent::finishLog(const QString &resultHtml, int objectCount)
+{
+    if (requestLog && activeLogId) requestLog->finish(activeLogId, resultHtml, objectCount);
+    activeLogId = 0;
 }
 
 void Agent::ConfigTargetFromSettings(const SnmpRequestConfig& config,
@@ -969,6 +995,7 @@ end:
         : tr("Finished: %n object(s) in %1 request(s).", nullptr, objects).arg(requests);
 cleanup:
     presentRequestStatus(s, statusHtml.isEmpty() ? msg : statusHtml, objects);
+    finishLog(statusHtml.isEmpty() ? msg : statusHtml, objects);
     s->MainUI()->Query->append(msg);
     // Dont stop the timer, but put it back to the lower-rate trap timer value
     timer.start(TRAP_TIMER_MSEC);
@@ -1120,6 +1147,7 @@ end:
 
 cleanup:
     presentRequestStatus(s, msg, objects);
+    finishLog(msg, objects);
     s->MainUI()->Query->append(msg);
     // Dont stop the timer, but put it back to the lower-rate trap timer value
     timer.start(TRAP_TIMER_MSEC);
@@ -1169,6 +1197,8 @@ void Agent::WalkFrom(const QString& oid)
         msg = tr("<font color=red>Could not send GETBULK request: %1</font>")
                        .arg(Snmp::error_msg(status));
         s->MainUI()->Query->append(msg);
+        presentRequestStatus(s, msg, 0);
+        finishLog(msg, 0);
         activeRequestContext.reset();
     }
     
@@ -1231,6 +1261,8 @@ void Agent::Get(const QString& oid, bool usevblist)
         msg = QString(tr("<font color=red>Could not send GET request: %1</font>"))
                        .arg(Snmp::error_msg(status));
         s->MainUI()->Query->append(msg);
+        presentRequestStatus(s, msg, 0);
+        finishLog(msg, 0);
         activeRequestContext.reset();
     }
     
@@ -1275,6 +1307,8 @@ void Agent::GetNext(const QString& oid, bool usevblist)
         msg = QString(tr("<font color=red>Could not send GETNEXT request: %1</font>"))
                        .arg(Snmp::error_msg(status));
         s->MainUI()->Query->append(msg);
+        presentRequestStatus(s, msg, 0);
+        finishLog(msg, 0);
         activeRequestContext.reset();
     }
     
@@ -1322,6 +1356,8 @@ void Agent::GetBulk(const QString& oid, bool usevblist)
         msg = tr("<font color=red>Could not send GETBULK request: %1</font>")
                        .arg(Snmp::error_msg(status));
         s->MainUI()->Query->append(msg);
+        presentRequestStatus(s, msg, 0);
+        finishLog(msg, 0);
         activeRequestContext.reset();
     }
     
@@ -1366,6 +1402,8 @@ void Agent::Set(const QString& oid, bool usevblist)
         msg = tr("<font color=red>Could not send SET request: %1</font>")
             .arg(Snmp::error_msg(status));
         s->MainUI()->Query->append(msg);
+        presentRequestStatus(s, msg, 0);
+        finishLog(msg, 0);
         activeRequestContext.reset();
     }
 

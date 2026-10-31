@@ -50,6 +50,8 @@
 #include "watchpanel.h"
 #include "watchservice.h"
 #include "collectionsearchpanel.h"
+#include "requestlog.h"
+#include "requestlogpanel.h"
 #include "mibcollectionservice.h"
 #include <QSet>
 #include <QMenu>
@@ -779,6 +781,11 @@ void Snmpb::BindToGUI(QMainWindow* mw)
         if (workbench) workbench->showBottomPage(searchPanel);
     });
 
+    // Log: every request and how it ended.
+    auto *requestLog = new RequestLog(this);
+    agent->SetRequestLog(requestLog);
+    auto *requestLogPanel = new RequestLogPanel(requestLog, mw);
+
     auto *problemsPage = new QWidget(mw);
     problemsPage->setObjectName(QStringLiteral("WorkbenchProblemsPage"));
     auto *problemsLayout = new QVBoxLayout(problemsPage);
@@ -978,7 +985,7 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     workbenchPages.events = w.TrapsTab;
     workbench = new WorkbenchShell(mw, w.widget,
         qobject_cast<QGridLayout *>(w.widget->layout()), contextWidget, w.TabW,
-        workbenchPages, w.NodeInfoLayout, watchPanel, searchPanel, problemsPage,
+        workbenchPages, w.NodeInfoLayout, watchPanel, searchPanel, requestLogPanel, problemsPage,
             diagnosticsPage, rawPage, this);
     startup->advance(startupGeneration, StartupState::ShellReady,
                      tr("Loading MIB Catalog…"));

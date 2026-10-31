@@ -63,6 +63,8 @@ public:
     // The connection bar (Target, Credential, MIB Profile) is the authority for who a
     // request goes to and how it authenticates.
     void SetConnectionBar(ConnectionBar *bar);
+    // Every request is recorded here, with how it ended.
+    void SetRequestLog(class RequestLog *log) { requestLog = log; }
 
     inline USM *GetUSMObj(void) { return v3mp->get_usm(); }
 
@@ -84,6 +86,9 @@ private:
     void ConnectionSelectionChanged();
     void UpdateTableQueryAvailability();
     ConnectionBar *connectionBar = nullptr;
+    class RequestLog *requestLog = nullptr;
+    quint64 activeLogId = 0;
+    void finishLog(const QString &resultHtml, int objectCount);
     mutable ConnectionError lastConnectionError = ConnectionError::None;
     QString GetValueString(MibSelection &ms, Vb* vb);
     void VarbindsBuildList(void);

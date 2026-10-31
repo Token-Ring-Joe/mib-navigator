@@ -35,6 +35,8 @@ set(SNMPB_APP_SOURCES
     snmpreport.cpp
     mibcollectionindex.cpp
     mibcollectionservice.cpp
+    requestlog.cpp
+    requestlogpanel.cpp
     collectionsearchpanel.cpp
     watchcalculator.cpp
     watchservice.cpp
@@ -119,6 +121,8 @@ set(SNMPB_APP_HEADERS
     snmpreport.h
     mibcollectionindex.h
     mibcollectionservice.h
+    requestlog.h
+    requestlogpanel.h
     collectionsearchpanel.h
     watchcalculator.h
     watchservice.h
@@ -561,6 +565,17 @@ if(BUILD_TESTING)
             $<TARGET_FILE:snmpb_mib_collection_service_test>)
     else()
         add_test(NAME snmpb.mib-collection-service COMMAND $<TARGET_FILE:snmpb_mib_collection_service_test>)
+    endif()
+
+    add_executable(snmpb_request_log_test requestlog.cpp requestlog.h requestlog_test.cpp)
+    set_target_properties(snmpb_request_log_test PROPERTIES AUTOMOC ON)
+    target_link_libraries(snmpb_request_log_test PRIVATE Qt6::Core Qt6::Gui)
+    if(WIN32)
+        add_test(NAME snmpb.request-log COMMAND ${CMAKE_COMMAND} -E env
+            "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
+            $<TARGET_FILE:snmpb_request_log_test>)
+    else()
+        add_test(NAME snmpb.request-log COMMAND $<TARGET_FILE:snmpb_request_log_test>)
     endif()
 
     add_executable(snmpb_snmp_report_test snmpreport.cpp snmpreport.h snmpreport_test.cpp)

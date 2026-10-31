@@ -52,6 +52,7 @@
 #include <QComboBox>
 #include <QToolButton>
 #include "agent.h"
+#include "requestlog.h"
 #include "mibcollectionservice.h"
 #include <QLineEdit>
 #include "credentialsdialog.h"
@@ -291,13 +292,14 @@ int main( int argc, char ** argv )
             QTabWidget *bottomTabs = mw.findChild<QTabWidget *>("WorkbenchBottomTabs");
             check(workbenchDocuments && workbenchDocuments->tabBar()->isHidden(),
                   "legacy primary tab navigation is retired");
-            check(bottomTabs && bottomTabs->count() == 5 &&
+            check(bottomTabs && bottomTabs->count() == 6 &&
                   bottomTabs->tabText(0) == "Watch" &&
                   bottomTabs->tabText(1) == "Search" &&
-                  bottomTabs->tabText(2) == "Problems" &&
-                  bottomTabs->tabText(3) == "Diagnostics" &&
-                  bottomTabs->tabText(4) == "Raw",
-                  "bottom Watch, Search, Problems, Diagnostics, and Raw views are integrated");
+                  bottomTabs->tabText(2) == "Log" &&
+                  bottomTabs->tabText(3) == "Problems" &&
+                  bottomTabs->tabText(4) == "Diagnostics" &&
+                  bottomTabs->tabText(5) == "Raw",
+                  "bottom Watch, Search, Log, Problems, Diagnostics, and Raw views are integrated");
             QAction *eventsActivity = mw.findChild<QAction *>("WorkbenchActivityEvents");
             QAction *mibsActivity = mw.findChild<QAction *>("WorkbenchActivityMIBs");
             if (eventsActivity) eventsActivity->trigger();
@@ -353,7 +355,7 @@ int main( int argc, char ** argv )
                 QCheckBox *notes = mw.findChild<QCheckBox *>("WorkbenchProblemShowNotes");
                 QPlainTextEdit *detail = mw.findChild<QPlainTextEdit *>("WorkbenchProblemDetail");
                 QTabWidget *bottom = mw.findChild<QTabWidget *>("WorkbenchBottomTabs");
-                if (bottom) bottom->setCurrentIndex(2);
+                if (bottom) bottom->setCurrentIndex(3);
                 mw.resize(1500, 1000);
                 QCoreApplication::processEvents();
                 mw.grab().save(QDir(smoke_config_dir).filePath("problems-tab.png"));
@@ -496,6 +498,11 @@ int main( int argc, char ** argv )
                         smoke_output << "launch-smoke: LIVE-WALK rows=" << walkRows << " oids=" << walked.join(",")
                                      << " stopEnabled=" << snmpb.MainUI()->actionStop->isEnabled()
                                      << " queryText=\"" << snmpb.MainUI()->Query->toPlainText().left(300).replace('\n', ' ') << "\"" << Qt::endl;
+                        if (RequestLog *shownLog = snmpb.findChild<RequestLog *>())
+                            for (const RequestLogEntry &e : shownLog->entries())
+                                smoke_output << "launch-smoke: LIVE-LOG op=" << e.operation << " target=" << e.target << " identity=\""
+                                             << e.identity << "\" result=\"" << RequestOutcomeText(e.outcome) << "\" objects=" << e.objects
+                                             << " detail=\"" << e.detail.left(120) << "\"" << Qt::endl;
                         smoke_output << "launch-smoke: LIVE-STATUS-AFTER-WALK failed=" << (requestStatus && requestStatus->property("failed").toBool())
                                      << " text=\"" << (requestStatus ? requestStatus->text() : QString()) << "\"" << Qt::endl;
                         check(walkRows >= 3 && !snmpb.MainUI()->actionStop->isEnabled(),
@@ -516,6 +523,26 @@ int main( int argc, char ** argv )
                         check(requestStatus && requestStatus->property("failed").toBool() && !requestStatus->text().isEmpty(),
                               "live: a request that gets no answer shows an error line above the Results table");
                         targetBox->setEditText(smoke_live_target);
+
+                        // The Log tab recorded all of that, and nothing secret.
+                        RequestLog *requestLog = snmpb.findChild<RequestLog *>();
+                        QTableWidget *logTable = mw.findChild<QTableWidget *>("RequestLogTable");
+                        check(requestLog && logTable && logTable->rowCount() == requestLog->entries().size() &&
+                              requestLog->entries().size() >= 3, "live: the Log tab lists every request");
+                        if (requestLog) {
+                            bool okGet = false, timedOut = false, leaked = false;
+                            for (const RequestLogEntry &e : requestLog->entries()) {
+                                okGet = okGet || (e.operation == "Get" && e.outcome == RequestOutcome::Succeeded &&
+                                                  e.target == smoke_live_target && e.identity == "SNMPv2c" && e.objects == 1);
+                                timedOut = timedOut || e.outcome == RequestOutcome::TimedOut;
+                                for (const QString &field : {e.target, e.identity, e.oid, e.detail, e.operation})
+                                    leaked = leaked || field.contains("smokero") || field.contains("smokerw");
+                            }
+                            check(okGet, "live: a successful Get is logged with its target, identity and object count");
+                            check(timedOut, "live: a request that got no answer is logged as a timeout");
+                            check(!leaked, "live: the log never contains a community string");
+                            check(!RequestLogAsText(requestLog->entries()).contains("smokero"), "live: the exported log contains no community string");
+                        }
                     }
                     if (smoke_live_walk.isEmpty()) {
                         // Watch: a moving counter on the test agent, polled every second while the
