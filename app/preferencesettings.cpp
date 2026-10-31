@@ -34,7 +34,7 @@ PreferencesSettings PreferencesSettings::load(QSettings &settings)
     result.trapPort4 = settings.value("network/trapport4", 162).toInt();
     result.enableIpv6 = settings.value("network/enableipv6", true).toBool();
     result.trapPort6 = settings.value("network/trapport6", 162).toInt();
-    result.horizontalSplit = settings.value("ui/horizontalsplit", false).toBool();
+    result.horizontalSplit = settings.value("ui/horizontalsplit", true).toBool();
     result.expandTrapBinding = settings.value("ui/expandtrapbinding", true).toBool();
     result.showAgentName = settings.value("misc/showagentname", false).toBool();
     result.trapHistoryLimit = qBound(1, settings.value("ui/traphistorylimit", 1000).toInt(), 100000);
@@ -42,6 +42,7 @@ PreferencesSettings PreferencesSettings::load(QSettings &settings)
     result.selectedProfile = settings.value("ui/selectedprofile", "localhost").toString();
     result.selectedProfileId = settings.value("ui/selectedprofileid").toString();
     result.selectedProtocol = settings.value("ui/selectedproto", 0).toInt();
+    result.requestPort = qBound(1, settings.value("request/port", 161).toInt(), 65535);
     result.requestTimeout = settings.value("request/timeout", 3).toInt();
     result.requestRetries = settings.value("request/retries", 1).toInt();
     result.bulkNonRepeaters = settings.value("request/nonrepeaters", 0).toInt();
@@ -70,6 +71,7 @@ void PreferencesSettings::save(QSettings &settings, bool preserveLegacyMibPreloa
     else
         settings.remove("ui/selectedprofileid");
     settings.setValue("ui/selectedproto", selectedProtocol);
+    settings.setValue("request/port", requestPort);
     settings.setValue("request/timeout", requestTimeout);
     settings.setValue("request/retries", requestRetries);
     settings.setValue("request/nonrepeaters", bulkNonRepeaters);

@@ -28,12 +28,15 @@
 #include "mibselection.h"
 #include "agentprofile.h"
 #include "agentrequestselection.h"
+#include "connectionmodel.h"
 #include "snmprequestconfig.h"
 #include "snmprequestcontext.h"
 #include "snmptableasyncrunner.h"
 #include "snmpinstanceasyncrunner.h"
 #include "ui_varbinds.h"
 #include "snmp_pp/snmp_pp.h"
+
+class ConnectionBar;
 
 class Agent: public QObject
 {
@@ -58,6 +61,11 @@ public:
 
     int SelectTableInstance(const QString& oid, QString& outinstance);
 
+    // The connection bar (Target, Credential, MIB Profile) is the authority for who a
+    // request goes to and how it authenticates. Without one the legacy hidden Agent
+    // Profile controls are used, which only automated tests still rely on.
+    void SetConnectionBar(ConnectionBar *bar);
+
     inline USM *GetUSMObj(void) { return v3mp->get_usm(); }
 
 protected:
@@ -69,11 +77,16 @@ protected:
               SnmpRequestConfig *resolvedConfig = nullptr);
     AgentSelectionError ResolveCurrentSelection(
         AgentRequestSelection *selection) const;
+    // Same as above for a request the user just asked for: explains what is missing.
+    bool ResolveForRequest(AgentRequestSelection *selection);
     void BeginRequest(const SnmpRequestConfig &config,
                       SnmpRequestOperation operation);
 
 private:
+    void ConnectionSelectionChanged();
     void UpdateTableQueryAvailability();
+    ConnectionBar *connectionBar = nullptr;
+    mutable ConnectionError lastConnectionError = ConnectionError::None;
     QString GetValueString(MibSelection &ms, Vb* vb);
     void VarbindsBuildList(void);
     void PresentTableResult(const SnmpTableResult &result);

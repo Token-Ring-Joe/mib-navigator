@@ -1,6 +1,8 @@
 #include "mibvaluesemantics.h"
 
+#include <QObject>
 #include <QSet>
+#include <functional>
 #include <cstdint>
 
 namespace {
@@ -87,6 +89,130 @@ QString RenderMibValue(const MibResolvedObject &object, const Vb &source)
             return QString::number(Counter64::c64_to_ll(value));
     }
     return QString::fromLatin1(vb.get_printable_value());
+}
+
+QString SnmpSyntaxName(int syntax)
+{
+    switch (syntax) {
+    case sNMP_SYNTAX_INT32: return QStringLiteral("Integer32");
+    case sNMP_SYNTAX_OCTETS: return QStringLiteral("OCTET STRING");
+    case sNMP_SYNTAX_BITS: return QStringLiteral("BITS");
+    case sNMP_SYNTAX_NULL: return QStringLiteral("NULL");
+    case sNMP_SYNTAX_OID: return QStringLiteral("OBJECT IDENTIFIER");
+    case sNMP_SYNTAX_IPADDR: return QStringLiteral("IpAddress");
+    case sNMP_SYNTAX_CNTR32: return QStringLiteral("Counter32");
+    case sNMP_SYNTAX_GAUGE32: return QStringLiteral("Gauge32");
+    case sNMP_SYNTAX_TIMETICKS: return QStringLiteral("TimeTicks");
+    case sNMP_SYNTAX_OPAQUE: return QStringLiteral("Opaque");
+    case sNMP_SYNTAX_CNTR64: return QStringLiteral("Counter64");
+    case sNMP_SYNTAX_NOSUCHOBJECT: return QStringLiteral("noSuchObject");
+    case sNMP_SYNTAX_NOSUCHINSTANCE: return QStringLiteral("noSuchInstance");
+    case sNMP_SYNTAX_ENDOFMIBVIEW: return QStringLiteral("endOfMibView");
+    default: return QStringLiteral("unknown type 0x%1").arg(syntax, 0, 16);
+    }
+}
+
+namespace {
+QString rangeText(const MibEnvironmentConstraint &c)
+{
+    const auto text = [](const MibEnvironmentValue &v) {
+        return v.isSigned ? QString::number(v.signedValue) : QString::number(v.unsignedValue);
+    };
+    return c.minimum.isSigned == c.maximum.isSigned && text(c.minimum) == text(c.maximum)
+        ? text(c.minimum) : QStringLiteral("%1..%2").arg(text(c.minimum), text(c.maximum));
+}
+
+// The MIB's ranges (or sizes) are alternatives: a value is fine if it fits any of them.
+QString outsideRanges(const QList<MibEnvironmentConstraint> &constraints, bool sizes,
+                      const std::function<bool(const MibEnvironmentConstraint &)> &fits)
+{
+    QStringList ranges; bool any = false;
+    for (const MibEnvironmentConstraint &c : constraints) {
+        if (c.isSizeConstraint != sizes) continue;
+        any = true;
+        if (fits(c)) return {};
+        ranges << rangeText(c);
+    }
+    return any ? ranges.join(QStringLiteral(" | ")) : QString();
+}
+
+bool sameWireType(int expected, int received)
+{
+    if (expected == received) return true;
+    if (expected == sNMP_SYNTAX_BITS && received == sNMP_SYNTAX_OCTETS) return true;  // BITS travel as OCTET STRING
+    return false;
+}
+}
+
+MibValueCheck CheckMibValue(const MibResolvedObject &object, const Vb &source)
+{
+    Vb vb = source;
+    MibValueCheck result;
+    const int received = int(vb.get_syntax());
+    result.receivedType = SnmpSyntaxName(received);
+    result.rawValue = QString::fromLatin1(vb.get_printable_value());
+    if (received == sNMP_SYNTAX_NOSUCHOBJECT || received == sNMP_SYNTAX_NOSUCHINSTANCE ||
+        received == sNMP_SYNTAX_ENDOFMIBVIEW || received == sNMP_SYNTAX_NULL) {
+        result.rawValue = result.receivedType;
+        return result;
+    }
+    const MibEnvironmentNodeRecord *node = object.node;
+    if (!node) return result;                       // not in the active MIB Profile: nothing to compare with
+
+    const bool knownBase = node->baseType == MibEnvironmentBaseType::Integer32 ||
+        node->baseType == MibEnvironmentBaseType::Enumeration ||
+        node->baseType == MibEnvironmentBaseType::Unsigned32 ||
+        node->baseType == MibEnvironmentBaseType::Unsigned64 ||
+        node->baseType == MibEnvironmentBaseType::OctetString ||
+        node->baseType == MibEnvironmentBaseType::ObjectIdentifier ||
+        node->baseType == MibEnvironmentBaseType::Bits;
+    if (!knownBase) return result;
+
+    const int expected = SnmpSyntaxForMibNode(node);
+    if (!sameWireType(expected, received))
+        result.warnings << QObject::tr("Wrong type: the device sent %1 but the MIB defines %2 as %3.")
+            .arg(result.receivedType, node->name, SnmpSyntaxName(expected));
+
+    if (received == sNMP_SYNTAX_INT32) {
+        long value = 0;
+        if (vb.get_value(value) == SNMP_CLASS_SUCCESS) {
+            if (node->baseType == MibEnvironmentBaseType::Enumeration && !node->namedValues.isEmpty()) {
+                bool defined = false; QStringList names;
+                for (const auto &n : node->namedValues) {
+                    defined = defined || namedNumber(n) == value;
+                    names << QStringLiteral("%1(%2)").arg(n.name).arg(namedNumber(n));
+                }
+                if (!defined)
+                    result.warnings << QObject::tr("Undefined value: %1 is not one of the values the MIB defines (%2).")
+                        .arg(value).arg(names.join(QStringLiteral(", ")));
+            }
+            const QString ranges = outsideRanges(node->constraints, false,
+                [value](const MibEnvironmentConstraint &c) { return integerConstraint(c, value); });
+            if (!ranges.isEmpty())
+                result.warnings << QObject::tr("Out of range: %1 is outside the range the MIB allows (%2).")
+                    .arg(value).arg(ranges);
+        }
+    } else if (received == sNMP_SYNTAX_GAUGE32 || received == sNMP_SYNTAX_CNTR32 ||
+               received == sNMP_SYNTAX_TIMETICKS) {
+        unsigned long value = 0;
+        if (vb.get_value(value) == SNMP_CLASS_SUCCESS) {
+            const QString ranges = outsideRanges(node->constraints, false,
+                [value](const MibEnvironmentConstraint &c) { return unsignedConstraint(c, quint64(value)); });
+            if (!ranges.isEmpty())
+                result.warnings << QObject::tr("Out of range: %1 is outside the range the MIB allows (%2).")
+                    .arg(quint64(value)).arg(ranges);
+        }
+    } else if (received == sNMP_SYNTAX_OCTETS || received == sNMP_SYNTAX_OPAQUE) {
+        unsigned char bytes[65536]; unsigned long length = 0;
+        if (vb.get_value(bytes, length, sizeof bytes) == SNMP_CLASS_SUCCESS) {
+            const QString sizes = outsideRanges(node->constraints, true,
+                [length](const MibEnvironmentConstraint &c) { return unsignedConstraint(c, quint64(length)); });
+            if (!sizes.isEmpty())
+                result.warnings << QObject::tr("Wrong size: the value is %n byte(s) long, outside the size the MIB allows (%1).", nullptr, int(length))
+                    .arg(sizes);
+        }
+    }
+    return result;
 }
 
 int SnmpSyntaxForMibNode(const MibEnvironmentNodeRecord *node)

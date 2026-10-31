@@ -92,10 +92,12 @@ END
 #   [EDIT_FILE <relative/path> EDIT_FROM <text> EDIT_TO <text>]
 #                                          open that file in the editor, replace the text, save, and
 #                                          wait for the profile to rebuild (logged as BEFORE/AFTER-EDIT)
+#   [LIVE]                                 also start the loopback-only test agent and issue a real Get
+#                                          through the connection bar (needs SNMPB_PYTHON)
 #   REQUIRE_EXIT_ZERO | ALLOW_EXIT_ONE
 #   EXPECT <regex> ...)                    each must match launch-smoke.log
 function(run_scenario name)
-    cmake_parse_arguments(S "REQUIRE_EXIT_ZERO;ALLOW_EXIT_ONE" ""
+    cmake_parse_arguments(S "REQUIRE_EXIT_ZERO;ALLOW_EXIT_ONE;LIVE" ""
         "FILES;ROOTS;MODIFIED_ROOTS;UNRESOLVED;EXPECT;REJECT;EDIT_FILE;EDIT_FROM;EDIT_TO" ${ARGN})
     set(dir "${SNMPB_TOLERANCE_DIR}/${name}")
     set(library "${dir}/MIB-Library")
@@ -151,15 +153,35 @@ function(run_scenario name)
         set(smoke_mib "${library}/Acme/${S_EDIT_FILE}")
         set(edit_args --smoke-edit-from "${S_EDIT_FROM}" --smoke-edit-to "${S_EDIT_TO}")
     endif()
-    execute_process(
-        COMMAND "${CMAKE_COMMAND}" -E env --unset=SMIPATH "QT_QPA_PLATFORM=offscreen"
-            "PATH=${SNMPB_QT_BIN_DIR};$ENV{PATH}"
-            "${SNMPB_EXECUTABLE}" --launch-smoke-test "${dir}"
-            --smoke-mib "${smoke_mib}" ${edit_args}
-        WORKING_DIRECTORY "${dir}"
-        RESULT_VARIABLE exit_code
-        OUTPUT_VARIABLE out ERROR_VARIABLE err
-        TIMEOUT 90)
+    # The ";" in PATH must survive being stored in a list variable, so it is escaped.
+    set(app_command "${CMAKE_COMMAND}" -E env --unset=SMIPATH "QT_QPA_PLATFORM=offscreen"
+        "PATH=${SNMPB_QT_BIN_DIR}\\;$ENV{PATH}"
+        "${SNMPB_EXECUTABLE}" --launch-smoke-test "${dir}"
+        --smoke-mib "${smoke_mib}" ${edit_args})
+    if(S_LIVE)
+        # The test agent listens on 127.0.0.1 only and answers two requests. Both processes run
+        # at the same time; the agent ends after answering (or after 60 seconds).
+        string(RANDOM LENGTH 4 ALPHABET 123456789 port_seed)
+        math(EXPR live_port "20000 + ${port_seed} % 20000")
+        execute_process(
+            COMMAND "${SNMPB_PYTHON}" -I "${SNMPB_SOURCE_DIR}/tools/loopback_snmp_agent.py"
+                ${live_port} smokero "${dir}/agent.log" 2 60
+            COMMAND ${app_command} --smoke-network
+                --smoke-live-target "127.0.0.1:${live_port}"
+                --smoke-live-credential "Smoke lab - SNMPv2c"
+            WORKING_DIRECTORY "${dir}"
+            RESULT_VARIABLE exit_codes
+            OUTPUT_VARIABLE out ERROR_VARIABLE err
+            TIMEOUT 120)
+        list(GET exit_codes -1 exit_code)
+    else()
+        execute_process(
+            COMMAND ${app_command}
+            WORKING_DIRECTORY "${dir}"
+            RESULT_VARIABLE exit_code
+            OUTPUT_VARIABLE out ERROR_VARIABLE err
+            TIMEOUT 90)
+    endif()
 
     set(problems "")
     set(log "")
@@ -284,6 +306,30 @@ run_scenario(edit-save-rebuild REQUIRE_EXIT_ZERO
            "PASS: edit: the profile records the saved file's new hash"
            "PASS: edit: the diagnostic log records the save as rebuilding the active profile"
     REJECT "AFTER-EDIT PROBLEM severity=(Warning|Error)" "AFTER-EDIT PROBLEM severity=Note category=\"Modified\"" "FAIL")
+
+# 12. A real request through the connection bar: Target + Credential -> SNMPv2c Get against a
+#     loopback-only test agent. Proves the bar, not the old device list, drives requests, that
+#     the credential's version and community are used, and that the target is remembered.
+if(SNMPB_PYTHON)
+    run_scenario(live-get-through-connection-bar REQUIRE_EXIT_ZERO LIVE
+        FILES "Prod/GOOD-MIB=GOOD_MIB" ROOTS "GOOD-MIB@Prod/GOOD-MIB"
+        EXPECT "PASS: live: the Get through the connection bar returned the agent's sysDescr"
+               "PASS: live: the target was remembered in the recent-target history"
+               "PASS: live: a request that gets no answer shows an error line above the Results table"
+               "PASS: live: the history remembers the credential used with the target"
+               "PASS: live: a wrong-type answer shows a plain-English warning naming both types"
+               "PASS: live: the Results table shows the received type and raw value beside the interpretation"
+        REJECT "FAIL")
+    set(agent_log "")
+    if(EXISTS "${SNMPB_TOLERANCE_DIR}/live-get-through-connection-bar/agent.log")
+        file(READ "${SNMPB_TOLERANCE_DIR}/live-get-through-connection-bar/agent.log" agent_log)
+    endif()
+    if(NOT agent_log MATCHES "request type=0xa0 version=1 community=smokero oid=1.3.6.1.2.1.1.1.0")
+        message(SEND_ERROR "live scenario: the agent did not see an SNMPv2c Get with the saved community:\n${agent_log}")
+    endif()
+else()
+    message(STATUS "Scenario live-get-through-connection-bar: skipped (no Python interpreter)")
+endif()
 
 if(failures)
     message(FATAL_ERROR "Tolerance scenarios failed")

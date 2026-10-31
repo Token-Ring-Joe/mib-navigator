@@ -4,6 +4,9 @@
 #include "snmpb.h"
 #include "trappresenter.h"
 
+#include <QApplication>
+#include <QClipboard>
+#include <QMenu>
 #include <QTreeWidget>
 #include <QBoxLayout>
 #include <QPushButton>
@@ -19,6 +22,18 @@ Trap::Trap(Snmpb *snmpb)
             s->MainUI()->TrapInfo, SLOT(setHtml(const QString&)));
     connect(&trapService, &TrapService::recordAdded, this, &Trap::RefreshHistory);
     connect(&trapService, &TrapService::historyReset, this, &Trap::RefreshHistory);
+    s->MainUI()->TrapLog->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(s->MainUI()->TrapLog, &QWidget::customContextMenuRequested, this, [this](const QPoint &position) {
+        QTreeWidgetItem *item = s->MainUI()->TrapLog->itemAt(position);
+        const TrapRecord *record = item ? trapService.history().recordAt(item->data(0, Qt::UserRole).toInt()) : nullptr;
+        if (!record) return;
+        const QString address = TrapPresenter::sourceToCopy(*record);
+        QMenu menu(s->MainUI()->TrapLog);
+        QAction *copy = menu.addAction(tr("Copy source IP (%1)").arg(address));
+        copy->setEnabled(!address.isEmpty());
+        if (menu.exec(s->MainUI()->TrapLog->viewport()->mapToGlobal(position)) == copy)
+            QApplication::clipboard()->setText(address);
+    });
     auto *clearButton = new QPushButton(tr("Clear History"), s->MainUI()->TrapLog->parentWidget());
     clearButton->setToolTip(tr("Remove all retained traps from the in-memory history"));
     clearButton->setEnabled(false);

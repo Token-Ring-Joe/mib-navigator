@@ -195,7 +195,7 @@ int main(int argc, char **argv)
                 applicationSourceText.contains("insertTab(1, mibLibrary, tr(\"MIBs\"))"),
                 "top-level navigation exposes one consolidated MIBs workspace");
     ok &= check(applicationSourceText.contains("CurrentEnvironmentStatus") &&
-                applicationSourceText.contains("CurrentMibProfile") &&
+                applicationSourceText.contains("ConnectionBar") &&
                 applicationSourceText.contains("QueryToolBar") &&
                 applicationSourceText.contains("QueryObjectAddress") &&
                 applicationSourceText.contains("MibTreeFilter") &&
@@ -230,8 +230,9 @@ int main(int argc, char **argv)
                 applicationSourceText.contains("MibNormalizeRuntimeRequests") &&
                 applicationSourceText.contains("providers.size() == 1") &&
                 applicationSourceText.contains("mibLibrary->selectProfile(activeProfileId)") &&
-                applicationSourceText.contains("retained for compatibility but is not an activation authority"),
-                "download and Connection entry points cannot bypass Profile intent");
+                !applicationSourceText.contains("loadPreferredMibsRequested") &&
+                !applicationSourceText.contains("DevicePane"),
+                "download entry point cannot bypass Profile intent and the retired Connection (device) entry points are gone");
     ok &= check(applicationSourceText.contains("modules->CheckProfileDependencies(QStringLiteral(\"mib-library\")") &&
                 applicationSourceText.contains("modules->DependencyIndex()->moduleNames()"),
                 "MIB Library owns the library-wide Check Dependencies action");

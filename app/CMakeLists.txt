@@ -1,6 +1,8 @@
 set(SNMPB_APP_SOURCES
     agent.cpp
     agentrequestselection.cpp
+    connectionbar.cpp
+    connectionmodel.cpp
     agentprofile.cpp
     agentprofileoperations.cpp
     agentprofilerepository.cpp
@@ -12,16 +14,11 @@ set(SNMPB_APP_SOURCES
     communitycredentialmanager.cpp
     connectionrequestsettings.cpp
     credentialrecords.cpp
-    devicepane.cpp
-    devicedetailseditor.cpp
     diagnosticlogger.cpp
     mainwindowlayout.cpp
     startupcoordinator.cpp
     workbenchshell.cpp
     productidentity.cpp
-    devicetree.cpp
-    devicetreemodel.cpp
-    devicetreerepository.cpp
     logsnmpb.cpp
     markerwidget.cpp
     mibeditor.cpp
@@ -40,6 +37,7 @@ set(SNMPB_APP_SOURCES
     mibruntimeparser.cpp
     mibruntimestage.cpp
     mibvaluesemantics.cpp
+    snmpreport.cpp
     mibprofile.cpp
     mibdownloadtransport.cpp
     miblibrarywidget.cpp
@@ -59,7 +57,6 @@ set(SNMPB_APP_SOURCES
     preferencesettings.cpp
     profilemetadatarepository.cpp
     profilemetadataservice.cpp
-    profiletransfer.cpp
     snmprequestconfig.cpp
     snmprequestconfigadapter.cpp
     snmprequestcontext.cpp
@@ -88,6 +85,8 @@ set(SNMPB_APP_SOURCES
 set(SNMPB_APP_HEADERS
     agent.h
     agentrequestselection.h
+    connectionbar.h
+    connectionmodel.h
     agentprofile.h
     agentprofileoperations.h
     agentprofilerepository.h
@@ -99,16 +98,11 @@ set(SNMPB_APP_HEADERS
     communitycredentialmanager.h
     connectionrequestsettings.h
     credentialrecords.h
-    devicepane.h
-    devicedetailseditor.h
     diagnosticlogger.h
     mainwindowlayout.h
     startupcoordinator.h
     workbenchshell.h
     productidentity.h
-    devicetree.h
-    devicetreemodel.h
-    devicetreerepository.h
     logsnmpb.h
     markerwidget.h
     mibeditor.h
@@ -127,6 +121,7 @@ set(SNMPB_APP_HEADERS
     mibruntimestage.h
     mibservice_internal.h
     mibvaluesemantics.h
+    snmpreport.h
     mibprofile.h
     mibdownloadtransport.h
     miblibrarywidget.h
@@ -147,7 +142,6 @@ set(SNMPB_APP_HEADERS
     preferencesettings.h
     profilemetadatarepository.h
     profilemetadataservice.h
-    profiletransfer.h
     snmprequestconfig.h
     snmprequestconfigadapter.h
     snmprequestcontext.h
@@ -501,6 +495,29 @@ if(BUILD_TESTING)
     add_test(NAME snmpb.mib-environment-large
         COMMAND $<TARGET_FILE:snmpb_mib_environment_test> --large)
 
+    add_executable(snmpb_mib_value_check_test
+        mibenvironment.cpp mibenvironment.h
+        mibvaluesemantics.cpp mibvaluesemantics.h
+        mibvaluecheck_test.cpp)
+    target_link_libraries(snmpb_mib_value_check_test PRIVATE Qt6::Core snmpb_snmp_pp snmpb_libtomcrypt)
+    if(WIN32)
+        add_test(NAME snmpb.mib-value-check COMMAND ${CMAKE_COMMAND} -E env
+            "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
+            $<TARGET_FILE:snmpb_mib_value_check_test>)
+    else()
+        add_test(NAME snmpb.mib-value-check COMMAND $<TARGET_FILE:snmpb_mib_value_check_test>)
+    endif()
+
+    add_executable(snmpb_snmp_report_test snmpreport.cpp snmpreport.h snmpreport_test.cpp)
+    target_link_libraries(snmpb_snmp_report_test PRIVATE Qt6::Core snmpb_snmp_pp snmpb_libtomcrypt)
+    if(WIN32)
+        add_test(NAME snmpb.snmp-report COMMAND ${CMAKE_COMMAND} -E env
+            "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
+            $<TARGET_FILE:snmpb_snmp_report_test>)
+    else()
+        add_test(NAME snmpb.snmp-report COMMAND $<TARGET_FILE:snmpb_snmp_report_test>)
+    endif()
+
     add_executable(snmpb_mib_environment_consumer_test
         mibengine.cpp mibengine.h
         mibenvironment.cpp mibenvironment.h mibenvironmentextractor.cpp mibenvironmentextractor.h
@@ -675,6 +692,31 @@ if(BUILD_TESTING)
             $<TARGET_FILE:snmpb_credential_architecture_test>)
     endif()
 
+    add_executable(snmpb_connection_model_test
+        agentrequestselection.cpp agentrequestselection.h
+        agentprofilerepository.cpp agentprofilerepository.h
+        communitybindingrepository.cpp communitybindingrepository.h
+        communitycredentialrepository.cpp communitycredentialrepository.h
+        communitycredentialservice.cpp communitycredentialservice.h
+        connectionmodel.cpp connectionmodel.h
+        credentialrecords.cpp credentialrecords.h
+        preferencesettings.cpp preferencesettings.h
+        profilemetadatarepository.cpp profilemetadatarepository.h
+        snmprequestconfig.cpp snmprequestconfig.h
+        usmcredentialrepository.cpp usmcredentialrepository.h
+        usmcredentialservice.cpp usmcredentialservice.h
+        connectionmodel_test.cpp)
+    set_target_properties(snmpb_connection_model_test PROPERTIES AUTOMOC ON)
+    target_link_libraries(snmpb_connection_model_test PRIVATE Qt6::Core)
+    if(WIN32)
+        add_test(NAME snmpb.connection-model COMMAND ${CMAKE_COMMAND} -E env
+            "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
+            $<TARGET_FILE:snmpb_connection_model_test>)
+    else()
+        add_test(NAME snmpb.connection-model COMMAND
+            $<TARGET_FILE:snmpb_connection_model_test>)
+    endif()
+
     add_executable(snmpb_preferred_mib_test
         preferredmibresolver.cpp preferredmibresolver.h
         profilemetadatarepository.cpp profilemetadatarepository.h
@@ -686,21 +728,6 @@ if(BUILD_TESTING)
             $<TARGET_FILE:snmpb_preferred_mib_test>)
     else()
         add_test(NAME snmpb.preferred-mib COMMAND $<TARGET_FILE:snmpb_preferred_mib_test>)
-    endif()
-
-    add_executable(snmpb_profile_transfer_test
-        agentprofilerepository.cpp agentprofilerepository.h
-        devicetreerepository.cpp devicetreerepository.h
-        profilemetadatarepository.cpp profilemetadatarepository.h
-        profiletransfer.cpp profiletransfer.h profiletransfer_test.cpp)
-    target_link_libraries(snmpb_profile_transfer_test PRIVATE Qt6::Core)
-    if(WIN32)
-        add_test(NAME snmpb.profile-transfer COMMAND ${CMAKE_COMMAND} -E env
-            "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
-            $<TARGET_FILE:snmpb_profile_transfer_test>)
-    else()
-        add_test(NAME snmpb.profile-transfer COMMAND
-            $<TARGET_FILE:snmpb_profile_transfer_test>)
     endif()
 
     add_executable(snmpb_profile_metadata_test
@@ -753,103 +780,6 @@ if(BUILD_TESTING)
     else()
         add_test(NAME snmpb.agentprofile-operations COMMAND
             $<TARGET_FILE:snmpb_agentprofile_operations_test>)
-    endif()
-
-    add_executable(snmpb_device_tree_repository_test
-        agentprofilerepository.cpp
-        agentprofilerepository.h
-        devicetree.cpp
-        devicetree.h
-        devicetreerepository.cpp
-        devicetreerepository.h
-        devicetreerepository_test.cpp
-    )
-    target_link_libraries(snmpb_device_tree_repository_test PRIVATE Qt6::Core)
-    if(WIN32)
-        add_test(NAME snmpb.device-tree-repository COMMAND ${CMAKE_COMMAND} -E env
-            "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
-            $<TARGET_FILE:snmpb_device_tree_repository_test>)
-    else()
-        add_test(NAME snmpb.device-tree-repository COMMAND
-            $<TARGET_FILE:snmpb_device_tree_repository_test>)
-    endif()
-
-    add_executable(snmpb_device_tree_model_test
-        agentprofilerepository.cpp
-        agentprofilerepository.h
-        devicetree.cpp
-        devicetree.h
-        devicetreemodel.cpp
-        devicetreemodel.h
-        devicetreerepository.cpp
-        devicetreerepository.h
-        devicetreemodel_test.cpp
-    )
-    set_target_properties(snmpb_device_tree_model_test PROPERTIES AUTOMOC ON)
-    target_link_libraries(snmpb_device_tree_model_test PRIVATE Qt6::Core Qt6::Widgets)
-    if(WIN32)
-        add_test(NAME snmpb.device-tree-model COMMAND ${CMAKE_COMMAND} -E env
-            "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
-            $<TARGET_FILE:snmpb_device_tree_model_test>)
-    else()
-        add_test(NAME snmpb.device-tree-model
-            COMMAND $<TARGET_FILE:snmpb_device_tree_model_test>)
-    endif()
-
-    add_executable(snmpb_device_pane_test
-        agentprofileoperations.cpp
-        agentprofileoperations.h
-        agentprofilerepository.cpp
-        agentprofilerepository.h
-        devicepane.cpp
-        devicepane.h
-        devicedetailseditor.cpp
-        devicedetailseditor.h
-        diagnosticlogger.cpp
-        diagnosticlogger.h
-        connectionrequestsettings.cpp
-        connectionrequestsettings.h
-        preferencesettings.cpp
-        preferencesettings.h
-        mainwindowlayout.cpp
-        mainwindowlayout.h
-        agentprofileservice.cpp
-        agentprofileservice.h
-        profilemetadatarepository.cpp
-        profilemetadatarepository.h
-        profilemetadataservice.cpp
-        profilemetadataservice.h
-        communitybindingrepository.cpp
-        communitybindingrepository.h
-        communitycredentialrepository.cpp
-        communitycredentialrepository.h
-        communitycredentialservice.cpp
-        communitycredentialservice.h
-        credentialrecords.cpp
-        credentialrecords.h
-        usmcredentialrepository.cpp
-        usmcredentialrepository.h
-        usmcredentialservice.cpp
-        usmcredentialservice.h
-        devicetree.cpp
-        devicetree.h
-        devicetreemodel.cpp
-        devicetreemodel.h
-        devicetreerepository.cpp
-        devicetreerepository.h
-        devicepane_test.cpp
-    )
-    set_target_properties(snmpb_device_pane_test PROPERTIES AUTOMOC ON)
-    target_link_libraries(snmpb_device_pane_test PRIVATE Qt6::Core Qt6::Widgets)
-    if(WIN32)
-        add_test(NAME snmpb.device-pane COMMAND ${CMAKE_COMMAND} -E env
-            "QT_QPA_PLATFORM=offscreen"
-            "QT_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::Core>/../plugins"
-            "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
-            $<TARGET_FILE:snmpb_device_pane_test>)
-    else()
-        add_test(NAME snmpb.device-pane COMMAND ${CMAKE_COMMAND} -E env
-            "QT_QPA_PLATFORM=offscreen" $<TARGET_FILE:snmpb_device_pane_test>)
     endif()
 
     add_executable(snmpb_workbench_shell_test
@@ -1040,6 +970,7 @@ if(BUILD_TESTING)
             -DSNMPB_QT_BIN_DIR=$<TARGET_FILE_DIR:Qt6::Core>
             -DSNMPB_SOURCE_DIR=${PROJECT_SOURCE_DIR}
             -DSNMPB_TOLERANCE_DIR=${CMAKE_CURRENT_BINARY_DIR}/tolerance-scenarios
+            -DSNMPB_PYTHON=${Python3_EXECUTABLE}
             -P ${PROJECT_SOURCE_DIR}/cmake/RunSnmpbToleranceScenarios.cmake
     )
     set_tests_properties(snmpb.tolerance-scenarios PROPERTIES TIMEOUT 600)

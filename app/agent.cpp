@@ -19,6 +19,7 @@
 */
 #include <qmessagebox.h>
 #include <algorithm>
+#include <QColor>
 #include <QDate>
 #include <QDialog>
 #include <QEventLoop>
@@ -33,6 +34,7 @@
 #include "mibview.h"
 #include "agent.h"
 #include "communitycredentialservice.h"
+#include "connectionbar.h"
 #include "connectionrequestsettings.h"
 #include "diagnosticlogger.h"
 #include "udpportowner.h"
@@ -47,6 +49,11 @@
 #include "mibenvironmentregistry.h"
 #include "mibselection.h"
 #include "mibvaluesemantics.h"
+#include "snmpreport.h"
+#include <QLabel>
+#include <QStatusBar>
+#include <QStyle>
+#include <QTextDocumentFragment>
 
 #define ASYNC_TIMER_MSEC 5
 #define TRAP_TIMER_MSEC 100
@@ -65,8 +72,33 @@ QTableWidget *structuredResults(Snmpb *snmpb)
         QStringLiteral("StructuredQueryResults"));
 }
 
+// One line above the Results table saying how the last request ended. Errors (timeouts,
+// refused SNMPv3 requests, ...) used to appear only on the Raw tab, so a failed request
+// looked like nothing had happened.
+void presentRequestStatus(Snmpb *snmpb, const QString &html, int objects)
+{
+    auto *label = snmpb->MainUI()->Query->window()->findChild<QLabel *>(
+        QStringLiteral("StructuredQueryStatus"));
+    if (!label) return;
+    const bool error = html.contains(QStringLiteral("color=red"));
+    QString text = QTextDocumentFragment::fromHtml(html).toPlainText().simplified();
+    text.remove(QStringLiteral("-----"));
+    text = text.simplified();
+    if (!error && objects == 0)
+        text += QObject::tr(" The device returned no objects.");
+    label->setText(text);
+    label->setProperty("failed", error);
+    label->setToolTip(text);
+    label->style()->unpolish(label);
+    label->style()->polish(label);
+    label->show();
+}
+
 void clearStructuredResults(Snmpb *snmpb)
 {
+    if (auto *label = snmpb->MainUI()->Query->window()->findChild<QLabel *>(
+            QStringLiteral("StructuredQueryStatus")))
+        label->clear();
     if (auto *table = structuredResults(snmpb)) {
         table->setSortingEnabled(false);
         table->setRowCount(0);
@@ -90,13 +122,22 @@ void appendStructuredResult(Snmpb *snmpb, const MibResolvedObject &resolved,
         ? (!resolved.node->syntaxName.isEmpty() ? resolved.node->syntaxName
                                                 : resolved.node->typeId)
         : QString::number(vb.get_syntax());
+    // The value as the MIB interprets it, next to what actually arrived on the wire, with a
+    // plain-English note wherever the two disagree with the MIB's definition.
+    const MibValueCheck check = CheckMibValue(resolved, vb);
+    const QString received = check.rawValue == check.receivedType
+        ? check.receivedType : QStringLiteral("%1: %2").arg(check.receivedType, check.rawValue);
     const QStringList values{object, resolved.instanceSuffix.join('.'), numericOid, syntax,
-                             RenderMibValue(resolved, vb),
+                             RenderMibValue(resolved, vb), received, check.warnings.join(QStringLiteral("  ")),
                              QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz"))};
     for (int column = 0; column < values.size(); ++column) {
         auto *item = new QTableWidgetItem(values[column]);
-        if (column == 1 || column == 2 || column == 4)
+        if (column == 1 || column == 2 || column == 4 || column == 5)
             item->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+        if (!check.warnings.isEmpty()) {
+            item->setBackground(QColor(0xff, 0xe4, 0xc2));
+            item->setToolTip(check.warnings.join(QLatin1Char('\n')));
+        }
         table->setItem(row, column, item);
     }
     table->setSortingEnabled(sorting);
@@ -564,9 +605,45 @@ void Agent::UpdateTableQueryAvailability()
         ResolveCurrentSelection(&selection) == AgentSelectionError::None);
 }
 
+void Agent::SetConnectionBar(ConnectionBar *bar)
+{
+    connectionBar = bar;
+    if (!bar) return;
+    connect(bar, &ConnectionBar::selectionChanged, this,
+            &Agent::ConnectionSelectionChanged);
+    ConnectionSelectionChanged();
+}
+
+void Agent::ConnectionSelectionChanged()
+{
+    if (!connectionBar) return;
+    s->MainUI()->MIBTree->SetCurrentAgentIsV1(connectionBar->credentialProtocol() == 0);
+    UpdateTableQueryAvailability();
+}
+
+bool Agent::ResolveForRequest(AgentRequestSelection *selection)
+{
+    if (ResolveCurrentSelection(selection) == AgentSelectionError::None)
+        return true;
+    if (connectionBar && lastConnectionError != ConnectionError::None)
+        QMessageBox::warning(nullptr, tr("MIB Navigator"),
+                             ConnectionModel::errorText(lastConnectionError), QMessageBox::Ok);
+    return false;
+}
+
 AgentSelectionError Agent::ResolveCurrentSelection(
     AgentRequestSelection *selection) const
 {
+    if (connectionBar)
+    {
+        QSettings settings;
+        lastConnectionError = ConnectionModel::build(
+            connectionBar->target(), connectionBar->credentialKey(),
+            s->CommunityCredentials(), s->UsmCredentials(),
+            PreferencesSettings::load(settings), selection);
+        return lastConnectionError == ConnectionError::None
+            ? AgentSelectionError::None : AgentSelectionError::ProfileNotFound;
+    }
     int selectedProtocol = 0;
     if (s->MainUI()->AgentProtoV3->isChecked())
         selectedProtocol = 2;
@@ -654,9 +731,12 @@ int Agent::SetupFromCurrentSelection(const QString& oid, SnmpTarget **t,
                                      SnmpRequestConfig *resolvedConfig)
 {
     AgentRequestSelection selection;
-    if (ResolveCurrentSelection(&selection) != AgentSelectionError::None)
+    if (!ResolveForRequest(&selection))
         return -1;
-    return Setup(selection, oid, t, p, usevblist, resolvedConfig);
+    const int result = Setup(selection, oid, t, p, usevblist, resolvedConfig);
+    if (result == 0 && connectionBar)
+        connectionBar->rememberCurrentTarget();
+    return result;
 }
 
 int Agent::Setup(const AgentRequestSelection &selection, const QString& oid,
@@ -908,6 +988,7 @@ void Agent::AsyncCallback(int reason, Pdu &pdu,
     int status;
     Vb vb;   // empty Vb
     int z = 0;
+    QString statusHtml;   // one-line summary for the status line above the Results table
 
     switch(reason)
     {
@@ -916,7 +997,7 @@ void Agent::AsyncCallback(int reason, Pdu &pdu,
     case SNMP_CLASS_SESSION_DESTROYED:
         break;
     case SNMP_CLASS_TIMEOUT:
-        msg = tr("<font color=red>Timeout</font>");
+        msg = tr("<font color=red>Timeout: no response from the device. Check the Target address and that SNMP is enabled on the device. SNMPv1/v2c devices silently ignore a wrong community, and SNMPv3 devices may ignore unknown users.</font>");
         goto cleanup;
     default:
         msg = tr("<font color=red>No response received: (%1) %2</font>")
@@ -924,6 +1005,16 @@ void Agent::AsyncCallback(int reason, Pdu &pdu,
         goto cleanup;
     }
     
+    {
+        // An SNMPv3 REPORT is the device refusing the request; never present it as data.
+        const QString explained = ExplainSnmpReport(pdu,
+            activeRequestContext ? activeRequestContext->config().securityName : QString());
+        if (!explained.isEmpty()) {
+            msg = QStringLiteral("<font color=red>%1</font>").arg(explained.toHtmlEscaped());
+            goto cleanup;
+        }
+    }
+
     // Look at the error status of the Pdu
     pdu_error = pdu.get_error_status();
 
@@ -1079,7 +1170,11 @@ end:
     msg += tr("<font color=#009000>Total # of Requests = ");
     msg += tr("%1<br>Total # of Objects = %2</font>")
                     .arg(requests).arg(objects);
+    statusHtml = stop == true
+        ? tr("Stopped after %n object(s) in %1 request(s).", nullptr, objects).arg(requests)
+        : tr("Finished: %n object(s) in %1 request(s).", nullptr, objects).arg(requests);
 cleanup:
+    presentRequestStatus(s, statusHtml.isEmpty() ? msg : statusHtml, objects);
     s->MainUI()->Query->append(msg);
     // Dont stop the timer, but put it back to the lower-rate trap timer value
     timer.start(TRAP_TIMER_MSEC);
@@ -1105,7 +1200,7 @@ void Agent::AsyncCallbackSet(int reason, Pdu &pdu, SnmpTarget &target)
     case SNMP_CLASS_SESSION_DESTROYED:
         break;
     case SNMP_CLASS_TIMEOUT:
-        msg = tr("<font color=red>Timeout</font>");
+        msg = tr("<font color=red>Timeout: no response from the device. Check the Target address and that SNMP is enabled on the device. SNMPv1/v2c devices silently ignore a wrong community, and SNMPv3 devices may ignore unknown users.</font>");
         goto cleanup;
     default:
         msg = tr("<font color=red>No response received: (%1) %2</font>")
@@ -1113,6 +1208,16 @@ void Agent::AsyncCallbackSet(int reason, Pdu &pdu, SnmpTarget &target)
         goto cleanup;
     }
     
+    {
+        // An SNMPv3 REPORT is the device refusing the request; never present it as data.
+        const QString explained = ExplainSnmpReport(pdu,
+            activeRequestContext ? activeRequestContext->config().securityName : QString());
+        if (!explained.isEmpty()) {
+            msg = QStringLiteral("<font color=red>%1</font>").arg(explained.toHtmlEscaped());
+            goto cleanup;
+        }
+    }
+
     // Look at the error status of the Pdu
     pdu_error = pdu.get_error_status();
 
@@ -1220,6 +1325,7 @@ end:
     msg += tr("-----SNMP set finished-----<br>");
 
 cleanup:
+    presentRequestStatus(s, msg, objects);
     s->MainUI()->Query->append(msg);
     // Dont stop the timer, but put it back to the lower-rate trap timer value
     timer.start(TRAP_TIMER_MSEC);
@@ -1505,7 +1611,7 @@ void Agent::TableViewFrom(const QString& oid)
     if (tableRunner->isRunning())
         return;
     AgentRequestSelection selection;
-    if (ResolveCurrentSelection(&selection) != AgentSelectionError::None)
+    if (!ResolveForRequest(&selection))
         return;
 
     SnmpTarget *validationTarget;
@@ -1944,7 +2050,7 @@ void Agent::PresentInstanceResult(const SnmpInstanceResult &result)
 int Agent::SelectTableInstance(const QString &oid, QString &outinstance)
 {
     AgentRequestSelection selection;
-    if (ResolveCurrentSelection(&selection) != AgentSelectionError::None) return 0;
+    if (!ResolveForRequest(&selection)) return 0;
     SnmpTarget *target;
     Pdu *pdu;
     SnmpRequestConfig config;
@@ -1984,7 +2090,7 @@ void Agent::GetFromSelectInstance(const QString& oid, int op)
 {
     if (instanceRunner->isRunning()) return;
     AgentRequestSelection selection;
-    if (ResolveCurrentSelection(&selection) != AgentSelectionError::None) return;
+    if (!ResolveForRequest(&selection)) return;
     SnmpTarget *target;
     Pdu *pdu;
     SnmpRequestConfig config;

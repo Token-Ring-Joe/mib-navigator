@@ -30,6 +30,12 @@ TrapRecord TrapDecoder::decode(const Pdu &pdu, const TrapEndpoint &endpoint,
         return record;
     }
 
+    if (pdu.get_type() == sNMP_PDU_V1TRAP) {
+        GenAddress agent;
+        if (pdu.get_v1_trap_address(agent))
+            record.agentAddress = printable(agent);
+    }
+
     Oid notification;
     if (!pdu.get_notify_id(notification) || notification.len() == 0) {
         record.decodeError = QStringLiteral("Notification OID is missing");

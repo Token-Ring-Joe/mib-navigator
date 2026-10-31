@@ -84,6 +84,7 @@ private:
     QTreeWidgetItem *modules;
     QTreeWidgetItem *traps;
     QTreeWidgetItem *requestDefaults;
+    QSpinBox *requestPortSpin;
     QSpinBox *requestTimeoutSpin;
     QSpinBox *requestRetriesSpin;
     QSpinBox *bulkNonRepeatersSpin;

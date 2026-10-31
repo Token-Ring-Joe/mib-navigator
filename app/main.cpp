@@ -50,7 +50,11 @@
 #include <QTableWidget>
 #include "mibenvironment.h"
 #include "miblibrarywidget.h"
+#include <QComboBox>
+#include <QToolButton>
+#include "agent.h"
 #include <QCryptographicHash>
+#include "communitycredentialservice.h"
 #include <QTextEdit>
 #include <QEventLoop>
 
@@ -61,6 +65,10 @@ int main( int argc, char ** argv )
     bool launch_smoke_test = false;
     QString smoke_config_dir;
     QString smoke_mib_file;
+    bool smoke_network = false;
+    QString smoke_live_target;
+    QString smoke_live_credential;
+    QString smoke_live_walk;
     QString smoke_edit_from;
     QString smoke_edit_to;
     QString startup_close_state;
@@ -75,6 +83,22 @@ int main( int argc, char ** argv )
         else if (argument == "--smoke-mib" && i + 1 < argc)
         {
             smoke_mib_file = QString::fromLocal8Bit(argv[++i]);
+        }
+        else if (argument == "--smoke-network")
+        {
+            smoke_network = true;   // real SNMP session; only ever pointed at a loopback test agent
+        }
+        else if (argument == "--smoke-live-target" && i + 1 < argc)
+        {
+            smoke_live_target = QString::fromLocal8Bit(argv[++i]);
+        }
+        else if (argument == "--smoke-live-walk" && i + 1 < argc)
+        {
+            smoke_live_walk = QString::fromLocal8Bit(argv[++i]);
+        }
+        else if (argument == "--smoke-live-credential" && i + 1 < argc)
+        {
+            smoke_live_credential = QString::fromLocal8Bit(argv[++i]);
         }
         else if (argument == "--smoke-edit-from" && i + 1 < argc)
         {
@@ -110,7 +134,7 @@ int main( int argc, char ** argv )
     DiagnosticLogger::log("Startup", "QApplication creation complete");
     DiagnosticLogger::log("Startup", "application identity setup complete");
 
-    Snmpb snmpb(launch_smoke_test);
+    Snmpb snmpb(launch_smoke_test && !smoke_network);
 
     // Qt translations
     QTranslator l10n_qt;
@@ -253,9 +277,8 @@ int main( int argc, char ** argv )
                   "QSettings uses the isolated directory");
             check(mw.isVisible(), "main window is visible");
             check(mw.findChild<QWidget *>("WorkbenchActivityRail") &&
-                  mw.findChild<QWidget *>("WorkbenchSidebar") &&
-                  mw.findChild<QWidget *>("IntegratedDeviceSidebar"),
-                  "workbench activity rail and Device sidebar created");
+                  mw.findChild<QWidget *>("WorkbenchSidebar"),
+                  "workbench activity rail and sidebar created");
             check(mw.findChild<QDockWidget *>("WorkbenchInspectorDock") &&
                   mw.findChild<QDockWidget *>("WorkbenchBottomDock"),
                   "workbench Inspector and bottom panels created");
@@ -263,12 +286,11 @@ int main( int argc, char ** argv )
             QTabWidget *bottomTabs = mw.findChild<QTabWidget *>("WorkbenchBottomTabs");
             check(workbenchDocuments && workbenchDocuments->tabBar()->isHidden(),
                   "legacy primary tab navigation is retired");
-            check(bottomTabs && bottomTabs->count() == 4 &&
-                  bottomTabs->tabText(0) == "Results" &&
-                  bottomTabs->tabText(1) == "Problems" &&
-                  bottomTabs->tabText(2) == "Diagnostics" &&
-                  bottomTabs->tabText(3) == "Raw",
-                  "bottom Results, Problems, Diagnostics, and Raw views are integrated");
+            check(bottomTabs && bottomTabs->count() == 3 &&
+                  bottomTabs->tabText(0) == "Problems" &&
+                  bottomTabs->tabText(1) == "Diagnostics" &&
+                  bottomTabs->tabText(2) == "Raw",
+                  "bottom Problems, Diagnostics, and Raw views are integrated");
             QAction *eventsActivity = mw.findChild<QAction *>("WorkbenchActivityEvents");
             QAction *mibsActivity = mw.findChild<QAction *>("WorkbenchActivityMIBs");
             if (eventsActivity) eventsActivity->trigger();
@@ -339,7 +361,7 @@ int main( int argc, char ** argv )
                 QCheckBox *notes = mw.findChild<QCheckBox *>("WorkbenchProblemShowNotes");
                 QPlainTextEdit *detail = mw.findChild<QPlainTextEdit *>("WorkbenchProblemDetail");
                 QTabWidget *bottom = mw.findChild<QTabWidget *>("WorkbenchBottomTabs");
-                if (bottom) bottom->setCurrentIndex(1);
+                if (bottom) bottom->setCurrentIndex(0);
                 mw.resize(1500, 1000);
                 QCoreApplication::processEvents();
                 mw.grab().save(QDir(smoke_config_dir).filePath("problems-tab.png"));
@@ -352,6 +374,181 @@ int main( int argc, char ** argv )
                           "Selecting a Problems row fills the detail pane");
                 }
                 mw.grab().save(QDir(smoke_config_dir).filePath("problems-tab-notes.png"));
+            }
+            // The connection bar: Target, Credential and the (single) MIB Profile selector.
+            {
+                QWidget *bar = mw.findChild<QWidget *>("ConnectionBar");
+                QComboBox *targetBox = mw.findChild<QComboBox *>("ConnectionTarget");
+                QComboBox *credentialBox = mw.findChild<QComboBox *>("ConnectionCredential");
+                QComboBox *profileBox = mw.findChild<QComboBox *>("MibBrowserProfileSelector");
+                check(bar && targetBox && credentialBox && profileBox, "connection bar has Target, Credential and MIB Profile");
+                check(bar && profileBox && profileBox->parentWidget() == bar,
+                      "the MIB Profile selector lives in the connection bar (there is only one)");
+                check(mw.findChild<QToolButton *>("ConnectionManageCredentials") != nullptr,
+                      "the connection bar offers Manage… for saved credentials");
+                QAction *devicesActivity = mw.findChild<QAction *>("WorkbenchActivityDevices");
+                check(!devicesActivity && !mw.findChild<QWidget *>("DevicesDock"),
+                      "the retired Devices activity and dock no longer exist");
+                if (bar && targetBox && credentialBox) {
+                    const int before = credentialBox->count();
+                    CommunityCredentialRecord community;
+                    community.displayName = "Smoke lab";
+                    community.readCommunity = CredentialSecret("smokero");
+                    community.writeCommunity = CredentialSecret("smokerw");
+                    const QString created = snmpb.CommunityCredentials()->create(community);
+                    check(!created.isEmpty() && credentialBox->count() == before + 2,
+                          "a newly saved community credential appears in the Credential list (v2c and v1)");
+                    check(credentialBox->findText("Smoke lab - SNMPv2c") >= 0 &&
+                          credentialBox->findText("Smoke lab - SNMPv1") >= 0,
+                          "credential entries say which SNMP version they use");
+                    credentialBox->setCurrentIndex(credentialBox->findText("Smoke lab - SNMPv1"));
+                    targetBox->setEditText("127.0.0.1");
+                    QCoreApplication::processEvents();
+                    mw.resize(1500, 1000);
+                    QCoreApplication::processEvents();
+                    mw.grab().save(QDir(smoke_config_dir).filePath("connection-bar.png"));
+                    smoke_output << "launch-smoke: CONNECTION target=" << targetBox->currentText()
+                                 << " credential=\"" << credentialBox->currentText() << "\" profile=\""
+                                 << (profileBox ? profileBox->currentText() : QString()) << "\"" << Qt::endl;
+                }
+            }
+            // A real request through the connection bar to a loopback-only test agent.
+            if (!smoke_live_target.isEmpty()) {
+                QComboBox *targetBox = mw.findChild<QComboBox *>("ConnectionTarget");
+                QComboBox *credentialBox = mw.findChild<QComboBox *>("ConnectionCredential");
+                QTableWidget *results = mw.findChild<QTableWidget *>("StructuredQueryResults");
+                check(targetBox && credentialBox && results, "live: bar and result table exist");
+                if (targetBox && credentialBox && results) {
+                    const int credentialIndex = credentialBox->findText(smoke_live_credential);
+                    check(credentialIndex >= 0, "live: the requested credential is offered");
+                    credentialBox->setCurrentIndex(credentialIndex);
+                    targetBox->setEditText(smoke_live_target);
+                    QEventLoop wait; QTimer limit; limit.setSingleShot(true);
+                    QObject::connect(&limit, &QTimer::timeout, &wait, &QEventLoop::quit);
+                    QTimer poll; QObject::connect(&poll, &QTimer::timeout, &wait, [&]() {
+                        for (int row = 0; row < results->rowCount(); ++row)
+                            for (int column = 0; column < results->columnCount(); ++column)
+                                if (results->item(row, column) &&
+                                    results->item(row, column)->text().contains("Loopback test agent")) {
+                                    wait.quit(); return;
+                                }
+                    });
+                    poll.start(100); limit.start(15000);
+                    snmpb.AgentObj()->GetFrom("1.3.6.1.2.1.1.1.0", 0);
+                    wait.exec();
+                    QLabel *requestStatus = mw.findChild<QLabel *>("StructuredQueryStatus");
+                    if (QAction *mibsView = mw.findChild<QAction *>("WorkbenchActivityMIBs")) mibsView->trigger();
+                    QCoreApplication::processEvents();
+                    smoke_output << "launch-smoke: LIVE-VISIBILITY results=" << results->isVisibleTo(&mw)
+                                 << " status=" << (requestStatus && requestStatus->isVisibleTo(&mw))
+                                 << " inTreeTab=" << snmpb.MainUI()->TreeTab->isAncestorOf(results)
+                                 << " statusInTreeTab=" << (requestStatus && snmpb.MainUI()->TreeTab->isAncestorOf(requestStatus))
+                                 << " statusText=" << (requestStatus ? requestStatus->text().isEmpty() : -1) << Qt::endl;
+                    check(results->isVisibleTo(&mw) && requestStatus && requestStatus->isVisibleTo(&mw) &&
+                          snmpb.MainUI()->TreeTab->isAncestorOf(results),
+                          "live: the Results table and its status line are visible under the Tree, not in a hidden panel");
+                    smoke_output << "launch-smoke: LIVE-STATUS-AFTER-GET failed=" << (requestStatus && requestStatus->property("failed").toBool())
+                                 << " text=\"" << (requestStatus ? requestStatus->text() : QString()) << "\"" << Qt::endl;
+                    QString found;
+                    for (int row = 0; row < results->rowCount(); ++row) {
+                        QStringList cells;
+                        for (int column = 0; column < results->columnCount(); ++column)
+                            if (results->item(row, column)) cells << results->item(row, column)->text();
+                        smoke_output << "launch-smoke: LIVE-RESULT " << cells.join(" | ") << Qt::endl;
+                        if (cells.join(' ').contains("Loopback test agent")) found = cells.join(' ');
+                    }
+                    check(!found.isEmpty(), "live: the Get through the connection bar returned the agent's sysDescr");
+
+                    // An object the agent answers with the wrong type: the Results table must say so.
+                    QEventLoop wait2; QTimer limit2; limit2.setSingleShot(true);
+                    QObject::connect(&limit2, &QTimer::timeout, &wait2, &QEventLoop::quit);
+                    QTimer poll2; QObject::connect(&poll2, &QTimer::timeout, &wait2, [&]() {
+                        for (int row = 0; row < results->rowCount(); ++row)
+                            if (results->item(row, 6) && results->item(row, 6)->text().contains("Wrong type")) {
+                                wait2.quit(); return;
+                            }
+                    });
+                    poll2.start(100); limit2.start(15000);
+                    snmpb.AgentObj()->GetFrom("1.3.6.1.4.1.90001.1.0", 0);
+                    wait2.exec();
+                    QString warning, receivedCell;
+                    for (int row = 0; row < results->rowCount(); ++row) {
+                        QStringList cells;
+                        for (int column = 0; column < results->columnCount(); ++column)
+                            if (results->item(row, column)) cells << results->item(row, column)->text();
+                        smoke_output << "launch-smoke: LIVE-RESULT " << cells.join(" | ") << Qt::endl;
+                        if (results->item(row, 6) && results->item(row, 6)->text().contains("Wrong type")) {
+                            warning = results->item(row, 6)->text();
+                            receivedCell = results->item(row, 5) ? results->item(row, 5)->text() : QString();
+                        }
+                    }
+                    check(warning.contains("Gauge32") && warning.contains("Integer32"),
+                          "live: a wrong-type answer shows a plain-English warning naming both types");
+                    check(receivedCell.startsWith("Gauge32: 42"),
+                          "live: the Results table shows the received type and raw value beside the interpretation");
+                    if (!smoke_live_walk.isEmpty()) {
+                        // Walk a subtree through the same bar and count what the Results table receives.
+                        QEventLoop walkWait; QTimer walkLimit; walkLimit.setSingleShot(true);
+                        QObject::connect(&walkLimit, &QTimer::timeout, &walkWait, &QEventLoop::quit);
+                        QTimer walkPoll; QObject::connect(&walkPoll, &QTimer::timeout, &walkWait, [&]() {
+                            if (!snmpb.MainUI()->actionStop->isEnabled() && results->rowCount() >= 3) walkWait.quit();
+                        });
+                        walkPoll.start(100); walkLimit.start(20000);
+                        snmpb.AgentObj()->WalkFrom(smoke_live_walk);
+                        walkWait.exec();
+                        int walkRows = 0; QStringList walked;
+                        for (int row = 0; row < results->rowCount(); ++row) {
+                            ++walkRows;
+                            walked << (results->item(row, 2) ? results->item(row, 2)->text() : QString());
+                        }
+                        smoke_output << "launch-smoke: LIVE-WALK rows=" << walkRows << " oids=" << walked.join(",")
+                                     << " stopEnabled=" << snmpb.MainUI()->actionStop->isEnabled()
+                                     << " queryText=\"" << snmpb.MainUI()->Query->toPlainText().left(300).replace('\n', ' ') << "\"" << Qt::endl;
+                        smoke_output << "launch-smoke: LIVE-STATUS-AFTER-WALK failed=" << (requestStatus && requestStatus->property("failed").toBool())
+                                     << " text=\"" << (requestStatus ? requestStatus->text() : QString()) << "\"" << Qt::endl;
+                        check(walkRows >= 3 && !snmpb.MainUI()->actionStop->isEnabled(),
+                              "live: Walk lists the subtree and finishes");
+                    }
+                    if (smoke_live_walk.isEmpty()) {
+                        // Nothing is listening here: the failure must be visible above the table, not only on the Raw tab.
+                        targetBox->setEditText("127.0.0.1:1");
+                        QEventLoop deadWait; QTimer deadLimit; deadLimit.setSingleShot(true);
+                        QObject::connect(&deadLimit, &QTimer::timeout, &deadWait, &QEventLoop::quit);
+                        QTimer deadPoll; QObject::connect(&deadPoll, &QTimer::timeout, &deadWait, [&]() {
+                            if (requestStatus && requestStatus->property("failed").toBool()) deadWait.quit();
+                        });
+                        deadPoll.start(100); deadLimit.start(30000);
+                        snmpb.AgentObj()->GetFrom("1.3.6.1.2.1.1.1.0", 0);
+                        deadWait.exec();
+                        smoke_output << "launch-smoke: LIVE-STATUS-DEAD-PORT text=\"" << (requestStatus ? requestStatus->text() : QString()) << "\"" << Qt::endl;
+                        check(requestStatus && requestStatus->property("failed").toBool() && !requestStatus->text().isEmpty(),
+                              "live: a request that gets no answer shows an error line above the Results table");
+                        targetBox->setEditText(smoke_live_target);
+                    }
+                    QSettings historySettings;
+                    check(historySettings.value("connection/target-history").toString().contains(smoke_live_target),
+                          "live: the target was remembered in the recent-target history");
+                    check(historySettings.value("connection/target-history").toString().contains("community:"),
+                          "live: the history remembers the credential used with the target");
+                    if (QAction *mibsActivity = mw.findChild<QAction *>("WorkbenchActivityMIBs")) mibsActivity->trigger();
+                    mw.resize(1500, 1000);
+                    QCoreApplication::processEvents();
+                    mw.grab().save(QDir(smoke_config_dir).filePath("live-get.png"));
+                }
+            }
+            check(snmpb.MainUI()->TrapLog->contextMenuPolicy() == Qt::CustomContextMenu,
+                  "the trap list offers a right-click menu (Copy source IP)");
+            // Deleting the chosen credential must not silently switch to another one.
+            if (QComboBox *credentialBox = mw.findChild<QComboBox *>("ConnectionCredential")) {
+                CommunityCredentialRecord doomed;
+                doomed.displayName = "Doomed";
+                doomed.readCommunity = CredentialSecret("x");
+                const QString doomedId = snmpb.CommunityCredentials()->create(doomed);
+                credentialBox->setCurrentIndex(credentialBox->findText("Doomed - SNMPv2c"));
+                check(credentialBox->currentText() == "Doomed - SNMPv2c", "doomed credential selected");
+                snmpb.CommunityCredentials()->remove(doomedId);
+                check(credentialBox->currentIndex() == -1 && credentialBox->currentData().toString().isEmpty(),
+                      "deleting the chosen credential leaves nothing chosen instead of switching to another");
             }
             // Edit -> Save -> Rebuild: fix the opened MIB in the editor, save it, and check that the
             // active profile rebuilds from the saved file and the problem goes away.

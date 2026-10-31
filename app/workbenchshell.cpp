@@ -25,7 +25,9 @@ namespace {
 constexpr auto activityKey = "workbench/activity";
 constexpr auto inspectorVisibleKey = "workbench/inspector-visible";
 constexpr auto bottomVisibleKey = "workbench/bottom-visible";
-constexpr auto bottomTabKey = "workbench/bottom-tab";
+// Older builds stored a tab *index* under "workbench/bottom-tab" when Results was the first
+// tab. Tabs are stored by name now so a changed tab set can never select the wrong one.
+constexpr auto bottomTabKey = "workbench/bottom-tab-name";
 constexpr auto contentSplitterKey = "workbench/content-splitter";
 
 QWidget *sidebarPage(const QString &title, const QString &description, QWidget *parent)
@@ -63,7 +65,7 @@ QPushButton *sidebarButton(QWidget *page, const QString &text, const QString &na
 WorkbenchShell::WorkbenchShell(QMainWindow *window, QWidget *centralRoot,
                                QGridLayout *centralLayout, QWidget *contextStrip,
                                QTabWidget *documents, const Pages &pages,
-                               QWidget *devicePane, QWidget *inspector, QWidget *results,
+                               QWidget *inspector,
                                QWidget *problems, QWidget *diagnostics, QWidget *raw,
                                QObject *parent)
     : QObject(parent), mainWindow(window), documentTabs(documents), workbenchPages(pages)
@@ -82,11 +84,10 @@ WorkbenchShell::WorkbenchShell(QMainWindow *window, QWidget *centralRoot,
     auto *group = new QActionGroup(this);
     group->setExclusive(true);
     addActivityAction(WorkbenchActivity::Mibs, tr("MIBs"), QKeySequence(QStringLiteral("Alt+1")));
-    addActivityAction(WorkbenchActivity::Devices, tr("Devices"), QKeySequence(QStringLiteral("Alt+2")));
-    addActivityAction(WorkbenchActivity::Queries, tr("Queries"), QKeySequence(QStringLiteral("Alt+3")));
-    addActivityAction(WorkbenchActivity::Events, tr("Events"), QKeySequence(QStringLiteral("Alt+4")));
+    addActivityAction(WorkbenchActivity::Queries, tr("Queries"), QKeySequence(QStringLiteral("Alt+2")));
+    addActivityAction(WorkbenchActivity::Events, tr("Events"), QKeySequence(QStringLiteral("Alt+3")));
     const QList<QStyle::StandardPixmap> icons = {QStyle::SP_FileDialogContentsView,
-        QStyle::SP_ComputerIcon, QStyle::SP_ArrowRight, QStyle::SP_MessageBoxInformation};
+        QStyle::SP_ArrowRight, QStyle::SP_MessageBoxInformation};
     for (int i = 0; i < activities.size(); ++i) {
         QAction *action = activities.at(i);
         action->setActionGroup(group);
@@ -106,8 +107,6 @@ WorkbenchShell::WorkbenchShell(QMainWindow *window, QWidget *centralRoot,
     sidebars->setMinimumWidth(180);
     sidebars->setMaximumWidth(360);
     sidebars->addWidget(makeMibSidebar());
-    devicePane->setParent(sidebars);
-    sidebars->addWidget(devicePane);
     sidebars->addWidget(makeQueriesSidebar());
     sidebars->addWidget(makeEventsSidebar());
 
@@ -166,7 +165,6 @@ WorkbenchShell::WorkbenchShell(QMainWindow *window, QWidget *centralRoot,
     bottomTabs = new QTabWidget(window);
     bottomTabs->setObjectName(QStringLiteral("WorkbenchBottomTabs"));
     bottomTabs->setDocumentMode(true);
-    bottomTabs->addTab(results, tr("Results"));
     bottomTabs->addTab(problems, tr("Problems"));
     bottomTabs->addTab(diagnostics, tr("Diagnostics"));
     bottomTabs->addTab(raw, tr("Raw"));
@@ -306,7 +304,6 @@ QWidget *WorkbenchShell::defaultDocument(WorkbenchActivity value) const
 {
     switch (value) {
     case WorkbenchActivity::Mibs: return workbenchPages.tree;
-    case WorkbenchActivity::Devices: return workbenchPages.tree;
     case WorkbenchActivity::Queries: return workbenchPages.tree;
     case WorkbenchActivity::Events: return workbenchPages.events;
     }
@@ -316,7 +313,7 @@ QWidget *WorkbenchShell::defaultDocument(WorkbenchActivity value) const
 void WorkbenchShell::setActivity(WorkbenchActivity value)
 {
     currentActivity = value;
-    sidebars->setCurrentIndex(static_cast<int>(value));
+    sidebars->setCurrentIndex(sidebarIndex(value));
     if (QAction *action = activityAction(value)) action->setChecked(true);
     openDocument(defaultDocument(value));
 }
@@ -350,26 +347,43 @@ void WorkbenchShell::showMibLibrary(int mode)
     emit mibLibraryModeRequested(mode);
 }
 
+// Position of an activity among the offered activities (and so its sidebar page).
+int WorkbenchShell::sidebarIndex(WorkbenchActivity value)
+{
+    switch (value) {
+    case WorkbenchActivity::Mibs: return 0;
+    case WorkbenchActivity::Queries: return 1;
+    case WorkbenchActivity::Events: return 2;
+    }
+    return 0;
+}
+
 QAction *WorkbenchShell::activityAction(WorkbenchActivity value) const
 {
-    const int index = static_cast<int>(value);
+    const int index = sidebarIndex(value);
     return index >= 0 && index < activities.size() ? activities.at(index) : nullptr;
 }
 
 void WorkbenchShell::restorePresentationState()
 {
     QSettings settings;
+    // A stored 1 is the retired Devices activity; anything unknown opens MIBs.
     const int stored = settings.value(activityKey, 0).toInt();
-    const auto restored = stored >= 0 && stored <= 3
-        ? static_cast<WorkbenchActivity>(stored) : WorkbenchActivity::Mibs;
+    const auto restored = stored == static_cast<int>(WorkbenchActivity::Queries)
+        ? WorkbenchActivity::Queries
+        : stored == static_cast<int>(WorkbenchActivity::Events)
+            ? WorkbenchActivity::Events : WorkbenchActivity::Mibs;
     setActivity(restored);
     const bool inspectorRequested = settings.value(inspectorVisibleKey,
         restored == WorkbenchActivity::Mibs).toBool();
     inspectorPanel->setVisible(inspectorRequested && restored == WorkbenchActivity::Mibs &&
                                documentTabs->currentWidget() == workbenchPages.tree);
     bottomPanel->setVisible(settings.value(bottomVisibleKey, true).toBool());
-    bottomTabs->setCurrentIndex(qBound(0, settings.value(bottomTabKey, 0).toInt(),
-                                       bottomTabs->count() - 1));
+    {
+        const QString wanted = settings.value(bottomTabKey).toString();
+        for (int i = 0; i < bottomTabs->count(); ++i)
+            if (bottomTabs->tabText(i) == wanted) bottomTabs->setCurrentIndex(i);
+    }
     const QByteArray splitterState = settings.value(contentSplitterKey).toByteArray();
     if (!splitterState.isEmpty()) contentSplitter->restoreState(splitterState);
 }
@@ -382,6 +396,6 @@ void WorkbenchShell::savePresentationState() const
     // isVisible() would incorrectly persist false after the window is hidden.
     settings.setValue(inspectorVisibleKey, !inspectorPanel->isHidden());
     settings.setValue(bottomVisibleKey, !bottomPanel->isHidden());
-    settings.setValue(bottomTabKey, bottomTabs->currentIndex());
+    settings.setValue(bottomTabKey, bottomTabs->tabText(bottomTabs->currentIndex()));
     settings.setValue(contentSplitterKey, contentSplitter->saveState());
 }

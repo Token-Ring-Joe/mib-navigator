@@ -20,6 +20,7 @@ struct TrapRecord
     quint64 recordId = 0;
     QDateTime receivedTimestamp;
     QString sourceAddress;
+    QString agentAddress;   // SNMPv1 "agent-addr" field when the trap carried one
     quint16 sourcePort = 0;
     TrapSnmpVersion snmpVersion = TrapSnmpVersion::Unknown;
     QString securityName;

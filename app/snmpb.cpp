@@ -43,10 +43,10 @@
 #include "snmpb.h"
 #include "mibmodule.h"
 #include "agent.h"
+#include "connectionbar.h"
 #include "trap.h"
 #include "logsnmpb.h"
 #include "mibeditor.h"
-#include "devicepane.h"
 #include "mainwindowlayout.h"
 #include "workbenchshell.h"
 #include "startupcoordinator.h"
@@ -59,7 +59,6 @@
 #include "agentprofile.h"
 #include "agentprofileservice.h"
 #include "profilemetadataservice.h"
-#include "profiletransfer.h"
 #include "mibcollection.h"
 #include "usmprofile.h"
 #include "communitycredentialservice.h"
@@ -79,7 +78,6 @@
 #define USM_USERS_CONFIG_FILE    "usm_users.conf"
 #define AGENTS_CONFIG_FILE       "agents.conf"
 #define LOG_CONFIG_FILE          "log.conf"
-#define DEVICE_TREE_CONFIG_FILE  "device-tree.conf"
 #define PROFILE_METADATA_CONFIG_FILE "profile-metadata.conf"
 #define CREDENTIAL_IDENTITIES_CONFIG_FILE "credential-identities.conf"
 #define COMMUNITY_CREDENTIALS_CONFIG_FILE "community-credentials.conf"
@@ -495,18 +493,36 @@ void Snmpb::BindToGUI(QMainWindow* mw)
 
     auto *resultTable = new QTableWidget(w.QueryLayout);
     resultTable->setObjectName(QStringLiteral("StructuredQueryResults"));
-    resultTable->setColumnCount(6);
+    resultTable->setColumnCount(8);
     resultTable->setHorizontalHeaderLabels({tr("Object"), tr("Instance"), tr("OID"),
-                                            tr("Syntax"), tr("Value"), tr("Time")});
+                                            tr("Syntax"), tr("Value"), tr("Received"),
+                                            tr("Warnings"), tr("Time")});
     resultTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     resultTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     resultTable->setSortingEnabled(true);
     resultTable->setAlternatingRowColors(true);
     resultTable->verticalHeader()->setVisible(false);
     resultTable->horizontalHeader()->setStretchLastSection(true);
-    for (int column = 0; column < 4; ++column)
+    resultTable->setWordWrap(false);
+    resultTable->setTextElideMode(Qt::ElideRight);
+    for (int column : {0, 1, 2, 3, 7})
         resultTable->horizontalHeader()->setSectionResizeMode(column, QHeaderView::ResizeToContents);
+    for (int column : {4, 5})
+        resultTable->horizontalHeader()->setSectionResizeMode(column, QHeaderView::Interactive);
+    resultTable->horizontalHeader()->resizeSection(4, 300);
+    resultTable->horizontalHeader()->resizeSection(5, 280);
+    resultTable->horizontalHeaderItem(5)->setToolTip(tr("The type and value exactly as the device sent them, before the MIB interprets them"));
+    resultTable->horizontalHeader()->setSectionResizeMode(6, QHeaderView::Stretch);
+    resultTable->horizontalHeader()->setStretchLastSection(false);
     qobject_cast<QVBoxLayout *>(w.QueryLayout->layout())->insertWidget(1, resultTable, 2);
+    auto *requestStatus = new QLabel(w.QueryLayout);
+    requestStatus->setObjectName(QStringLiteral("StructuredQueryStatus"));
+    requestStatus->setWordWrap(true);
+    requestStatus->setStyleSheet(QStringLiteral(
+        "QLabel#StructuredQueryStatus { padding: 3px 6px; color: #237a3b; }"
+        "QLabel#StructuredQueryStatus[failed=\"true\"] { color: #9b2525; background: #f8d7da; font-weight: 600; }"));
+    requestStatus->hide();
+    qobject_cast<QVBoxLayout *>(w.QueryLayout->layout())->insertWidget(1, requestStatus);
     w.Query->setToolTip(tr("Raw protocol and diagnostic output"));
     const auto refreshMibProfiles = [this, browserProfile]() {
         const QString selected = QSettings().value("mib-library/current-profile",
@@ -572,30 +588,23 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     auto *contextLayout = new QVBoxLayout(contextWidget);
     contextLayout->setContentsMargins(10, 6, 10, 6);
     contextLayout->setSpacing(1);
-    auto *contextName = new QLabel(tr("No device selected"), contextWidget);
-    contextName->setObjectName(QStringLiteral("CurrentDeviceName"));
-    QFont contextFont = contextName->font(); contextFont.setBold(true);
-    contextName->setFont(contextFont);
-    auto *contextSummary = new QLabel(tr("Select a device from the sidebar"), contextWidget);
-    contextSummary->setObjectName(QStringLiteral("CurrentDeviceSummary"));
     auto *contextState = new QWidget(contextWidget);
     auto *contextStateLayout = new QHBoxLayout(contextState);
     contextStateLayout->setContentsMargins(0, 2, 0, 0);
     contextStateLayout->setSpacing(12);
-    auto *securityContext = new QLabel(tr("SNMP: No connection"), contextState);
-    securityContext->setObjectName(QStringLiteral("CurrentSecurityContext"));
-    auto *mibContext = new QLabel(tr("MIB Profile: %1").arg(browserProfile->currentText()), contextState);
-    mibContext->setObjectName(QStringLiteral("CurrentMibProfile"));
     auto *environmentContext = new QLabel(tr("Environment: Building"), contextState);
     environmentContext->setObjectName(QStringLiteral("CurrentEnvironmentStatus"));
     environmentContext->setProperty("status", QStringLiteral("building"));
-    contextStateLayout->addWidget(securityContext);
-    contextStateLayout->addWidget(mibContext);
     contextStateLayout->addWidget(environmentContext);
     contextStateLayout->addStretch();
-    contextLayout->addWidget(contextName);
-    contextLayout->addWidget(contextSummary);
+    // The connection bar replaces the saved-device header: Target, Credential and the
+    // MIB Profile selector (moved here from the Tree page, so there is only one).
+    auto *connectionBar = new ConnectionBar(communityCredentialService, UsmCredentials(),
+                                            browserProfile, contextWidget);
+    browserProfileRow->hide();
+    contextLayout->addWidget(connectionBar);
     contextLayout->addWidget(contextState);
+    agent->SetConnectionBar(connectionBar);
     if (auto *centralLayout = qobject_cast<QGridLayout *>(w.widget->layout())) {
         centralLayout->removeWidget(w.TabW);
         centralLayout->setContentsMargins(8, 8, 8, 8);
@@ -605,75 +614,6 @@ void Snmpb::BindToGUI(QMainWindow* mw)
         centralLayout->setRowStretch(1, 1);
     }
 
-    devicesDock = new QDockWidget(tr("Devices"), mw);
-    devicesDock->setObjectName("DevicesDock");
-    devicesDock->setAllowedAreas(Qt::LeftDockWidgetArea);
-    devicesDock->setFeatures(QDockWidget::NoDockWidgetFeatures);
-    auto *dockTitle = new QWidget(devicesDock);
-    dockTitle->setFixedHeight(0);
-    devicesDock->setTitleBarWidget(dockTitle);
-    devicePane = new DevicePane(GetDeviceTreeConfigFile(),
-                                apm->GetAgentProfileRecords(),
-                                profileMetadataService->allMetadata(),
-                                profileService, profileMetadataService,
-                                communityCredentialService, UsmCredentials(), devicesDock);
-    DiagnosticLogger::log("Connections", "Connections model and Device Details constructed");
-    devicesDock->setWidget(devicePane);
-    auto refreshCredentialHealth = [this]() {
-        QHash<QString, QString> health;
-        for (const AgentProfileRecord &profile : profileService->profiles())
-        {
-            QString text;
-            if (profile.v3)
-            {
-                const UsmReferenceResult result = UsmCredentials()->validate(
-                    profile, profileMetadataService->metadataForProfile(profile.profileId));
-                switch (result.status) {
-                case UsmReferenceStatus::Valid: text = tr("SNMPv3 credential available"); break;
-                case UsmReferenceStatus::Missing: text = tr("SNMPv3 credential missing"); break;
-                case UsmReferenceStatus::Ambiguous: text = tr("SNMPv3 security name ambiguous"); break;
-                case UsmReferenceStatus::IncompatibleSecurityLevel:
-                    text = tr("SNMPv3 security-level mismatch"); break;
-                default: break;
-                }
-            }
-            else if (profile.v1 || profile.v2)
-                text = communityCredentialService->healthText(profile);
-            health.insert(profile.profileId, text);
-        }
-        devicePane->setCredentialHealth(health);
-    };
-    refreshCredentialHealth();
-    connect(communityCredentialService, &CommunityCredentialService::credentialsChanged,
-            devicePane, refreshCredentialHealth);
-    connect(communityCredentialService, &CommunityCredentialService::bindingsChanged,
-            devicePane, refreshCredentialHealth);
-    connect(profileService, &AgentProfileService::profilesChanged,
-            devicePane, refreshCredentialHealth);
-    connect(UsmCredentials(), &UsmCredentialService::credentialsChanged,
-            devicePane, refreshCredentialHealth);
-    devicesDock->setMinimumWidth(280);
-    mw->addDockWidget(Qt::LeftDockWidgetArea, devicesDock);
-    mw->resizeDocks({devicesDock}, {330}, Qt::Horizontal);
-
-    connect(devicePane, &DevicePane::profileSelected,
-            agent, &Agent::SelectProfileById);
-    connect(devicePane, &DevicePane::currentContextChanged, mw,
-            [contextName, contextSummary, securityContext](const QString &name, const QString &summary) {
-        DiagnosticLogger::log("UI", QStringLiteral(
-            "current-profile header update begin name=%1").arg(name));
-        contextName->setText(name.isEmpty() ? QObject::tr("No device selected") : name);
-        contextSummary->setText(summary.isEmpty() ?
-            QObject::tr("Select a device from the sidebar") : summary);
-        securityContext->setText(summary.isEmpty() ? QObject::tr("SNMP: No connection")
-                                                    : QObject::tr("SNMP: %1").arg(summary));
-        DiagnosticLogger::log("UI", "current-profile header update end");
-    });
-    connect(browserProfile, &QComboBox::currentTextChanged, mibContext,
-            [mibContext](const QString &name) {
-        mibContext->setText(QObject::tr("MIB Profile: %1").arg(name.isEmpty()
-            ? QObject::tr("None") : name));
-    });
     connect(modules, &MibModule::profileRuntimeBuildStarted, environmentContext,
             [environmentContext](const QString &) {
         environmentContext->setText(QObject::tr("Environment: Building"));
@@ -710,26 +650,6 @@ void Snmpb::BindToGUI(QMainWindow* mw)
         QHeaderView::section { padding: 4px 6px; font-weight: 600; }
         QTreeView::item, QTableView::item, QListView::item { min-height: 20px; }
     )"));
-    connect(devicePane->detailsEditor(), &DeviceDetailsEditor::profileApplied,
-            devicePane, [this](const QString &profileId) {
-        DiagnosticLogger::log("Connections", QStringLiteral(
-            "model refresh begin profile=%1").arg(profileId));
-        devicePane->setProfiles(profileService->profiles());
-        DiagnosticLogger::log("Connections", QStringLiteral(
-            "tree reselection begin profile=%1").arg(profileId));
-        agent->SelectProfileById(profileId);
-        DiagnosticLogger::log("Connections", "tree reselection/model refresh end");
-    });
-    connect(devicePane, &DevicePane::editProfileRequested,
-            apm, &AgentProfileManager::EditProfile);
-    connect(devicePane, &DevicePane::duplicateProfileRequested,
-            apm, [this](const QString &name) { apm->DuplicateProfile(name); });
-    connect(devicePane, &DevicePane::newProfileRequested,
-            apm, [this](const QString &) { apm->NewProfile(); });
-    connect(devicePane, &DevicePane::deleteProfileRequested,
-            apm, &AgentProfileManager::DeleteProfile);
-    connect(apm, &AgentProfileManager::NewProfileCompleted,
-            devicePane, &DevicePane::placeCreatedProfile);
     connect(apm, &AgentProfileManager::NewProfileCompleted, this,
             [this](const QString &profileId) {
         const AgentProfileRecord *profile = profileService->findById(profileId);
@@ -742,19 +662,6 @@ void Snmpb::BindToGUI(QMainWindow* mw)
         metadata.requestSettingsMode = 1;
         profileMetadataService->update(metadata);
     });
-    connect(devicePane, &DevicePane::organizationPersisted,
-            apm, &AgentProfileManager::PersistProfiles);
-    connect(apm, &AgentProfileManager::AgentProfileListChanged,
-            devicePane, [this]() {
-                devicePane->setProfiles(apm->GetAgentProfileRecords());
-            });
-    connect(apm, &AgentProfileManager::AgentProfileRenamed,
-            devicePane, [this](const QString &profileId, const QString &,
-                               const QString &newName) {
-                devicePane->renameProfile(profileId, newName);
-            });
-    connect(apm, &AgentProfileManager::AgentProfileDuplicated,
-            devicePane, &DevicePane::placeDuplicate);
     connect(profileService, &AgentProfileService::profileDuplicated,
             profileMetadataService, &ProfileMetadataService::copy);
     connect(profileService, &AgentProfileService::profileDuplicated,
@@ -764,79 +671,6 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     connect(profileService, &AgentProfileService::profileDeleted,
             communityCredentialService,
             &CommunityCredentialService::removeProfileBinding);
-    connect(profileMetadataService, &ProfileMetadataService::metadataChanged,
-            devicePane, [this](const QString &) {
-                devicePane->setMetadata(profileMetadataService->allMetadata());
-            });
-    connect(devicePane, &DevicePane::loadPreferredMibsRequested, this,
-            [this](const QString &profileId) {
-        const int retainedCount = profileMetadataService->metadataForProfile(
-            profileId).preferredMibs.size();
-        DiagnosticLogger::log("MIB", tr("Connection preferred-MIB data is retained for compatibility but is not an activation authority (profile=%1 entries=%2). Select a MIB Profile to change MIB semantics.")
-            .arg(profileId).arg(retainedCount));
-    });
-    connect(devicePane, &DevicePane::manageUsmCredentialsRequested, this, [this]() {
-        if (upm) upm->ExecuteNewCredential();
-    });
-    connect(devicePane, &DevicePane::exportRequested, this,
-            [this](int scope, const QString &id) {
-        ProfileTransferDocument document;
-        document.profiles = profileService->profiles();
-        document.metadata = profileMetadataService->allMetadata();
-        document.tree = devicePane->model()->state();
-        if (scope == 1)
-            document = ProfileTransfer::selectProfiles(document, {id});
-        else if (scope == 2)
-            document = ProfileTransfer::selectFolder(document, id);
-        const QString fileName = QFileDialog::getSaveFileName(
-            nullptr, tr("Export Device Profiles"), QString(), tr("JSON files (*.json)"));
-        if (fileName.isEmpty()) return;
-        QFile file(fileName);
-        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate) ||
-            file.write(ProfileTransfer::exportJson(document)) < 0)
-            QMessageBox::warning(nullptr, tr("Export Failed"),
-                                 tr("The profile export could not be written."));
-    });
-    connect(devicePane, &DevicePane::importRequested, this, [this]() {
-        const QString fileName = QFileDialog::getOpenFileName(
-            nullptr, tr("Import Device Profiles"), QString(), tr("JSON files (*.json)"));
-        if (fileName.isEmpty()) return;
-        QFile file(fileName);
-        if (!file.open(QIODevice::ReadOnly))
-        {
-            QMessageBox::warning(nullptr, tr("Import Failed"),
-                                 tr("The selected import file could not be read."));
-            return;
-        }
-        ProfileImportPlan plan;
-        QString detail;
-        const ProfileTransferError error = ProfileTransfer::planImport(
-            file.readAll(), profileService->profiles(), devicePane->model()->state(),
-            &plan, &detail);
-        if (error != ProfileTransferError::None)
-        {
-            QMessageBox::warning(nullptr, tr("Import Failed"),
-                                 tr("The import file is invalid or unsupported. No profiles were imported."));
-            return;
-        }
-        QString applyError;
-        if (!ProfileImportStorage::apply(plan, GetAgentsConfigFile(),
-                                         GetProfileMetadataConfigFile(),
-                                         GetDeviceTreeConfigFile(),
-                                         profileService->profiles(),
-                                         profileMetadataService->allMetadata(),
-                                         devicePane->model()->state(), &applyError))
-        {
-            QMessageBox::warning(nullptr, tr("Import Failed"),
-                                 tr("The import could not be saved. Existing configuration was restored."));
-            return;
-        }
-        profileService->reload();
-        profileMetadataService->reload();
-        devicePane->setProfiles(profileService->profiles());
-        devicePane->setMetadata(profileMetadataService->allMetadata());
-        devicePane->reloadTree();
-    });
 
     // Rehost the established feature widgets in a workbench shell. This only
     // changes presentation ownership: request, Profile, Environment, parser,
@@ -851,8 +685,15 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     w.QueryTable->setParent(resultsPage);
     resultsHeader->addWidget(w.QueryTable);
     resultsLayout->addLayout(resultsHeader);
+    // The status line (how the last request ended) sits directly above the table, and the whole
+    // page replaces the old query-output slot under the Tree.
+    requestStatus->setParent(resultsPage);
+    resultsLayout->addWidget(requestStatus);
     resultTable->setParent(resultsPage);
     resultsLayout->addWidget(resultTable, 1);
+    w.QuerySplitter->insertWidget(1, resultsPage);
+    w.QuerySplitter->setStretchFactor(0, 2);
+    w.QuerySplitter->setStretchFactor(1, 3);
 
     auto *rawPage = new QWidget(mw);
     rawPage->setObjectName(QStringLiteral("WorkbenchRawPage"));
@@ -1055,7 +896,6 @@ void Snmpb::BindToGUI(QMainWindow* mw)
 
     w.NodeInfoLayout->setObjectName(QStringLiteral("WorkbenchMibInspector"));
     w.NodeInfoL->setText(tr("MIB Object Inspector"));
-    devicesDock->hide();
     WorkbenchShell::Pages workbenchPages;
     workbenchPages.tree = w.TreeTab;
     workbenchPages.library = mibLibrary;
@@ -1063,7 +903,7 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     workbenchPages.events = w.TrapsTab;
     workbench = new WorkbenchShell(mw, w.widget,
         qobject_cast<QGridLayout *>(w.widget->layout()), contextWidget, w.TabW,
-        workbenchPages, devicePane, w.NodeInfoLayout, resultsPage, problemsPage,
+        workbenchPages, w.NodeInfoLayout, problemsPage,
             diagnosticsPage, rawPage, this);
     startup->advance(startupGeneration, StartupState::ShellReady,
                      tr("Loading MIB Catalog…"));
@@ -1124,20 +964,12 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     QSettings windowSettings;
     const QByteArray savedWindowState = windowSettings.value("mainwindow/state").toByteArray();
     if (!savedWindowState.isEmpty()) mw->restoreState(savedWindowState);
-    devicesDock->hide();
-    devicesDock->deleteLater();
-    devicesDock = nullptr;
     workbench->restorePresentationState();
     DiagnosticLogger::log("UI", "saved QMainWindow state restore complete");
-    if (windowSettings.contains("mainwindow/device-sidebar-sizes"))
-        devicePane->verticalSplitter()->restoreState(
-            windowSettings.value("mainwindow/device-sidebar-sizes").toByteArray());
     connect(QApplication::instance(), &QCoreApplication::aboutToQuit,
             mw, [this, mw]() {
                 QSettings settings;
                 settings.setValue("mainwindow/state", mw->saveState());
-                settings.setValue("mainwindow/device-sidebar-sizes",
-                                  devicePane->verticalSplitter()->saveState());
                 if (workbench) workbench->savePresentationState();
             });
 
@@ -1155,6 +987,10 @@ void Snmpb::BindToGUI(QMainWindow* mw)
                                            profileService, mw);
         manager.execute();
     });
+    if (auto *bar = mw->findChild<ConnectionBar *>(QStringLiteral("ConnectionBar"))) {
+        connect(bar, &ConnectionBar::manageCommunitiesRequested, manageCommunities, &QAction::trigger);
+        connect(bar, &ConnectionBar::manageUsmRequested, w.actionManageUSMProfiles, &QAction::trigger);
+    }
     connect( w.actionPreferences, SIGNAL( triggered(bool) ),
              this, SLOT( ManagePreferences(bool) ) );
     connect( w.helpAboutAction, SIGNAL( triggered(bool) ),
@@ -1497,13 +1333,6 @@ void Snmpb::AboutBox(bool)
     QMessageBox::about(MainUI()->TabW, tr("About MIB Navigator"),
                        ProductIdentity::aboutHtml(SNMPB_VERSION_STRING,
                                                   dependencies));
-}
-
-QString Snmpb::GetDeviceTreeConfigFile(void)
-{
-    QSettings settings;
-    QDir cfgdir = QFileInfo(settings.fileName()).dir();
-    return cfgdir.filePath(DEVICE_TREE_CONFIG_FILE);
 }
 
 QString Snmpb::GetProfileMetadataConfigFile(void)

@@ -7,6 +7,7 @@
 #include <QGridLayout>
 #include <QMainWindow>
 #include <QSettings>
+#include <utility>
 #include <QStackedWidget>
 #include <QSplitter>
 #include <QTabBar>
@@ -75,31 +76,26 @@ int main(int argc, char **argv)
     layout->addWidget(documents, 1, 0);
     window.setCentralWidget(root);
 
-    auto *device = new QWidget;
     auto *inspector = new QWidget;
-    auto *results = new QWidget;
     auto *problems = new QWidget;
     auto *diagnostics = new QWidget;
     auto *raw = new QWidget;
-    WorkbenchShell shell(&window, root, layout, context, documents, pages, device,
-                         inspector, results, problems, diagnostics, raw, &window);
+    WorkbenchShell shell(&window, root, layout, context, documents, pages,
+                         inspector, problems, diagnostics, raw, &window);
 
     check(documents->tabBar()->isHidden(), "old primary tab navigation remains visible");
     QTabBar *durableTabs = window.findChild<QTabBar *>("WorkbenchOpenDocuments");
     check(durableTabs && durableTabs->isHidden(), "empty document strip should not consume space");
-    check(shell.sidebarStack()->count() == 4, "four contextual sidebars not created");
+    check(shell.sidebarStack()->count() == 3, "three contextual sidebars (MIBs, Queries, Events) not created");
     check(window.findChild<QSplitter *>("WorkbenchContentSplitter") != nullptr,
           "resizable sidebar/document boundary not created");
-    for (int i = 0; i < 4; ++i)
-        check(shell.activityAction(static_cast<WorkbenchActivity>(i)) != nullptr,
-              "activity action missing");
+    for (WorkbenchActivity offered : {WorkbenchActivity::Mibs, WorkbenchActivity::Queries,
+                                      WorkbenchActivity::Events})
+        check(shell.activityAction(offered) != nullptr, "activity action missing");
 
-    shell.setActivity(WorkbenchActivity::Devices);
-    check(shell.activity() == WorkbenchActivity::Devices &&
-          shell.sidebarStack()->currentIndex() == 1 &&
-          documents->currentWidget() == pages.tree,
-          "Devices activity did not route sidebar and document");
     shell.setActivity(WorkbenchActivity::Queries);
+    check(shell.activity() == WorkbenchActivity::Queries && shell.sidebarStack()->currentIndex() == 1,
+          "Queries activity did not route its sidebar");
     check(documents->currentWidget() == pages.tree,
           "Queries activity did not preserve ad-hoc Tree operation workflow");
     shell.setActivity(WorkbenchActivity::Events);
@@ -128,7 +124,7 @@ int main(int argc, char **argv)
     shell.savePresentationState();
     shell.bottomDock()->show();
     shell.inspectorDock()->hide();
-    shell.setActivity(WorkbenchActivity::Devices);
+    shell.setActivity(WorkbenchActivity::Queries);
     shell.restorePresentationState();
     check(shell.activity() == WorkbenchActivity::Mibs,
           "selected activity presentation state did not restore");
@@ -136,6 +132,17 @@ int main(int argc, char **argv)
           "panel visibility presentation state did not restore");
     check(!QSettings().value("workbench/content-splitter").toByteArray().isEmpty(),
           "sidebar splitter presentation state was not persisted");
+
+    // Settings saved by older builds: 1 was the retired Devices activity; 2 and 3 keep their meaning.
+    for (const auto &[stored, expected] : {std::pair{1, WorkbenchActivity::Mibs},
+                                           std::pair{2, WorkbenchActivity::Queries},
+                                           std::pair{3, WorkbenchActivity::Events},
+                                           std::pair{99, WorkbenchActivity::Mibs}}) {
+        QSettings().setValue("workbench/activity", stored);
+        shell.setActivity(WorkbenchActivity::Mibs);
+        shell.restorePresentationState();
+        check(shell.activity() == expected, "an activity saved by an older build did not restore correctly");
+    }
 
     return failures ? 1 : 0;
 }

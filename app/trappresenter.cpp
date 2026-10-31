@@ -15,5 +15,15 @@ QString TrapPresenter::formattedValue(const TrapVarbind &v){const auto e=MibEnvi
  if(n->baseType==MibEnvironmentBaseType::Bits){const QByteArray b=octets(v.printableValue);QStringList names;for(const auto&i:n->namedValues){const int bit=int(i.value.unsignedValue);if(bit/8<b.size()&&(quint8(b[bit/8])&(0x80>>(bit%8))))names<<i.name;}if(!names.isEmpty())return names.join(" ");}
  if(n->baseType==MibEnvironmentBaseType::OctetString&&n->displayHint==QStringLiteral("1x:")){const QByteArray b=octets(v.printableValue);if(!b.isEmpty()){QStringList values;for(unsigned char c:b)values<<QString("%1").arg(c,2,16,QChar('0'));return values.join(':');}}
  return v.printableValue;}
+QString TrapPresenter::sourceToCopy(const TrapRecord &record)
+{
+    const QString agent = record.agentAddress.trimmed();
+    if (record.snmpVersion == TrapSnmpVersion::V1 && !agent.isEmpty() &&
+        agent != QLatin1String("0.0.0.0") && agent != QLatin1String("::") &&
+        agent.compare(record.sourceAddress.trimmed(), Qt::CaseInsensitive) != 0)
+        return agent;
+    return record.sourceAddress.trimmed();
+}
+
 TrapPresentation TrapPresenter::present(const TrapRecord&r,bool)const{TrapPresentation o;const QString notification=symbolicOid(r.notificationOid);o.summaryColumns<<QString("%1").arg(r.recordId,4,10,QChar('0'))<<r.receivedTimestamp.date().toString(Qt::ISODate)<<r.receivedTimestamp.time().toString(Qt::ISODate)<<QString::number(r.notificationTicks)<<notification<<r.messageType<<versionText(r.snmpVersion)<<r.sourceAddress<<QString::number(r.sourcePort);o.communityText=QCoreApplication::translate("TrapItem","Community: %1").arg(r.community);for(int i=0;i<r.varbinds.size();++i){const auto&v=r.varbinds[i];o.varbindLines<<QString("#%1 %2: %3").arg(i).arg(symbolicOid(v.oid),formattedValue(v));}
  const auto e=MibEnvironmentRegistry::active();const auto*n=nodeFor(e,r.notificationOid);if(!n||n->kind!=MibEnvironmentNodeKind::Notification)return o;o.notificationHtml=QString("<table border=\"1\" cellpadding=\"0\" cellspacing=\"0\" align=\"left\"><tr><td><b>Name:</b></td><td><font color=#009000><b>%1</b></font></td><tr><td><b>Oid:</b></td><td>%2</td></tr><tr><td><b>Units:</b></td><td>%3</td></tr><tr><td><b>Module:</b></td><td>%4</td></tr><tr><td><b>Reference:</b></td><td><font face=fixed color=blue>%5</font></td></tr><tr><td><b>Description:</b></td><td><font face=fixed color=blue>%6</font></td></tr></table>").arg(n->name,n->oid,n->units,n->moduleIdentity,n->reference.toHtmlEscaped(),n->description.toHtmlEscaped());return o;}

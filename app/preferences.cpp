@@ -96,11 +96,15 @@ void Preferences::Init(void)
     auto *requestPageLayout = new QVBoxLayout(requestPage);
     auto *requestGroup = new QGroupBox(tr("SNMP Request Defaults"), requestPage);
     auto *requestForm = new QFormLayout(requestGroup);
+    requestPortSpin = new QSpinBox(requestGroup);
+    requestPortSpin->setRange(1, 65535);
+    requestPortSpin->setToolTip(tr("Used when the Target has no :port"));
     requestTimeoutSpin = new QSpinBox(requestGroup);
     requestTimeoutSpin->setRange(1, 3600); requestTimeoutSpin->setSuffix(tr(" seconds"));
     requestRetriesSpin = new QSpinBox(requestGroup); requestRetriesSpin->setRange(0, 100);
     bulkNonRepeatersSpin = new QSpinBox(requestGroup); bulkNonRepeatersSpin->setRange(0, 65535);
     bulkMaxRepetitionsSpin = new QSpinBox(requestGroup); bulkMaxRepetitionsSpin->setRange(0, 65535);
+    requestForm->addRow(tr("Default SNMP port"), requestPortSpin);
     requestForm->addRow(tr("Timeout"), requestTimeoutSpin);
     requestForm->addRow(tr("Retries"), requestRetriesSpin);
     requestForm->addRow(tr("GETBULK non-repeaters"), bulkNonRepeatersSpin);
@@ -168,6 +172,7 @@ void Preferences::Init(void)
     curprofile = persisted.selectedProfile;
     curprofileid = persisted.selectedProfileId;
     curproto = persisted.selectedProtocol;
+    requestPortSpin->setValue(persisted.requestPort);
     requestTimeoutSpin->setValue(persisted.requestTimeout);
     requestRetriesSpin->setValue(persisted.requestRetries);
     bulkNonRepeatersSpin->setValue(persisted.bulkNonRepeaters);
@@ -226,6 +231,7 @@ void Preferences::Save()
     values.selectedProfile = curprofile;
     values.selectedProfileId = curprofileid;
     values.selectedProtocol = curproto;
+    values.requestPort = requestPortSpin->value();
     values.requestTimeout = requestTimeoutSpin->value();
     values.requestRetries = requestRetriesSpin->value();
     values.bulkNonRepeaters = bulkNonRepeatersSpin->value();

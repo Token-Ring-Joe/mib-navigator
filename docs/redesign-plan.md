@@ -157,6 +157,32 @@ into smaller steps, each with its own working build.
    Credentials screen, and global connection settings. Graph-era and
    Discovery-era dependencies on Agent Profile IDs must be gone by the end of
    this step.
+8a. *Done (2026-10-31): the connection bar drives requests.* Target (typed, with
+   a 30-entry recent history that remembers the last Credential per target, never
+   the MIB Profile), Credential (each saved community appears as an SNMPv2c and an
+   SNMPv1 entry; each saved SNMPv3 user once) with a Manage button, and the single
+   MIB Profile selector, all in the header. `Agent::ResolveCurrentSelection` builds
+   the request from the bar (`connectionmodel.*`); timeout, retries, and GETBULK
+   settings come from the global preferences. A credential that is deleted while
+   chosen leaves the selection empty rather than switching silently. The Devices
+   activity is no longer offered. Port is typed as `host:port`; without one, the
+   global "Default SNMP port" in Preferences applies (161). Covered by
+   `snmpb.connection-model` and by the `live-get-through-connection-bar` scenario,
+   which runs a real Get against `tools/loopback_snmp_agent.py` (127.0.0.1 only).
+8b-1. *Done (2026-10-31):* deleted the Device pane, device tree (model, repository,
+   details editor), and profile import/export (16 files, their 4 tests, the Devices
+   dock, the retired header labels, and the Devices activity). Saved settings that
+   pointed at the Devices activity open MIBs (`workbench/activity` values keep their
+   meaning: 0 MIBs, 2 Queries, 3 Events). `device-tree.conf` and `agents.conf` are
+   left on disk untouched.
+8b-2. *Still to do:* delete the Agent Profile manager dialog, service, repository and
+   operations, per-device metadata, and the hidden legacy controls in `Agent`
+   (`AgentProfile` combo, protocol radios). `AgentProfileRecord` is still the request
+   model that `SnmpRequestConfig` is built from, so it must be renamed or replaced
+   rather than deleted. The community-credential manager and USM credential service
+   still count Agent Profile references when deciding whether a credential can be
+   deleted; that counting goes with the profiles. Then a single Credentials screen
+   replaces the two managers.
 
 ### Phase 3: Features, in dependency order
 
@@ -164,7 +190,13 @@ into smaller steps, each with its own working build.
    ASN.1 type and raw value beside the MIB interpretation (named values,
    DISPLAY-HINT, units). Warn on wrong type, undefined enumeration value,
    out-of-range value, and size violations. Used by Results, Watch, Traps, and
-   Tables.
+   Tables. *Results done (2026-10-31); Results now sit directly under the Tree (not in the bottom panel), with a one-line status above the table that says how the last request ended: "Finished: 37 objects in 4 requests", a timeout, or, for SNMPv3, a plain-English explanation of a refused request (`snmpreport.*`, covered by `snmpb.snmp-report`). Before this change an SNMPv3 REPORT was shown as if it were a result and errors appeared only on the Raw tab.* The Results table has Received (type and
+   raw value) and Warnings columns, and the row is highlighted on a mismatch. The
+   check is the pure function `CheckMibValue` (`mibvaluesemantics.*`, covered by
+   `snmpb.mib-value-check`) and is exercised end to end against a loopback agent
+   that answers one object with the wrong type. Still to do: show it in the Query
+   Table view, Traps, and Watch. Not checked yet: DISPLAY-HINT mismatches and
+   values that violate a TEXTUAL-CONVENTION beyond range, size, and enumeration.
 10. **Watch.**
 11. **Traps**: Copy source IP, plus raw/interpreted varbinds from step 9.
 12. **Log / PDU view**, starting with plain-English SNMPv3 REPORT translation

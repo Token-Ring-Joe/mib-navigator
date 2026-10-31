@@ -200,7 +200,7 @@
           <item row="0" column="0">
            <widget class="QCheckBox" name="HorizontalSplit">
             <property name="text">
-             <string>Horizontal Split</string>
+             <string>Show results below the MIB Tree (uncheck to show them beside it)</string>
             </property>
            </widget>
           </item>

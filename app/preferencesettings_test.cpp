@@ -31,7 +31,7 @@ int main(int argc, char **argv)
         check(defaults.enableIpv4 && defaults.enableIpv6, "IP defaults enabled");
         check(defaults.trapPort4 == 162 && defaults.trapPort6 == 162,
               "trap ports default to 162");
-        check(!defaults.horizontalSplit && defaults.expandTrapBinding,
+        check(defaults.horizontalSplit && defaults.expandTrapBinding,
               "UI defaults preserved");
         check(!defaults.showAgentName && defaults.automaticLoading == 2,
               "trap display and automatic loading defaults preserved");
@@ -40,7 +40,7 @@ int main(int argc, char **argv)
         check(defaults.selectedProfile == "localhost" &&
               defaults.selectedProfileId.isEmpty() &&
               defaults.selectedProtocol == 0, "agent selection defaults preserved");
-        check(defaults.requestTimeout == 3 && defaults.requestRetries == 1 &&
+        check(defaults.requestPort == 161 && defaults.requestTimeout == 3 && defaults.requestRetries == 1 &&
               defaults.bulkNonRepeaters == 0 &&
               defaults.bulkMaxRepetitions == 10,
               "SNMP request defaults preserved");
@@ -53,7 +53,7 @@ int main(int argc, char **argv)
     expected.trapPort4 = 10162;
     expected.enableIpv6 = true;
     expected.trapPort6 = 20162;
-    expected.horizontalSplit = true;
+    expected.horizontalSplit = false;
     expected.expandTrapBinding = false;
     expected.showAgentName = true;
     expected.trapHistoryLimit = 250;
@@ -61,6 +61,7 @@ int main(int argc, char **argv)
     expected.selectedProfile = "router-lab";
     expected.selectedProfileId = "11111111-2222-4333-8444-555555555555";
     expected.selectedProtocol = 2;
+    expected.requestPort = 1161;
     expected.requestTimeout = 11;
     expected.requestRetries = 5;
     expected.bulkNonRepeaters = 2;
@@ -108,7 +109,8 @@ int main(int argc, char **argv)
               "selected Agent Profile ID round-trips");
         check(actual.selectedProtocol == expected.selectedProtocol,
               "selected SNMP protocol round-trips");
-        check(actual.requestTimeout == expected.requestTimeout &&
+        check(actual.requestPort == expected.requestPort &&
+              actual.requestTimeout == expected.requestTimeout &&
               actual.requestRetries == expected.requestRetries &&
               actual.bulkNonRepeaters == expected.bulkNonRepeaters &&
               actual.bulkMaxRepetitions == expected.bulkMaxRepetitions,

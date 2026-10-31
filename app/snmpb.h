@@ -36,7 +36,6 @@ class USMProfileManager;
 class UsmCredentialService;
 class CommunityCredentialService;
 class Preferences;
-class DevicePane;
 class QDockWidget;
 class MibLibraryWidget;
 class WorkbenchShell;
@@ -75,7 +74,6 @@ public:
     QString GetUsmUsersConfigFile(void);
     QString GetAgentsConfigFile(void);
     QString GetLogConfigFile(void);
-    QString GetDeviceTreeConfigFile(void);
     QString GetProfileMetadataConfigFile(void);
     QString GetCredentialIdentitiesConfigFile(void);
     QString GetCommunityCredentialsConfigFile(void);
@@ -106,8 +104,6 @@ private:
     Agent *agent;
     MibEditor *editor;
     LogSnmpb *logsnmpb;
-    DevicePane *devicePane;
-    QDockWidget *devicesDock;
     MibLibraryWidget *mibLibrary;
     WorkbenchShell *workbench = nullptr;
     StartupCoordinator *startup = nullptr;

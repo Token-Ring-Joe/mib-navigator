@@ -15,7 +15,9 @@ class QTabBar;
 class QTabWidget;
 class QWidget;
 
-enum class WorkbenchActivity { Mibs = 0, Devices, Queries, Events };
+// The numeric values are persisted in settings ("workbench/activity"); do not renumber.
+// 1 was the retired Devices activity and is no longer offered.
+enum class WorkbenchActivity { Mibs = 0, Queries = 2, Events = 3 };
 
 class WorkbenchShell final : public QObject
 {
@@ -30,7 +32,7 @@ public:
 
     WorkbenchShell(QMainWindow *window, QWidget *centralRoot, QGridLayout *centralLayout,
                    QWidget *contextStrip, QTabWidget *documents, const Pages &pages,
-                   QWidget *devicePane, QWidget *inspector, QWidget *results,
+                   QWidget *inspector,
                    QWidget *problems, QWidget *diagnostics, QWidget *raw,
                    QObject *parent = nullptr);
 
@@ -57,6 +59,7 @@ private:
     void addActivityAction(WorkbenchActivity activity, const QString &text,
                            const QKeySequence &shortcut);
     QWidget *defaultDocument(WorkbenchActivity activity) const;
+    static int sidebarIndex(WorkbenchActivity activity);
 
     QMainWindow *mainWindow;
     QTabWidget *documentTabs;

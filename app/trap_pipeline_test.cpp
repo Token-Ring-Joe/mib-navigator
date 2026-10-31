@@ -64,10 +64,33 @@ int main(int argc, char **argv)
     copy.varbinds[0].printableValue = "copy";
     check(record.varbinds[0].printableValue == "one", "records have value semantics");
 
+    {
+        TrapRecord r; r.sourceAddress = "192.0.2.10"; r.snmpVersion = TrapSnmpVersion::V2c;
+        check(TrapPresenter::sourceToCopy(r) == "192.0.2.10", "v2c copies the packet source");
+        r.agentAddress = "198.51.100.7";
+        check(TrapPresenter::sourceToCopy(r) == "192.0.2.10", "agent-addr is ignored outside SNMPv1");
+        r.snmpVersion = TrapSnmpVersion::V1;
+        check(TrapPresenter::sourceToCopy(r) == "198.51.100.7", "v1 prefers an agent-addr that differs from the source");
+        r.agentAddress = "192.0.2.10";
+        check(TrapPresenter::sourceToCopy(r) == "192.0.2.10", "v1 with identical agent-addr copies the source");
+        r.agentAddress = "0.0.0.0";
+        check(TrapPresenter::sourceToCopy(r) == "192.0.2.10", "v1 with an unset agent-addr copies the source");
+        r.agentAddress = "  ";
+        check(TrapPresenter::sourceToCopy(r) == "192.0.2.10", "v1 with a blank agent-addr copies the source");
+    }
     TrapEndpoint v1 = v2;
     v1.version = TrapSnmpVersion::V1;
     TrapRecord v1Record = decoder.decode(notification(sNMP_PDU_V1TRAP,
         "1.3.6.1.6.3.1.1.5.3"), v1, received);
+    {
+        Pdu relayed = notification(sNMP_PDU_V1TRAP, "1.3.6.1.6.3.1.1.5.3");
+        relayed.set_v1_trap_address(IpAddress("198.51.100.7"));
+        const TrapRecord relayedRecord = decoder.decode(relayed, v1, received);
+        check(relayedRecord.agentAddress == "198.51.100.7" && relayedRecord.sourceAddress == "192.0.2.10" &&
+              TrapPresenter::sourceToCopy(relayedRecord) == "198.51.100.7",
+              "decoder captures the v1 agent-addr and Copy source IP prefers it");
+        check(v1Record.agentAddress.isEmpty(), "a v1 trap without agent-addr leaves it empty");
+    }
     check(v1Record.isValid() && v1Record.messageType == "Trap(v1)" &&
           v1Record.enterpriseOid == "1.3.6.1.4.1.8072", "v1 normalization");
 
