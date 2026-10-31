@@ -61,14 +61,19 @@
 /* Define if pwd.h (/etc/passwd database) is present. */
 #undef HAVE_PWD_H
 
-/* Define if the string-to-long-long function is present in libc. */
-#undef HAVE_STRTOLL
+/* Define if the string-to-long-long function is present in libc.
+   The Microsoft C runtime provides it. Leaving this undefined makes util.h fall back to the
+   32-bit strtol, so 64-bit numbers in MIBs were parsed wrongly on Windows. */
+#define HAVE_STRTOLL 1
 
 /* Define if the string-to-quad function (BSD) is present in libc. */
 #undef HAVE_STRTOQ
 
-/* Define if the string-to-unsigned-long-long function is present in libc. */
-#undef HAVE_STRTOULL
+/* Define if the string-to-unsigned-long-long function is present in libc.
+   The Microsoft C runtime provides it. Leaving this undefined makes util.h fall back to the
+   32-bit strtoul, which is how "18446744073709551615" in SNMPv2-SMI was reported as out of
+   range on Windows only. */
+#define HAVE_STRTOULL 1
 
 /* Define if the string-to-unsigned-quad function (BSD) is present in libc. */
 #undef HAVE_STRTOUQ
