@@ -57,6 +57,7 @@ public:
     MibViewLoader* MibLoaderObj(void);
     MibModule* MibModuleObj(void);
     MibEditor* MibEditorObj(void);
+    MibLibraryWidget* MibLibraryObj(void) { return mibLibrary; }
     AgentProfileManager* APManagerObj(void);
     AgentProfileService* AgentProfiles(void);
     ProfileMetadataService* ProfileMetadata(void);

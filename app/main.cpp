@@ -49,6 +49,10 @@
 #include <QLabel>
 #include <QTableWidget>
 #include "mibenvironment.h"
+#include "miblibrarywidget.h"
+#include <QCryptographicHash>
+#include <QTextEdit>
+#include <QEventLoop>
 
 QString file_to_open;
 
@@ -57,6 +61,8 @@ int main( int argc, char ** argv )
     bool launch_smoke_test = false;
     QString smoke_config_dir;
     QString smoke_mib_file;
+    QString smoke_edit_from;
+    QString smoke_edit_to;
     QString startup_close_state;
     for (int i = 1; i < argc; ++i)
     {
@@ -69,6 +75,14 @@ int main( int argc, char ** argv )
         else if (argument == "--smoke-mib" && i + 1 < argc)
         {
             smoke_mib_file = QString::fromLocal8Bit(argv[++i]);
+        }
+        else if (argument == "--smoke-edit-from" && i + 1 < argc)
+        {
+            smoke_edit_from = QString::fromLocal8Bit(argv[++i]);
+        }
+        else if (argument == "--smoke-edit-to" && i + 1 < argc)
+        {
+            smoke_edit_to = QString::fromLocal8Bit(argv[++i]);
         }
         else if (argument == "--startup-close-state" && i + 1 < argc)
         {
@@ -338,6 +352,83 @@ int main( int argc, char ** argv )
                           "Selecting a Problems row fills the detail pane");
                 }
                 mw.grab().save(QDir(smoke_config_dir).filePath("problems-tab-notes.png"));
+            }
+            // Edit -> Save -> Rebuild: fix the opened MIB in the editor, save it, and check that the
+            // active profile rebuilds from the saved file and the problem goes away.
+            if (!smoke_edit_from.isEmpty() && !smoke_mib_file.isEmpty()) {
+                const auto writeEnvironment = [&](const char *tag) {
+                    if (const MibEnvironmentPtr now = snmpb.MibModuleObj()->CurrentEnvironment()) {
+                        const MibProblemSummary summary = MibSummarizeProblems(now->problems());
+                        smoke_output << "launch-smoke: " << tag << " ENVIRONMENT loaded=" << now->loadedCount()
+                                     << " failed=" << now->failedCount() << " errors=" << summary.errors
+                                     << " warnings=" << summary.warnings << " notes=" << summary.notes << Qt::endl;
+                        for (const MibProblem &problem : now->problems())
+                            smoke_output << "launch-smoke: " << tag << " PROBLEM severity="
+                                         << MibProblemSeverityText(problem.severity) << " category=\""
+                                         << problem.category << "\" module=" << problem.module
+                                         << " line=" << problem.line << Qt::endl;
+                    }
+                };
+                writeEnvironment("BEFORE-EDIT");
+                {
+                    // The editor's own diagnostics must name the real file, never the staging copy.
+                    QAbstractItemModel *shown = snmpb.MainUI()->MIBLog->model();
+                    bool stagingNameShown = false;
+                    for (int row = 0; row < shown->rowCount(); ++row)
+                        for (int column = 0; column < shown->columnCount(); ++column)
+                            stagingNameShown = stagingNameShown ||
+                                shown->index(row, column).data().toString().contains("mib-navigator-verify-");
+                    check(shown->rowCount() > 0, "edit: the editor listed the syntax error before the fix");
+                    check(!stagingNameShown, "edit: editor diagnostics never show the internal staging file name");
+                }
+                QTextEdit *editorText = snmpb.MainUI()->MIBFile;
+                QString content = editorText->toPlainText();
+                check(content.contains(smoke_edit_from), "edit: the text to fix is present in the editor");
+                content.replace(smoke_edit_from, smoke_edit_to);
+                editorText->setPlainText(content);
+
+                QEventLoop rebuildWait;
+                QTimer rebuildTimeout; rebuildTimeout.setSingleShot(true);
+                bool rebuilt = false;
+                QObject::connect(&rebuildTimeout, &QTimer::timeout, &rebuildWait, &QEventLoop::quit);
+                const QMetaObject::Connection readyConnection = QObject::connect(
+                    snmpb.MibModuleObj(), &MibModule::profileRuntimeReady, &rebuildWait,
+                    [&](const QString &, const MibEffectivePlan &, MibEnvironmentPtr, const QStringList &, bool, bool) {
+                        rebuilt = true; rebuildWait.quit();
+                    });
+                rebuildTimeout.start(40000);
+                snmpb.MibEditorObj()->MibFileSave();
+                if (!rebuilt) rebuildWait.exec();
+                QObject::disconnect(readyConnection);
+                check(rebuilt, "edit: saving rebuilt the active profile's environment");
+                check(snmpb.MainUI()->MIBLog->model()->rowCount() == 0 &&
+                      snmpb.MainUI()->MIBLogL->text().startsWith("Saved."),
+                      "edit: the editor does not keep showing the pre-save verification result");
+                writeEnvironment("AFTER-EDIT");
+
+                snmpb.MainUI()->MIBTree->SelectFromOid("1.3.6.1.4.1.90002.1");
+                check(snmpb.MainUI()->MIBTree->currentIndex().isValid(),
+                      "edit: the object defined by the fixed MIB is now in the Tree");
+                QFile savedFile(smoke_mib_file);
+                QString savedHash;
+                if (savedFile.open(QIODevice::ReadOnly))
+                    savedHash = QString::fromLatin1(QCryptographicHash::hash(
+                        savedFile.readAll(), QCryptographicHash::Sha256).toHex());
+                bool hashRecorded = false;
+                const QString savedCanonical = QFileInfo(smoke_mib_file).canonicalFilePath();
+                for (const MibProfileMember &root : snmpb.MibLibraryObj()->currentProfile().roots)
+                    if (QFileInfo(root.canonicalPath).canonicalFilePath() == savedCanonical)
+                        hashRecorded = (root.sha256 == savedHash) && !savedHash.isEmpty();
+                check(hashRecorded, "edit: the profile records the saved file's new hash (no Modified note)");
+                if (QTableWidget *table = mw.findChild<QTableWidget *>("WorkbenchProblemTable")) {
+                    QCoreApplication::processEvents();
+                    mw.grab().save(QDir(smoke_config_dir).filePath("problems-tab-after-edit.png"));
+                    smoke_output << "launch-smoke: AFTER-EDIT problems-table-rows=" << table->rowCount() << Qt::endl;
+                }
+                QFile diagnosticLog(DiagnosticLogger::logFilePath());
+                check(diagnosticLog.open(QIODevice::ReadOnly) &&
+                      diagnosticLog.readAll().contains("rebuilding"),
+                      "edit: the diagnostic log records the save as rebuilding the active profile");
             }
             mw.close();
             smoke_log.close();

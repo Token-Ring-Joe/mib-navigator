@@ -89,11 +89,14 @@ END
 #   ROOTS  <identity@relative/path> ...    profile roots (the file need not exist)
 #   [MODIFIED_ROOTS <identity> ...]        record a wrong hash so the root counts as edited
 #   [UNRESOLVED <identity> ...]            modules the profile lists that the Library lacks
+#   [EDIT_FILE <relative/path> EDIT_FROM <text> EDIT_TO <text>]
+#                                          open that file in the editor, replace the text, save, and
+#                                          wait for the profile to rebuild (logged as BEFORE/AFTER-EDIT)
 #   REQUIRE_EXIT_ZERO | ALLOW_EXIT_ONE
 #   EXPECT <regex> ...)                    each must match launch-smoke.log
 function(run_scenario name)
     cmake_parse_arguments(S "REQUIRE_EXIT_ZERO;ALLOW_EXIT_ONE" ""
-        "FILES;ROOTS;MODIFIED_ROOTS;UNRESOLVED;EXPECT;REJECT" ${ARGN})
+        "FILES;ROOTS;MODIFIED_ROOTS;UNRESOLVED;EXPECT;REJECT;EDIT_FILE;EDIT_FROM;EDIT_TO" ${ARGN})
     set(dir "${SNMPB_TOLERANCE_DIR}/${name}")
     set(library "${dir}/MIB-Library")
     file(MAKE_DIRECTORY "${library}/Standards" "${dir}/snmpb.sourceforge.net" "${dir}/state/mibs")
@@ -142,11 +145,17 @@ function(run_scenario name)
     file(WRITE "${dir}/snmpb.sourceforge.net/SnmpB.ini"
         "[mib-library]\nroot=${library}\ncurrent-profile=custom.test\n")
 
+    set(smoke_mib "${library}/Standards/SNMPv2-MIB")
+    set(edit_args "")
+    if(S_EDIT_FILE)
+        set(smoke_mib "${library}/Acme/${S_EDIT_FILE}")
+        set(edit_args --smoke-edit-from "${S_EDIT_FROM}" --smoke-edit-to "${S_EDIT_TO}")
+    endif()
     execute_process(
         COMMAND "${CMAKE_COMMAND}" -E env --unset=SMIPATH "QT_QPA_PLATFORM=offscreen"
             "PATH=${SNMPB_QT_BIN_DIR};$ENV{PATH}"
             "${SNMPB_EXECUTABLE}" --launch-smoke-test "${dir}"
-            --smoke-mib "${library}/Standards/SNMPv2-MIB"
+            --smoke-mib "${smoke_mib}" ${edit_args}
         WORKING_DIRECTORY "${dir}"
         RESULT_VARIABLE exit_code
         OUTPUT_VARIABLE out ERROR_VARIABLE err
@@ -257,6 +266,24 @@ run_scenario(everything-wrong REQUIRE_EXIT_ZERO
            "category=\"Listed MIB not in the Library\" module=ABSENT-MIB"
            "category=\"MIB not loaded\" module=VANISHED-MIB"
            "category=\"Modified\" module=GOOD-MIB")
+
+# 11. Edit -> Save -> Rebuild: the user opens the MIB that has the syntax error, fixes it in the
+#     editor and saves. The active profile rebuilds, the Parse error is gone, the fixed object is
+#     in the Tree, and the profile records the new file hash (so there is no Modified note either).
+run_scenario(edit-save-rebuild REQUIRE_EXIT_ZERO
+    FILES "Prod/GOOD-MIB=GOOD_MIB" "Prod/BROKEN-MIB=BROKEN_MIB"
+    ROOTS "GOOD-MIB@Prod/GOOD-MIB" "BROKEN-MIB@Prod/BROKEN-MIB"
+    EDIT_FILE "Prod/BROKEN-MIB" EDIT_FROM "    { brokenMIB 1 }" EDIT_TO "    ::= { brokenMIB 1 }"
+    EXPECT "BEFORE-EDIT PROBLEM severity=Warning category=\"Parse error\" module=BROKEN-MIB line=14"
+           "AFTER-EDIT ENVIRONMENT loaded=3 failed=0 errors=0 warnings=0"
+           "PASS: edit: the editor listed the syntax error before the fix"
+           "PASS: edit: editor diagnostics never show the internal staging file name"
+           "PASS: edit: the editor does not keep showing the pre-save verification result"
+           "PASS: edit: saving rebuilt the active profile's environment"
+           "PASS: edit: the object defined by the fixed MIB is now in the Tree"
+           "PASS: edit: the profile records the saved file's new hash"
+           "PASS: edit: the diagnostic log records the save as rebuilding the active profile"
+    REJECT "AFTER-EDIT PROBLEM severity=(Warning|Error)" "AFTER-EDIT PROBLEM severity=Note category=\"Modified\"" "FAIL")
 
 if(failures)
     message(FATAL_ERROR "Tolerance scenarios failed")

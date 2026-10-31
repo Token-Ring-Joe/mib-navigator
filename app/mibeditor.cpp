@@ -403,6 +403,12 @@ void MibEditor::MibFileSave(void)
     SetCurrentFileName(LoadedFile);
     ts.flush();
     file.close();
+    // The verification result on screen describes the text as it was before this save.
+    // Do not leave it standing next to the rebuilt environment; it is re-run on request.
+    diagnostics.clear();
+    diagnosticModel->setDiagnostics(diagnostics);
+    num_error = num_warning = num_info = 0;
+    s->MainUI()->MIBLogL->setText(tr("Saved. Press Verify to check the saved file; the Problems tab shows the result of the rebuild."));
     emit FileSaved(LoadedFile);
 }
 
@@ -471,6 +477,17 @@ void MibEditor::VerifyMIB(void)
         s->MainUI()->MIBFile->toPlainText().toUtf8(),QFileInfo(LoadedFile).absolutePath(),
         MibValidationErrorLevel(level),MibValidationRecursive(level));
     diagnostics=result.diagnostics;
+    // Verification parses a staged copy of the editor text next to the real file. Show the
+    // real file to the user, never the internal staging name.
+    const QString stagingDir=QFileInfo(LoadedFile).absolutePath();
+    const QRegularExpression stagedName(
+        QStringLiteral("(%1/)?mib-navigator-verify-[A-Za-z0-9]+\\.mib")
+            .arg(QRegularExpression::escape(stagingDir)));
+    const QString shownName = LoadedFile.isEmpty() ? tr("(unsaved editor content)") : LoadedFile;
+    for(auto &diagnostic:diagnostics){
+        diagnostic.sourcePath.replace(stagedName,shownName);
+        diagnostic.message.replace(stagedName,shownName);
+        diagnostic.rawText.replace(stagedName,shownName);}
     for(const auto &diagnostic:std::as_const(diagnostics)){
         if(diagnostic.severity<=3)++num_error;else if(diagnostic.severity<=5)++num_warning;else ++num_info;}
     diagnosticModel->setDiagnostics(diagnostics);

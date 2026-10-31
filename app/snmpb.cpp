@@ -187,8 +187,8 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     }
     else
     {
-        if (start_msg != "")
-            QMessageBox::warning(nullptr, tr("MIB Navigator"), start_msg, QMessageBox::Ok);
+        // A trap-port problem is not fatal and must not block startup with a
+        // dialog; it is shown on the Events status label and in the Log instead.
         agent->StartTrapTimer();
     }
 
@@ -1066,7 +1066,7 @@ void Snmpb::BindToGUI(QMainWindow* mw)
         workbenchPages, devicePane, w.NodeInfoLayout, resultsPage, problemsPage,
             diagnosticsPage, rawPage, this);
     startup->advance(startupGeneration, StartupState::ShellReady,
-                     tr("Loading MIB Catalogâ€¦"));
+                     tr("Loading MIB Catalog…"));
     connect(workbench, &WorkbenchShell::mibLibraryModeRequested,
             mibLibrary, &MibLibraryWidget::showWorkspaceMode);
     connect(w.fileNewAction, &QAction::triggered, mw,
@@ -1080,6 +1080,12 @@ void Snmpb::BindToGUI(QMainWindow* mw)
         prefs->GetEnableIPv4() || prefs->GetEnableIPv6()
             ? tr("Events: Capture enabled") : tr("Events: Stopped"), mw->statusBar());
     statusEvents->setObjectName(QStringLiteral("WorkbenchStatusEvents"));
+    if (!start_msg.isEmpty()) {
+        statusEvents->setText(tr("Events: Needs attention (hover for details)"));
+        statusEvents->setToolTip(start_msg);
+        w.LogOutput->append(start_msg.section(QStringLiteral("\n\n"), 0, 1)
+                            .replace(QStringLiteral("\n\n"), QStringLiteral(" ")));
+    }
     mw->statusBar()->addPermanentWidget(statusEnvironment);
     mw->statusBar()->addPermanentWidget(statusEvents);
     connect(modules, &MibModule::profileRuntimeBuildStarted, statusEnvironment,
@@ -1102,11 +1108,11 @@ void Snmpb::BindToGUI(QMainWindow* mw)
         QString text = detail;
         if (text.isEmpty()) {
             if (state == StartupState::ShellReady || state == StartupState::CatalogLoading)
-                text = QObject::tr("Catalog: Loadingâ€¦");
+                text = QObject::tr("Catalog: Loading…");
             else if (state == StartupState::ProfilePreparing)
-                text = QObject::tr("Profile: Preparingâ€¦");
+                text = QObject::tr("Profile: Preparing…");
             else if (state == StartupState::EnvironmentBuilding)
-                text = QObject::tr("Environment: Buildingâ€¦");
+                text = QObject::tr("Environment: Building…");
             else if (state == StartupState::Ready)
                 text = QObject::tr("Environment: Ready");
             else if (state == StartupState::NeedsAttention || state == StartupState::Failed)
@@ -1167,7 +1173,7 @@ void Snmpb::StartDeferredInitialization()
         if (!startupCatalogRequested) {
             startupCatalogRequested = true;
             startup->advance(generation, StartupState::CatalogLoading,
-                             tr("Catalog: Loadingâ€¦"));
+                             tr("Catalog: Loading…"));
             connect(mibLibrary, &MibLibraryWidget::initialRefreshFinished, this,
                 [this, generation](qint64 preparationMs, qint64 publicationMs) {
                 if (!startup || !startup->accepts(generation)) return;
@@ -1181,7 +1187,7 @@ void Snmpb::StartDeferredInitialization()
         return;
     }
     startup->advance(generation, StartupState::CatalogReady,
-                     tr("Catalog ready â€” preparing Profileâ€¦"));
+                     tr("Catalog ready — preparing Profile…"));
 
     const QString settingsFile = QSettings().fileName();
     const QString profilesPath = QDir(MibCollection::legacyManagedRoot())
@@ -1235,7 +1241,7 @@ void Snmpb::StartDeferredInitialization()
                 return;
             }
             context->startup->advance(generation, StartupState::ProfilePreparing,
-                                      QObject::tr("Profile: Preparingâ€¦"));
+                                      QObject::tr("Profile: Preparing…"));
             QThreadPool::globalInstance()->start(
                 [context, generation, profile, dependencySnapshot]() mutable {
                 MibEffectivePlan plan;
@@ -1264,7 +1270,7 @@ void Snmpb::StartDeferredInitialization()
                                                                          : plan.authorityError)
                         .arg(plan.runtimeFiles.size()));
                     context->startup->advance(generation, StartupState::EnvironmentBuilding,
-                                              QObject::tr("Environment: Buildingâ€¦"));
+                                              QObject::tr("Environment: Building…"));
                     context->mibLibrary->publishPreparedProfile(profile.id, plan);
                 }, Qt::QueuedConnection);
             });

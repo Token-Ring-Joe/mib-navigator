@@ -564,7 +564,7 @@ MibLibraryWidget::MibLibraryWidget(const QStringList &paths,
     });
     loadCachedCatalog();
     reloadProfiles();
-    status->setText(tr("Catalog loadingâ€¦"));
+    status->setText(tr("Catalog loading…"));
     setOperationActive(true);
 }
 

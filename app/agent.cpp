@@ -260,12 +260,20 @@ Agent::Agent(Snmpb *snmpb, bool offline_mode)
         } else {
             diagnostics = tr("Native socket error details are not exposed by this SNMP++ operation.");
         }
-        start_err = tr("Could not bind on either IPv4 trap\nport \
-%1 or IPv6 trap port %2.\n\n%3\nTrap reception disabled.")
-            .arg(port4)
-            .arg(port6)
-            .arg(Snmp::error_msg(status));
-        start_err += QStringLiteral("\n\n") + diagnostics;
+        if (status == SNMP_CLASS_TL_ACCESS_DENIED) {
+            start_err = tr("Trap reception is off for this session.\n\n"
+                "Port %1 is a privileged port, and MIB Navigator is not running with "
+                "administrator rights. Everything else works normally.\n\n"
+                "To receive traps without administrator rights, open Preferences > "
+                "Traps Properties > Trap listening ports, choose a port above 1024 "
+                "(for example 1162), restart, and send traps to that port.")
+                .arg(v4 ? port4 : port6);
+        } else {
+            start_err = tr("Trap reception is off for this session.\n\n"
+                "Could not bind IPv4 trap port %1 or IPv6 trap port %2.\n%3\n\n%4")
+                .arg(port4).arg(port6)
+                .arg(QString::fromLocal8Bit(Snmp::error_msg(status)), diagnostics);
+        }
         DiagnosticLogger::log("Traps", QStringLiteral(
             "trap bind failed SNMP++ status=%1 error=%2; %3; trap reception disabled")
             .arg(status).arg(QString::fromLocal8Bit(Snmp::error_msg(status)), diagnostics));
