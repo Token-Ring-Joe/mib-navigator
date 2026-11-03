@@ -23,6 +23,7 @@
 #include <QMessageBox>
 #include <QRegularExpression>
 #include <QComboBox>
+#include <QToolButton>
 #include <QBoxLayout>
 #include <QHeaderView>
 #include <QSortFilterProxyModel>
@@ -37,6 +38,25 @@
 MibEditor::MibEditor(Snmpb *snmpb)
 {
     s = snmpb;
+
+    // Keep file and verification actions visible inside the Editor, sharing the menu actions.
+    auto *tools = new QHBoxLayout;
+    const QList<QPair<QAction *, QString>> actions{
+        {s->MainUI()->fileNewAction, "EditorNewMib"},
+        {s->MainUI()->fileOpenAction, "EditorOpenMib"},
+        {s->MainUI()->fileSaveAction, "EditorSaveMib"},
+        {s->MainUI()->fileSaveAsAction, "EditorSaveMibAs"},
+        {s->MainUI()->actionVerifyMIB, "EditorVerifyMib"}};
+    for (const auto &[action, name] : actions) {
+        auto *button = new QToolButton(s->MainUI()->MIBFileLayout);
+        button->setObjectName(name);
+        button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        button->setDefaultAction(action);
+        tools->addWidget(button);
+    }
+    tools->addStretch();
+    if (auto *layout = qobject_cast<QBoxLayout *>(s->MainUI()->MIBFileLayout->layout()))
+        layout->insertLayout(0, tools);
 
     // Menu items
     connect( s->MainUI()->fileNewAction, SIGNAL( triggered() ),

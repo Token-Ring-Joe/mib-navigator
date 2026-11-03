@@ -1,16 +1,25 @@
 #include "communitycredentialrepository.h"
 #include <QFile>
 #include <QSettings>
+#include <QSaveFile>
+#include <QTemporaryFile>
+#include <QFileInfo>
+#include <QSet>
 
 CommunityCredentialRepository::CommunityCredentialRepository(const QString &name)
     : fileName(name) {}
 
-QList<CommunityCredentialRecord> CommunityCredentialRepository::load() const
+QList<CommunityCredentialRecord> CommunityCredentialRepository::load(QString *error) const
 {
+    if (error) error->clear();
     QList<CommunityCredentialRecord> result;
     if (!QFile::exists(fileName)) return result;
     QSettings settings(fileName, QSettings::IniFormat);
-    if (settings.value("schema/version").toInt() != CurrentVersion) return result;
+    if (settings.status() != QSettings::NoError || settings.value("schema/version").toInt() != CurrentVersion) {
+        if (error) *error = QObject::tr("Saved community credentials could not be read. The file has been left untouched.");
+        return {};
+    }
+    QSet<QString> ids;
     const int size = settings.beginReadArray("credentials");
     for (int i = 0; i < size; ++i)
     {
@@ -19,11 +28,17 @@ QList<CommunityCredentialRecord> CommunityCredentialRepository::load() const
         record.identity = {settings.value("credentialId").toString(),
                            CredentialKind::Community};
         record.displayName = settings.value("displayName").toString();
+        record.protocol = settings.value("protocol", -1).toInt();
         record.readCommunity = CredentialSecret(
             settings.value("readCommunity").toByteArray());
         record.writeCommunity = CredentialSecret(
             settings.value("writeCommunity").toByteArray());
-        if (!record.identity.credentialId.isEmpty()) result.append(record);
+        if (record.identity.credentialId.isEmpty() || ids.contains(record.identity.credentialId) ||
+            record.protocol < -1 || record.protocol > 1) {
+            if (error) *error = QObject::tr("Saved community credentials are invalid. The file has been left untouched.");
+            return {};
+        }
+        ids.insert(record.identity.credentialId); result.append(record);
     }
     settings.endArray();
     return result;
@@ -32,17 +47,29 @@ QList<CommunityCredentialRecord> CommunityCredentialRepository::load() const
 bool CommunityCredentialRepository::save(
     const QList<CommunityCredentialRecord> &records) const
 {
-    QSettings settings(fileName, QSettings::IniFormat);
-    settings.clear(); settings.setValue("schema/version", CurrentVersion);
-    settings.beginWriteArray("credentials");
-    for (int i = 0; i < records.size(); ++i)
+    QTemporaryFile temporary(QFileInfo(fileName).absolutePath() + QStringLiteral("/.credentials-XXXXXX"));
+    if (!temporary.open()) return false;
+    const QString temporaryName = temporary.fileName(); temporary.close();
     {
-        settings.setArrayIndex(i);
-        settings.setValue("credentialId", records[i].identity.credentialId);
-        settings.setValue("displayName", records[i].displayName);
-        settings.setValue("readCommunity", records[i].readCommunity.bytes());
-        settings.setValue("writeCommunity", records[i].writeCommunity.bytes());
+        QSettings settings(temporaryName, QSettings::IniFormat);
+        settings.setValue("schema/version", CurrentVersion);
+        settings.beginWriteArray("credentials");
+        for (int i = 0; i < records.size(); ++i) {
+            settings.setArrayIndex(i);
+            settings.setValue("credentialId", records[i].identity.credentialId);
+            settings.setValue("displayName", records[i].displayName);
+            settings.setValue("protocol", records[i].protocol);
+            settings.setValue("readCommunity", records[i].readCommunity.bytes());
+            settings.setValue("writeCommunity", records[i].writeCommunity.bytes());
+        }
+        settings.endArray(); settings.sync();
+        if (settings.status() != QSettings::NoError) return false;
     }
-    settings.endArray(); settings.sync();
-    return settings.status() == QSettings::NoError;
+    QFile source(temporaryName);
+    if (!source.open(QIODevice::ReadOnly)) return false;
+    const auto bytes = source.readAll();
+    QSaveFile destination(fileName);
+    if (!destination.open(QIODevice::WriteOnly) ||
+        !destination.setPermissions(QFile::ReadOwner | QFile::WriteOwner)) return false;
+    return destination.write(bytes) == bytes.size() && destination.commit();
 }

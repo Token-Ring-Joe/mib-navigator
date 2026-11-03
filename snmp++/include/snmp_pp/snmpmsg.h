@@ -83,10 +83,16 @@ class DLLOPT SnmpMessage
 
   // construct a SnmpMessage object
   SnmpMessage() : bufflen(MAX_SNMP_PACKET), valid_flag(false) {};
+#ifdef _SNMPv3
+  void set_v3mp(v3MP *model) { message_v3mp = model; }
+#endif
 	// load up using a Pdu, community and SNMP version
 	// performs ASN.1 serialization
 	// result status returned
  private:
+#ifdef _SNMPv3
+  v3MP *message_v3mp = 0;
+#endif
 	int load( const Pdu &pdu,                // Pdu to serialize
                   const OctetStr &community,     // community name to use
                   const snmp_version version,    // SNMP version, v1 or v2

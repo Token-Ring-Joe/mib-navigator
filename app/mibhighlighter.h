@@ -26,6 +26,7 @@
 #include <QRegularExpression>
 
 class QTextDocument;
+class QPalette;
 
 class MibHighlighter : public QSyntaxHighlighter
 {
@@ -33,6 +34,7 @@ class MibHighlighter : public QSyntaxHighlighter
 
 public:
     MibHighlighter(QTextDocument *parent = 0);
+    void applyPalette(const QPalette &palette);
 
 protected:
     void highlightBlock(const QString &text);

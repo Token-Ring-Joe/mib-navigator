@@ -65,8 +65,9 @@ WatchService::PollResult pollOnce(ISnmpTransport &transport, const SnmpRequestCo
             .arg(QString::fromLatin1(Snmp::error_msg(answer.snmpErrorStatus)));
         return result;
     default:
-        result.sample.error = QObject::tr("The request could not be sent (%1)")
-            .arg(QString::fromLatin1(Snmp::error_msg(answer.transportStatus)));
+        result.sample.error = answer.transportStatus != 0
+            ? ExplainSnmpTransportFailure(answer.transportStatus, config.securityName)
+            : QObject::tr("The request could not be sent");
         return result;
     }
 

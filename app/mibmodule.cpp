@@ -565,19 +565,7 @@ MibModuleRecord MibModule::ModuleMetadata(const QString &moduleName, const QStri
 
 MibEffectivePlan MibModule::BuildEffectivePlan(const MibProfileRecord &profile) const
 {
-    if (!MibProfileIsManifest(profile)) {
-        MibEffectivePlan plan;
-        plan.profileId = profile.id;
-        plan.profileName = profile.name;
-        plan.authorityError = tr("Profile still uses legacy authority and must be migrated before activation");
-        return plan;
-    }
-    const MibEffectivePlanResolverInput input = MibResolverInputForProfile(profile, dependencyIndex.libraryRoot());
-    MibEffectivePlan plan = MibEffectiveRuntimePlanResolver().resolve(input, dependencyIndex);
-    plan.profileName = profile.name;
-    plan.profileType = profile.type;
-    MibEffectivePlanAddListedNotFound(&plan, profile.unresolvedLegacyModules);
-    return plan;
+    return MibPlanForProfile(profile, dependencyIndex);
 }
 
 QStringList MibModule::LoadEffectivePlan(const MibEffectivePlan &plan,

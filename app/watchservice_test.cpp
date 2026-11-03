@@ -119,6 +119,22 @@ int main(int argc, char **argv)
     ok &= check(service.waitForPolls(5000) && service.row(id)->change.change == "+100",
                 "sysUpTime is optional");
 
+    // ---- a counter cleared on a device that did not restart --------------------------------------------
+    script.push(counterAnswer(1000000, 1000));
+    service.pollNow(id);
+    ok &= check(service.waitForPolls(5000), "baseline before a counter clear");
+    script.push(counterAnswer(500, 1500));          // clear counters: sysUpTime keeps rising
+    service.pollNow(id);
+    ok &= check(service.waitForPolls(5000) && service.row(id)->change.baselineReset &&
+                service.row(id)->change.rate.isEmpty() && service.row(id)->change.change == "-" &&
+                service.row(id)->change.note.contains("Counter reset"),
+                "the row after a counter clear has no rate and resets the baseline");
+    script.push(counterAnswer(1500, 2000));
+    service.pollNow(id);
+    ok &= check(service.waitForPolls(5000) && service.row(id)->change.change == "+1000" &&
+                service.row(id)->change.rate == "200 /s" && service.row(id)->change.note.isEmpty(),
+                "the poll after a counter clear has a normal change and rate again");
+
     // ---- the credential disappears -------------------------------------------------------------------
     credentialExists = false;
     service.pollNow(id);
@@ -134,6 +150,23 @@ int main(int argc, char **argv)
     service.pollNow(id);
     ok &= check(service.waitForPolls(5000) && service.row(id)->status.contains("rejected the authentication"),
                 "a refused SNMPv3 request is explained");
+
+    // ---- SNMPv3 failures on this side of the wire --------------------------------------------------------
+    struct LocalFailure { int code; const char *cause; };
+    const LocalFailure localFailures[] = {
+        {SNMPv3_USM_DECRYPTION_ERROR, "privacy"},
+        {SNMPv3_USM_UNKNOWN_SECURITY_NAME, "credentials"},
+        {SNMPv3_USM_AUTHENTICATION_FAILURE, "authentication"},
+    };
+    for (const LocalFailure &f : localFailures) {
+        SnmpTransportResult local = failure(SnmpOperationStatus::TransportFailure);
+        local.transportStatus = f.code;
+        script.push(local);
+        service.pollNow(id);
+        ok &= check(service.waitForPolls(5000) && service.row(id)->status.contains(f.cause) &&
+                    !service.row(id)->status.contains("error 0"),
+                    "a local SNMPv3 failure names its cause in the Watch status");
+    }
 
     // ---- pause, resume ---------------------------------------------------------------------------------------
     service.setPaused(id, true);

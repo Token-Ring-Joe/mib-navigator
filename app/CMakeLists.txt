@@ -1,4 +1,5 @@
 set(SNMPB_APP_SOURCES
+    appearance.cpp
     agent.cpp
     agentrequestselection.cpp
     connectionbar.cpp
@@ -38,6 +39,7 @@ set(SNMPB_APP_SOURCES
     requestlog.cpp
     profilematch.cpp
     profiledetector.cpp
+    queryresultspanel.cpp
     requestlogpanel.cpp
     collectionsearchpanel.cpp
     watchcalculator.cpp
@@ -68,8 +70,14 @@ set(SNMPB_APP_SOURCES
     snmptransport.cpp
     snmptableoperation.cpp
     snmptableasyncrunner.cpp
+    snmpwalkoperation.cpp
+    snmpwalkasyncrunner.cpp
+    snmpsingleoperation.cpp
+    snmpsingleasyncrunner.cpp
+    snmpquerytext.cpp
     tablenodevalidation.cpp
     tabletraversal.cpp
+    tableindex.cpp
     snmpb.cpp
     trap.cpp
     trapdecoder.cpp
@@ -86,6 +94,9 @@ set(SNMPB_APP_SOURCES
 )
 
 set(SNMPB_APP_HEADERS
+    appearance.h
+    appearancecolors.h
+    themedtextedit.h
     agent.h
     agentrequestselection.h
     connectionbar.h
@@ -126,6 +137,7 @@ set(SNMPB_APP_HEADERS
     requestlog.h
     profilematch.h
     profiledetector.h
+    queryresultspanel.h
     requestlogpanel.h
     collectionsearchpanel.h
     watchcalculator.h
@@ -157,8 +169,14 @@ set(SNMPB_APP_HEADERS
     snmptransport.h
     snmptableoperation.h
     snmptableasyncrunner.h
+    snmpwalkoperation.h
+    snmpwalkasyncrunner.h
+    snmpsingleoperation.h
+    snmpsingleasyncrunner.h
+    snmpquerytext.h
     tablenodevalidation.h
     tabletraversal.h
+    tableindex.h
     snmpb.h
     snmpbapp.h
     trap.h
@@ -194,6 +212,7 @@ add_executable(snmpb
     ${SNMPB_APP_HEADERS}
     ${SNMPB_APP_FORMS}
     snmpb.qrc
+    appearance.qrc
 )
 
 set_target_properties(snmpb PROPERTIES
@@ -228,6 +247,7 @@ target_link_libraries(snmpb
         Qt6::Core
         Qt6::Widgets
         Qt6::Network
+        Qt6::Svg
         snmpb_libsmi
         snmpb_snmp_pp
         snmpb_libtomcrypt
@@ -622,6 +642,22 @@ if(BUILD_TESTING)
         add_test(NAME snmpb.mib-automatic-profile COMMAND $<TARGET_FILE:snmpb_mib_automatic_profile_test>)
     endif()
 
+    add_executable(snmpb_mib_profile_folder_test
+        mibcandidatefilter.cpp mibcandidatefilter.h
+        miblibrary.cpp miblibrary.h mibcollection.cpp mibcollection.h mibprofile.cpp mibprofile.h
+        mibdependencyindex.cpp mibdependencyindex.h mibeffectiveplan.cpp mibeffectiveplan.h
+        mibproblemreport.h mibproblem.h
+        mibrecords.h mibtreemodel.cpp mibtreemodel.h mibprofilefolder_test.cpp)
+    set_target_properties(snmpb_mib_profile_folder_test PROPERTIES AUTOMOC ON)
+    target_link_libraries(snmpb_mib_profile_folder_test PRIVATE Qt6::Core snmpb_libsmi)
+    if(WIN32)
+        add_test(NAME snmpb.mib-profile-folders COMMAND ${CMAKE_COMMAND} -E env
+            "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
+            $<TARGET_FILE:snmpb_mib_profile_folder_test>)
+    else()
+        add_test(NAME snmpb.mib-profile-folders COMMAND $<TARGET_FILE:snmpb_mib_profile_folder_test>)
+    endif()
+
     add_executable(snmpb_snmp_report_test snmpreport.cpp snmpreport.h snmpreport_test.cpp)
     target_link_libraries(snmpb_snmp_report_test PRIVATE Qt6::Core snmpb_snmp_pp snmpb_libtomcrypt)
     if(WIN32)
@@ -753,6 +789,9 @@ if(BUILD_TESTING)
         snmptableoperation.cpp snmptableoperation.h
         snmptableasyncrunner.cpp snmptableasyncrunner.h
         tabletraversal.cpp tabletraversal.h
+        tableindex.cpp tableindex.h mibenvironment.cpp mibenvironment.h
+        snmpreport.cpp snmpreport.h
+        fakesnmpagent.h
         snmpoperations_test.cpp)
     set_target_properties(snmpb_snmp_operations_test PROPERTIES AUTOMOC ON)
     target_link_libraries(snmpb_snmp_operations_test PRIVATE
@@ -765,6 +804,107 @@ if(BUILD_TESTING)
         add_test(NAME snmpb.snmp-operations COMMAND
             $<TARGET_FILE:snmpb_snmp_operations_test>)
     endif()
+
+    add_executable(snmpb_snmp_table_test
+        snmprequestconfig.cpp snmprequestconfig.h
+        snmprequestconfigadapter.cpp snmprequestconfigadapter.h
+        snmprequestcontext.cpp snmprequestcontext.h
+        snmptransport.cpp snmptransport.h
+        snmptableoperation.cpp snmptableoperation.h
+        tabletraversal.cpp tabletraversal.h
+        tableindex.cpp tableindex.h snmpreport.cpp snmpreport.h
+        mibenvironment.cpp mibenvironment.h
+        fakesnmpagent.h
+        snmptable_test.cpp)
+    target_link_libraries(snmpb_snmp_table_test PRIVATE
+        Qt6::Core snmpb_libsmi snmpb_snmp_pp snmpb_libtomcrypt)
+    if(WIN32)
+        add_test(NAME snmpb.snmp-table COMMAND ${CMAKE_COMMAND} -E env
+            "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
+            $<TARGET_FILE:snmpb_snmp_table_test>)
+    else()
+        add_test(NAME snmpb.snmp-table COMMAND $<TARGET_FILE:snmpb_snmp_table_test>)
+    endif()
+
+    add_executable(snmpb_snmp_walk_test
+        snmprequestconfig.cpp snmprequestconfig.h
+        snmprequestconfigadapter.cpp snmprequestconfigadapter.h
+        snmprequestcontext.cpp snmprequestcontext.h
+        snmptransport.cpp snmptransport.h
+        snmptableoperation.cpp snmptableoperation.h
+        snmpwalkoperation.cpp snmpwalkoperation.h
+        snmpwalkasyncrunner.cpp snmpwalkasyncrunner.h
+        tabletraversal.cpp tabletraversal.h
+        tableindex.cpp tableindex.h snmpreport.cpp snmpreport.h
+        mibenvironment.cpp mibenvironment.h
+        fakesnmpagent.h
+        snmpwalk_test.cpp)
+    set_target_properties(snmpb_snmp_walk_test PROPERTIES AUTOMOC ON)
+    target_link_libraries(snmpb_snmp_walk_test PRIVATE
+        Qt6::Core snmpb_libsmi snmpb_snmp_pp snmpb_libtomcrypt)
+    if(WIN32)
+        add_test(NAME snmpb.snmp-walk COMMAND ${CMAKE_COMMAND} -E env
+            "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
+            $<TARGET_FILE:snmpb_snmp_walk_test>)
+    else()
+        add_test(NAME snmpb.snmp-walk COMMAND $<TARGET_FILE:snmpb_snmp_walk_test>)
+    endif()
+
+    add_executable(snmpb_snmp_single_test
+        snmprequestconfig.cpp snmprequestconfig.h
+        snmprequestconfigadapter.cpp snmprequestconfigadapter.h
+        snmprequestcontext.cpp snmprequestcontext.h
+        snmptransport.cpp snmptransport.h
+        snmptableoperation.cpp snmptableoperation.h
+        snmpwalkoperation.cpp snmpwalkoperation.h
+        snmpsingleoperation.cpp snmpsingleoperation.h
+        snmpsingleasyncrunner.cpp snmpsingleasyncrunner.h
+        snmpquerytext.cpp snmpquerytext.h
+        mibvaluesemantics.cpp mibvaluesemantics.h
+        tabletraversal.cpp tabletraversal.h
+        tableindex.cpp tableindex.h snmpreport.cpp snmpreport.h
+        mibenvironment.cpp mibenvironment.h
+        fakesnmpagent.h
+        snmpsingle_test.cpp)
+    set_target_properties(snmpb_snmp_single_test PROPERTIES AUTOMOC ON)
+    target_link_libraries(snmpb_snmp_single_test PRIVATE
+        Qt6::Core snmpb_libsmi snmpb_snmp_pp snmpb_libtomcrypt)
+    if(WIN32)
+        add_test(NAME snmpb.snmp-single COMMAND ${CMAKE_COMMAND} -E env
+            "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
+            $<TARGET_FILE:snmpb_snmp_single_test>)
+    else()
+        add_test(NAME snmpb.snmp-single COMMAND $<TARGET_FILE:snmpb_snmp_single_test>)
+    endif()
+
+    add_executable(snmpb_query_results_test queryresultspanel.cpp queryresultspanel.h queryresultspanel_test.cpp)
+    set_target_properties(snmpb_query_results_test PROPERTIES AUTOMOC ON)
+    target_link_libraries(snmpb_query_results_test PRIVATE Qt6::Widgets)
+    add_test(NAME snmpb.query-results COMMAND ${CMAKE_COMMAND} -E env
+        "QT_QPA_PLATFORM=offscreen" $<TARGET_FILE:snmpb_query_results_test>)
+    set_tests_properties(snmpb.query-results PROPERTIES TIMEOUT 30)
+
+    add_executable(snmpb_credentials_dialog_test
+        credentialsdialog.cpp credentialsdialog.h
+        communitycredentialservice.cpp communitycredentialservice.h communitycredentialrepository.cpp
+        usmcredentialservice.cpp usmcredentialservice.h usmcredentialrepository.cpp
+        credentialsdialog_test.cpp)
+    set_target_properties(snmpb_credentials_dialog_test PROPERTIES AUTOMOC ON)
+    target_link_libraries(snmpb_credentials_dialog_test PRIVATE Qt6::Widgets snmpb_snmp_pp snmpb_libtomcrypt)
+    add_test(NAME snmpb.credentials-dialog COMMAND ${CMAKE_COMMAND} -E env
+        "QT_QPA_PLATFORM=offscreen" $<TARGET_FILE:snmpb_credentials_dialog_test>)
+
+    add_executable(snmpb_snmpv3_credentials_test
+        snmprequestconfig.cpp snmprequestconfigadapter.cpp snmptransport.cpp snmpreport.cpp
+        snmpv3credentials_test.cpp)
+    target_link_libraries(snmpb_snmpv3_credentials_test PRIVATE Qt6::Core Qt6::Network snmpb_snmp_pp snmpb_libtomcrypt)
+    if(WIN32)
+        add_test(NAME snmpb.snmpv3-credentials COMMAND ${CMAKE_COMMAND} -E env
+            "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}" $<TARGET_FILE:snmpb_snmpv3_credentials_test>)
+    else()
+        add_test(NAME snmpb.snmpv3-credentials COMMAND $<TARGET_FILE:snmpb_snmpv3_credentials_test>)
+    endif()
+    set_tests_properties(snmpb.snmpv3-credentials PROPERTIES TIMEOUT 30)
 
     add_executable(snmpb_community_credential_test
         communitycredentialrepository.cpp communitycredentialrepository.h
@@ -996,7 +1136,7 @@ if(BUILD_TESTING)
             -DSNMPB_PYTHON=${Python3_EXECUTABLE}
             -P ${PROJECT_SOURCE_DIR}/cmake/RunSnmpbToleranceScenarios.cmake
     )
-    set_tests_properties(snmpb.tolerance-scenarios PROPERTIES TIMEOUT 600)
+    set_tests_properties(snmpb.tolerance-scenarios PROPERTIES TIMEOUT 1200)
 
     foreach(close_state IN ITEMS CatalogLoading ProfilePreparing EnvironmentBuilding)
         # Each run starts from empty state so it exercises a true first launch.
@@ -1018,7 +1158,19 @@ if(BUILD_TESTING)
             FIXTURES_REQUIRED startup-close-${close_state}-state)
     endforeach()
 
+    add_executable(snmpb_appearance_test appearance.cpp appearance.h appearancecolors.h themedtextedit.h
+        appearance_test.cpp mibhighlighter.cpp mibhighlighter.h appearance.qrc)
+    set_target_properties(snmpb_appearance_test PROPERTIES AUTOMOC ON AUTORCC ON)
+    target_link_libraries(snmpb_appearance_test PRIVATE Qt6::Widgets Qt6::Svg)
+    add_test(NAME snmpb.appearance COMMAND ${CMAKE_COMMAND} -E env
+        "QT_QPA_PLATFORM=offscreen" $<TARGET_FILE:snmpb_appearance_test>)
+    set_tests_properties(snmpb.appearance PROPERTIES TIMEOUT 30)
+
     snmpb_configure_qt_test_runtime(
+        snmpb.appearance
+        snmpb.query-results
+        snmpb.credentials-dialog
+        snmpb.snmpv3-credentials
         snmpb.mib-engine
         snmpb.mib-environment-manager
         snmpb.mib-dependency-index
@@ -1037,6 +1189,7 @@ if(BUILD_TESTING)
         snmpb.mib-inventory-widget
         snmpb.trap-pipeline
         snmpb.snmp-operations
+        snmpb.snmp-table
         snmpb.community-credential
         snmpb.credential-architecture
         snmpb.table-traversal

@@ -32,7 +32,9 @@ signals:
     void GetFromOidSelectInstance(const QString &oid, int operation);
     void SetFromOid(const QString &oid);
     void Stop();
+    void WatchFromOid(const QString &oid, bool column);
     void TableViewFromOid(const QString &oid);
+    void TableRowSelectFromOid(const QString &oid);
     void GetTableInstancesFromOid(const QString &oid);
     void VarbindsFromOid(const QString &oid);
     void QueryTableAvailabilityChanged(bool available);

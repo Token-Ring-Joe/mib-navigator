@@ -53,6 +53,9 @@ public:
         std::function<MibEffectivePlan(const MibProfileRecord &)> effectivePlan;
         // The Automatic profiles derived from the Library's Vendor/Product folders right now.
         std::function<QList<MibProfileRecord>()> automaticProfiles;
+        // Every file the Library index knows (the same list profiles are planned from), for the
+        // Profiles page's folder tree and its followed-folder contents.
+        std::function<QList<MibDependencyFileRecord>()> libraryFiles;
     };
     explicit MibLibraryWidget(const QStringList &bundledPaths,
                               QWidget *parent = nullptr,
@@ -70,8 +73,10 @@ public:
     void publishPreparedProfile(const QString &id, const MibEffectivePlan &plan);
     void beginInitialRefresh(quint64 generation);
     bool initialRefreshReady() const { return initialReady; }
-    void showWorkspaceMode(int mode);
+    void showWorkspaceMode(int mode);   // 0 Library, 1 Profiles, 2 Editor
+    void setEditorPage(QWidget *page);
 signals:
+    void workspaceModeChanged(int mode);
     void openModuleRequested(const QString &path);
     void profilesChanged();
     void profileSelectionChanged(const QString &id, const MibEffectivePlan &plan);
@@ -91,8 +96,6 @@ private slots:
     void renameProfile();
     void deleteProfile();
     void addProfileMembers();
-    void addProfileFiles();
-    void addProfileFolder();
     void removeProfileMembers();
     void browseLibraryRoot();
     void openLibraryRoot();
@@ -109,6 +112,12 @@ private:
     QString originText(const MibLibraryRecord &record) const;
     void refreshProfiles(const QString &selectId = {});
     void refreshProfileLists(const MibEffectivePlan *providedPlan = nullptr);
+    QList<MibDependencyFileRecord> libraryFileRecords() const;
+    QString profileSummaryText(const MibProfileRecord &profile) const;
+    QString profileGuidanceText(const MibProfileRecord &profile) const;
+    void fillAvailableTree(const MibProfileRecord &profile, const QList<MibDependencyFileRecord> &files);
+    void fillMemberTree(const MibProfileRecord &profile, const QList<MibDependencyFileRecord> &files,
+                        const MibEffectivePlan &effective);
     void refreshImpl(bool prepareProfile);
     void publishInitialChunk(quint64 generation);
     void publishRecord(int row, const MibLibraryRecord &record,
@@ -146,8 +155,10 @@ private:
     QComboBox *profileCombo;
     QLineEdit *availableSearch;
     QLineEdit *memberSearch;
-    QListWidget *availableList;
-    QListWidget *memberList;
+    // Profiles page: the Library's folders and MIB files on the left, the profile's followed
+    // folders (with their files, included or excluded) and single files on the right.
+    QTreeWidget *availableTree;
+    QTreeWidget *memberTree;
     QListWidget *requiredList;
     QCheckBox *includeStandards;
     QPushButton *renameProfileButton;

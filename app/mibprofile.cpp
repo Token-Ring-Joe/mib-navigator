@@ -184,7 +184,73 @@ bool MibProfileIsManifest(const MibProfileRecord &profile)
 QStringList MibProfileScopePaths(const MibProfileRecord &profile)
 {
     QStringList result;
-    for (const auto &scope : profile.orderedScopes) result.append(scope.canonicalPath);
+    for (const MibProfileFolder &folder : profile.folders)
+        if (!result.contains(folder.canonicalPath)) result.append(folder.canonicalPath);
+    for (const auto &scope : profile.orderedScopes)
+        if (!result.contains(scope.canonicalPath)) result.append(scope.canonicalPath);
+    return result;
+}
+
+bool MibPathIsInsideFolder(const QString &path, const QString &folder)
+{
+    if (path.isEmpty() || folder.isEmpty()) return false;
+    const QString cleanPath = QDir::cleanPath(QDir::fromNativeSeparators(path));
+    QString prefix = QDir::cleanPath(QDir::fromNativeSeparators(folder));
+#ifdef Q_OS_WIN
+    const Qt::CaseSensitivity sensitivity = Qt::CaseInsensitive;
+#else
+    const Qt::CaseSensitivity sensitivity = Qt::CaseSensitive;
+#endif
+    if (cleanPath.compare(prefix, sensitivity) == 0) return true;
+    if (!prefix.endsWith(QLatin1Char('/'))) prefix += QLatin1Char('/');
+    return cleanPath.startsWith(prefix, sensitivity);
+}
+
+QList<MibProfileMember> MibProfileFolderMembers(const MibProfileFolder &folder,
+                                                const QList<MibDependencyFileRecord> &files,
+                                                bool includeExcluded)
+{
+    QList<MibProfileMember> result;
+    for (const MibDependencyFileRecord &file : files) {
+        if (file.sha256.isEmpty() || file.importsByModule.isEmpty()) continue;   // unreadable or no module
+        if (!MibPathIsInsideFolder(file.canonicalPath, folder.canonicalPath)) continue;
+        const bool excluded = std::any_of(folder.excludedFiles.cbegin(), folder.excludedFiles.cend(),
+            [&file](const QString &path) { return MibPathIsInsideFolder(file.canonicalPath, path); });
+        if (excluded && !includeExcluded) continue;
+        MibProfileMember member;
+        member.canonicalPath = file.canonicalPath;
+        member.sha256 = file.sha256;
+        member.identities = file.importsByModule.keys();
+        member.identities.sort();
+        member.reason = MibProfileMemberReason::Added;
+        result.append(member);
+    }
+    std::sort(result.begin(), result.end(), [](const MibProfileMember &a, const MibProfileMember &b) {
+        return a.canonicalPath < b.canonicalPath;
+    });
+    return result;
+}
+
+MibProfileRecord MibProfileWithFolderFiles(const MibProfileRecord &profile,
+                                           const QList<MibDependencyFileRecord> &files,
+                                           QStringList *missingFolders)
+{
+    MibProfileRecord result = profile;
+    for (const MibProfileFolder &folder : profile.folders) {
+        if (!QFileInfo(folder.canonicalPath).isDir()) {
+            if (missingFolders) missingFolders->append(folder.canonicalPath);
+            continue;
+        }
+        for (const MibProfileMember &member : MibProfileFolderMembers(folder, files)) {
+            // A file that is also an exact root keeps the root (and its recorded hash).
+            const bool known = std::any_of(result.roots.cbegin(), result.roots.cend(),
+                [&member](const MibProfileMember &root) {
+                    return MibPathIsInsideFolder(root.canonicalPath, member.canonicalPath);
+                });
+            if (!known) result.roots.append(member);
+        }
+    }
+    result.explicitModules = MibProfileMemberIdentities(result.roots);
     return result;
 }
 
@@ -217,6 +283,11 @@ QString MibProfileDefinitions::validCurrentId(const QString &savedId,
 }
 
 MibProfileRepository::MibProfileRepository(QString path) : filePath(std::move(path)) {}
+
+QString MibProfileRepository::foldersPath() const
+{
+    return QFileInfo(filePath).dir().filePath(QStringLiteral("profile-folders-v1.json"));
+}
 
 QList<MibProfileRecord> MibProfileRepository::load(QString *error) const
 {
@@ -261,11 +332,75 @@ QList<MibProfileRecord> MibProfileRepository::load(QString *error) const
                                                    profile.unresolvedLegacyModules);
         if (!profile.id.isEmpty() && !profile.name.isEmpty()) result.append(profile);
     }
+    // Followed folders, from the companion file. An unreadable or unknown companion file leaves
+    // the profiles as they are (and is reported); entries for profiles that no longer exist are
+    // ignored.
+    QFile foldersFile(foldersPath());
+    if (foldersFile.exists()) {
+        QJsonParseError foldersError;
+        const QJsonDocument folders = foldersFile.open(QIODevice::ReadOnly)
+            ? QJsonDocument::fromJson(foldersFile.readAll(), &foldersError) : QJsonDocument();
+        if (folders.isObject() && folders.object().value(QStringLiteral("schemaVersion")).toInt() == 1) {
+            const QJsonObject byId = folders.object().value(QStringLiteral("profiles")).toObject();
+            for (MibProfileRecord &profile : result) {
+                for (const QJsonValue &value : byId.value(profile.id).toObject()
+                                                   .value(QStringLiteral("folders")).toArray()) {
+                    const QJsonObject object = value.toObject();
+                    MibProfileFolder folder;
+                    folder.canonicalPath = object.value(QStringLiteral("path")).toString();
+                    folder.excludedFiles = stringsFromJson(object.value(QStringLiteral("excluded")).toArray());
+                    if (!folder.canonicalPath.isEmpty()) profile.folders.append(folder);
+                }
+            }
+        } else if (error) {
+            *error = QObject::tr("The followed-folder file %1 could not be read; profiles are shown "
+                                 "without their followed folders").arg(QDir::toNativeSeparators(foldersPath()));
+        }
+    }
     return result;
 }
 
 bool MibProfileRepository::save(const QList<MibProfileRecord> &profiles, QString *error) const
 {
+    // The companion file first: if the profile file then cannot be written, the companion file is
+    // put back as it was, so the two never disagree.
+    QJsonObject foldersById;
+    for (const MibProfileRecord &profile : profiles) {
+        if (profile.type != MibProfileType::Custom || profile.folders.isEmpty()) continue;
+        QJsonArray folders;
+        for (const MibProfileFolder &folder : profile.folders)
+            folders.append(QJsonObject{{QStringLiteral("path"), folder.canonicalPath},
+                                       {QStringLiteral("excluded"), stringsToJson(folder.excludedFiles)}});
+        foldersById.insert(profile.id, QJsonObject{{QStringLiteral("folders"), folders}});
+    }
+    QByteArray previousFolders;
+    QFile previousFoldersFile(foldersPath());
+    const bool hadFolders = previousFoldersFile.exists();
+    if (hadFolders && previousFoldersFile.open(QIODevice::ReadOnly)) previousFolders = previousFoldersFile.readAll();
+    previousFoldersFile.close();
+    const bool writeFolders = hadFolders || !foldersById.isEmpty();
+    const auto writeFoldersFile = [this](const QByteArray &bytes, QString *failure) {
+        QDir().mkpath(QFileInfo(foldersPath()).absolutePath());
+        QSaveFile file(foldersPath());
+        if (!file.open(QIODevice::WriteOnly) || file.write(bytes) < 0 || !file.commit()) {
+            if (failure) *failure = file.errorString();
+            return false;
+        }
+        return true;
+    };
+    if (writeFolders) {
+        QJsonObject foldersRoot;
+        foldersRoot.insert(QStringLiteral("schemaVersion"), 1);
+        foldersRoot.insert(QStringLiteral("profiles"), foldersById);
+        const QByteArray bytes = QJsonDocument(foldersRoot).toJson(QJsonDocument::Indented);
+        if (bytes != previousFolders && !writeFoldersFile(bytes, error)) return false;
+    }
+    const auto restoreFolders = [&]() {
+        if (!writeFolders) return;
+        if (hadFolders) writeFoldersFile(previousFolders, nullptr);
+        else QFile::remove(foldersPath());
+    };
+
     QJsonArray items;
     for (const MibProfileRecord &profile : profiles) {
         if (profile.type != MibProfileType::Custom && profile.type != MibProfileType::Folder) continue;
@@ -306,6 +441,7 @@ bool MibProfileRepository::save(const QList<MibProfileRecord> &profiles, QString
     if (!file.open(QIODevice::WriteOnly) ||
         file.write(QJsonDocument(root).toJson(QJsonDocument::Indented)) < 0 || !file.commit()) {
         if (error) *error = file.errorString();
+        restoreFolders();
         return false;
     }
     return true;
@@ -795,6 +931,69 @@ bool MibProfileService::addFolder(const QString &id, const QString &folder, QStr
         if (MibCandidateFilter::accepts(QFileInfo(path).fileName())) files.append(path);
     }
     return addFiles(id, files, MibProfileMemberReason::Added, error);
+}
+
+bool MibProfileService::followFolders(const QString &id, const QStringList &folders, QString *error)
+{
+    const MibProfileRecord *current = find(id);
+    if (!current || current->type != MibProfileType::Custom || isBuiltIn(id)) return false;
+    MibProfileRecord changed = *current;
+    for (const QString &folder : folders) {
+        const QString path = canonicalFilePath(folder);
+        if (path.isEmpty() || !QFileInfo(path).isDir()) {
+            if (error) *error = QObject::tr("%1 is not a folder").arg(QDir::toNativeSeparators(folder));
+            return false;
+        }
+        const bool known = std::any_of(changed.folders.cbegin(), changed.folders.cend(),
+            [&path](const MibProfileFolder &existing) {
+                return MibPathIsInsideFolder(path, existing.canonicalPath) &&
+                       MibPathIsInsideFolder(existing.canonicalPath, path);
+            });
+        if (!known) changed.folders.append({path, {}});
+    }
+    if (changed.folders == current->folders) return true;
+    return update(changed, error);
+}
+
+bool MibProfileService::unfollowFolders(const QString &id, const QStringList &folders, QString *error)
+{
+    const MibProfileRecord *current = find(id);
+    if (!current || current->type != MibProfileType::Custom || isBuiltIn(id)) return false;
+    MibProfileRecord changed = *current;
+    changed.folders.erase(std::remove_if(changed.folders.begin(), changed.folders.end(),
+        [&folders](const MibProfileFolder &folder) {
+            return std::any_of(folders.cbegin(), folders.cend(), [&folder](const QString &path) {
+                return MibPathIsInsideFolder(path, folder.canonicalPath) &&
+                       MibPathIsInsideFolder(folder.canonicalPath, path);
+            });
+        }), changed.folders.end());
+    if (changed.folders == current->folders) return true;
+    return update(changed, error);
+}
+
+bool MibProfileService::setFilesExcluded(const QString &id, const QStringList &files, bool excluded,
+                                         QString *error)
+{
+    const MibProfileRecord *current = find(id);
+    if (!current || current->type != MibProfileType::Custom || isBuiltIn(id)) return false;
+    MibProfileRecord changed = *current;
+    for (const QString &file : files) {
+        for (MibProfileFolder &folder : changed.folders) {
+            if (!MibPathIsInsideFolder(file, folder.canonicalPath)) continue;
+            const auto same = [&file](const QString &path) {
+                return MibPathIsInsideFolder(file, path) && MibPathIsInsideFolder(path, file);
+            };
+            const bool listed = std::any_of(folder.excludedFiles.cbegin(), folder.excludedFiles.cend(), same);
+            if (excluded && !listed) folder.excludedFiles.append(file);
+            if (!excluded && listed)
+                folder.excludedFiles.erase(std::remove_if(folder.excludedFiles.begin(),
+                                                          folder.excludedFiles.end(), same),
+                                           folder.excludedFiles.end());
+            folder.excludedFiles.sort();
+        }
+    }
+    if (changed.folders == current->folders) return true;
+    return update(changed, error);
 }
 
 MibProfileModuleAdditionResult MibAddModulesToEditableProfile(

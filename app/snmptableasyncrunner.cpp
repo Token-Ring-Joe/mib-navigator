@@ -44,7 +44,7 @@ bool SnmpTableAsyncRunner::start(const SnmpRequestContext &context,
                                  const SnmpTablePlan &plan,
                                  std::unique_ptr<ISnmpTransport> transport)
 {
-    if (isRunning() || !transport)
+    if (thread || !transport)
         return false;
     cancellation = std::make_shared<SnmpCancellationToken>();
     thread = new QThread;

@@ -3,6 +3,7 @@
 #include "mibcandidatefilter.h"
 #include "miblibrary.h"
 
+#include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QDirIterator>
@@ -87,6 +88,13 @@ QString MibDependencyIndex::pathForLibraryRoot(const QString &libraryRoot)
 #endif
     const QString key = QString::fromLatin1(
         QCryptographicHash::hash(identity, QCryptographicHash::Sha256).toHex());
+    // An isolated run (the automated launch tests) keeps its indexes with the rest of its state,
+    // never in the user's data folder.
+    if (QCoreApplication::instance()) {
+        const QString isolated = QCoreApplication::instance()->property("snmpb.isolatedStateRoot").toString();
+        if (!isolated.isEmpty())
+            return QDir(isolated).filePath(QStringLiteral("mibs/indexes/%1/dependency-index-v1.json").arg(key));
+    }
     return QDir(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation))
         .filePath(QStringLiteral("SnmpB/mibs/indexes/%1/dependency-index-v1.json").arg(key));
 }

@@ -3,11 +3,13 @@
 
 #include <QList>
 #include <QString>
+#include "credentialrecords.h"
 
 struct UsmCredentialIdentityRecord
 {
     QString credentialId;
     QString securityName;
+    QString displayName;
 };
 
 class UsmCredentialRepository
@@ -18,6 +20,10 @@ public:
 
     QList<UsmCredentialIdentityRecord> load() const;
     bool save(const QList<UsmCredentialIdentityRecord> &records) const;
+    QList<UsmCredentialRecord> loadRecords(QString *error) const;
+    bool saveRecords(const QList<UsmCredentialRecord> &records) const;
+    bool hasRecordStore() const;
+    QString recordPath() const { return fileName + QStringLiteral(".v2.json"); }
     QString path() const { return fileName; }
 
 private:

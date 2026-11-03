@@ -1,412 +1,432 @@
 #include "workbenchshell.h"
 
+#include <QAbstractItemView>
 #include <QAction>
-#include <QActionGroup>
+#include <QBoxLayout>
 #include <QDockWidget>
-#include <QFrame>
 #include <QGridLayout>
-#include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMainWindow>
-#include <QPushButton>
+#include <QMenu>
+#include <QMenuBar>
 #include <QSettings>
-#include <QShortcut>
+#include <QSignalBlocker>
 #include <QSplitter>
-#include <QStackedWidget>
 #include <QStyle>
 #include <QTabBar>
 #include <QTabWidget>
+#include <QToolBar>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <functional>
 
 namespace {
-constexpr auto activityKey = "workbench/activity";
-constexpr auto inspectorVisibleKey = "workbench/inspector-visible";
-constexpr auto bottomVisibleKey = "workbench/bottom-visible";
-// Older builds stored a tab *index* under "workbench/bottom-tab" when Results was the first
-// tab. Tabs are stored by name now so a changed tab set can never select the wrong one.
-constexpr auto bottomTabKey = "workbench/bottom-tab-name";
-constexpr auto contentSplitterKey = "workbench/content-splitter";
-
-QWidget *sidebarPage(const QString &title, const QString &description, QWidget *parent)
-{
-    auto *page = new QWidget(parent);
-    auto *layout = new QVBoxLayout(page);
-    layout->setContentsMargins(8, 8, 8, 8);
-    layout->setSpacing(4);
-    auto *heading = new QLabel(title, page);
-    heading->setObjectName(QStringLiteral("WorkbenchSidebarHeading"));
-    QFont font = heading->font(); font.setBold(true); heading->setFont(font);
-    layout->addWidget(heading);
-    if (!description.isEmpty()) {
-        auto *detail = new QLabel(description, page);
-        detail->setWordWrap(true);
-        detail->setObjectName(QStringLiteral("WorkbenchSidebarDescription"));
-        layout->addWidget(detail);
-    }
-    return page;
+constexpr auto inspectorKey = "workbench/inspector-shown";
+constexpr auto splitterKey = "workbench/tree-splitter";
+// New keys leave the previous always-visible panel's saved state untouched. First use of
+// this layout is collapsed; an old Watch/Traps selection cannot select another page by index.
+constexpr auto panelVisibleKey = "workbench/panel-visible";
+constexpr auto panelTabKey = "workbench/panel-tab";
+constexpr auto panelHeightKey = "workbench/panel-height";
+constexpr auto mibPanelTabKey = "workbench/mib-panel-tab";
 }
 
-QPushButton *sidebarButton(QWidget *page, const QString &text, const QString &name)
+WorkbenchShell::WorkbenchShell(QMainWindow *window, QWidget *,
+    QGridLayout *centralLayout, QWidget *header, QWidget *treePane, QTabWidget *workspaces,
+    const Documents &pages, QWidget *inspector, const BottomPages &bottom, QObject *parent,
+    QBoxLayout *connectionRow)
+    : QObject(parent), mainWindow(window), workspaceTabs(workspaces), workbenchPages(pages)
 {
-    auto *button = new QPushButton(text, page);
-    button->setObjectName(name);
-    button->setFlat(true);
-    button->setCheckable(true);
-    button->setAutoExclusive(true);
-    button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    if (auto *layout = qobject_cast<QVBoxLayout *>(page->layout())) layout->addWidget(button);
-    return button;
-}
-}
+    workspaceTabs->setObjectName(QStringLiteral("WorkbenchDocuments"));
+    workspaceTabs->setDocumentMode(true);
+    workspaceTabs->setTabsClosable(false);
+    workspaceTabs->setMovable(false);
+    while (workspaceTabs->count()) workspaceTabs->removeTab(0);
 
-WorkbenchShell::WorkbenchShell(QMainWindow *window, QWidget *centralRoot,
-                               QGridLayout *centralLayout, QWidget *contextStrip,
-                               QTabWidget *documents, const Pages &pages,
-                               QWidget *inspector, QWidget *watch, QWidget *search, QWidget *requestLog,
-                               QWidget *problems, QWidget *diagnostics, QWidget *raw,
-                               QObject *parent)
-    : QObject(parent), mainWindow(window), documentTabs(documents), workbenchPages(pages)
-{
-    documentTabs->setObjectName(QStringLiteral("WorkbenchDocuments"));
-    documentTabs->tabBar()->hide();
-    documentTabs->setDocumentMode(true);
-
-    auto *rail = new QFrame(centralRoot);
-    rail->setObjectName(QStringLiteral("WorkbenchActivityRail"));
-    rail->setFrameShape(QFrame::NoFrame);
-    rail->setFixedWidth(58);
-    auto *railLayout = new QVBoxLayout(rail);
-    railLayout->setContentsMargins(4, 4, 4, 4);
-    railLayout->setSpacing(3);
-    auto *group = new QActionGroup(this);
-    group->setExclusive(true);
-    addActivityAction(WorkbenchActivity::Mibs, tr("MIBs"), QKeySequence(QStringLiteral("Alt+1")));
-    addActivityAction(WorkbenchActivity::Queries, tr("Queries"), QKeySequence(QStringLiteral("Alt+2")));
-    addActivityAction(WorkbenchActivity::Events, tr("Events"), QKeySequence(QStringLiteral("Alt+3")));
-    const QList<QStyle::StandardPixmap> icons = {QStyle::SP_FileDialogContentsView,
-        QStyle::SP_ArrowRight, QStyle::SP_MessageBoxInformation};
-    for (int i = 0; i < activities.size(); ++i) {
-        QAction *action = activities.at(i);
-        action->setActionGroup(group);
-        action->setIcon(window->style()->standardIcon(icons.at(i)));
-        window->addAction(action);
-        auto *button = new QToolButton(rail);
-        button->setDefaultAction(action);
-        button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-        button->setIconSize(QSize(20, 20));
-        button->setAccessibleName(action->text());
-        railLayout->addWidget(button);
-    }
-    railLayout->addStretch();
-
-    sidebars = new QStackedWidget(centralRoot);
-    sidebars->setObjectName(QStringLiteral("WorkbenchSidebar"));
-    sidebars->setMinimumWidth(180);
-    sidebars->setMaximumWidth(360);
-    sidebars->addWidget(makeMibSidebar());
-    sidebars->addWidget(makeQueriesSidebar());
-    sidebars->addWidget(makeEventsSidebar());
-
-    centralLayout->removeWidget(contextStrip);
-    centralLayout->removeWidget(documentTabs);
-    centralLayout->setContentsMargins(0, 0, 0, 0);
-    centralLayout->setHorizontalSpacing(0);
-    centralLayout->setVerticalSpacing(0);
-    centralLayout->addWidget(contextStrip, 0, 0, 1, 3);
-    centralLayout->addWidget(rail, 1, 0);
-    auto *documentArea = new QWidget(centralRoot);
-    documentArea->setObjectName(QStringLiteral("WorkbenchDocumentArea"));
-    auto *documentLayout = new QVBoxLayout(documentArea);
-    documentLayout->setContentsMargins(0, 0, 0, 0);
-    documentLayout->setSpacing(0);
-    openDocumentTabs = new QTabBar(documentArea);
-    openDocumentTabs->setObjectName(QStringLiteral("WorkbenchOpenDocuments"));
-    openDocumentTabs->setDocumentMode(true);
-    openDocumentTabs->setTabsClosable(true);
-    openDocumentTabs->setExpanding(false);
-    openDocumentTabs->hide();
-    documentLayout->addWidget(openDocumentTabs);
-    documentLayout->addWidget(documentTabs, 1);
-    connect(openDocumentTabs, &QTabBar::currentChanged, this, [this](int index) {
-        if (index >= 0 && index < openedDocuments.size()) {
-            const int page = documentTabs->indexOf(openedDocuments.at(index));
-            if (page >= 0) documentTabs->setCurrentIndex(page);
-        }
-    });
-    connect(openDocumentTabs, &QTabBar::tabCloseRequested, this, [this](int index) {
-        if (index < 0 || index >= openedDocuments.size()) return;
-        openedDocuments.removeAt(index);
-        openDocumentTabs->removeTab(index);
-        openDocumentTabs->setVisible(!openedDocuments.isEmpty());
-        openDocument(defaultDocument(currentActivity));
-    });
-    contentSplitter = new QSplitter(Qt::Horizontal, centralRoot);
-    contentSplitter->setObjectName(QStringLiteral("WorkbenchContentSplitter"));
+    queryPage = new QWidget(workspaceTabs);
+    queryPage->setObjectName(QStringLiteral("WorkbenchQueryWorkspace"));
+    auto *queryLayout = new QVBoxLayout(queryPage);
+    queryLayout->setContentsMargins(0, 0, 0, 0);
+    contentSplitter = new QSplitter(Qt::Horizontal, queryPage);
+    contentSplitter->setObjectName(QStringLiteral("WorkbenchTreeSplitter"));
     contentSplitter->setChildrenCollapsible(false);
-    contentSplitter->addWidget(sidebars);
-    contentSplitter->addWidget(documentArea);
+    treePane->setMinimumWidth(180);
+    contentSplitter->addWidget(treePane);
+    queryTabs = new QTabWidget(contentSplitter);
+    queryTabs->setObjectName(QStringLiteral("WorkbenchQueryDocuments"));
+    queryTabs->setDocumentMode(true);
+    queryTabs->setTabsClosable(true);
+    if (pages.results) {
+        const int i = queryTabs->addTab(pages.results, tr("Results"));
+        const auto side = static_cast<QTabBar::ButtonPosition>(queryTabs->style()->styleHint(
+            QStyle::SH_TabBar_CloseButtonPosition, nullptr, queryTabs->tabBar()));
+        queryTabs->tabBar()->setTabButton(i, side, nullptr);
+    }
+    if (pages.search) { pages.search->setParent(queryTabs); pages.search->hide(); }
+    if (pages.watch) {
+        const int i = queryTabs->addTab(pages.watch, tr("Watch"));
+        const auto side = static_cast<QTabBar::ButtonPosition>(queryTabs->style()->styleHint(
+            QStyle::SH_TabBar_CloseButtonPosition, nullptr, queryTabs->tabBar()));
+        queryTabs->tabBar()->setTabButton(i, side, nullptr);
+    }
+    queryTabs->tabBar()->setVisible(queryTabs->count() > 1);
+    connect(queryTabs, &QTabWidget::tabCloseRequested, this,
+            [this](int i) { closeDocument(queryTabs->widget(i)); });
+    contentSplitter->addWidget(queryTabs);
     contentSplitter->setStretchFactor(0, 0);
     contentSplitter->setStretchFactor(1, 1);
-    contentSplitter->setSizes({280, 900});
-    centralLayout->addWidget(contentSplitter, 1, 1, 1, 2);
-    centralLayout->setColumnStretch(1, 1);
+    contentSplitter->setSizes({300, 900});
+    queryLayout->addWidget(contentSplitter);
+
+    const QList<std::pair<QWidget *, QString>> top{{queryPage, tr("Query")},
+        {pages.library, tr("MIBs")}, {pages.traps, tr("Traps")}};
+    for (const auto &[page, title] : top) {
+        if (!page) continue;
+        workspaceTabs->addTab(page, title);
+        workspaceTitles.insert(page, title);
+    }
+    workspaceTabs->tabBar()->show();
+
+    centralLayout->removeWidget(header);
+    headerBar = new QToolBar(tr("Connection"), window);
+    headerBar->setObjectName(QStringLiteral("WorkbenchHeaderBar"));
+    headerBar->setMovable(false);
+    headerBar->setFloatable(false);
+    headerBar->toggleViewAction()->setVisible(false);
+    headerBar->setContentsMargins(0, 0, 0, 0);
+    headerBar->layout()->setContentsMargins(0, 0, 0, 0);
+    headerBar->addWidget(header);
+    window->addToolBar(Qt::TopToolBarArea, headerBar);
+    centralLayout->setContentsMargins(0, 0, 0, 0);
+    centralLayout->setSpacing(0);
+    centralLayout->removeWidget(workspaceTabs);
+    centralLayout->addWidget(workspaceTabs, 1, 0);
     centralLayout->setRowStretch(1, 1);
+    window->setCorner(Qt::BottomRightCorner, Qt::BottomDockWidgetArea);
 
     inspectorPanel = new QDockWidget(tr("Inspector"), window);
     inspectorPanel->setObjectName(QStringLiteral("WorkbenchInspectorDock"));
     inspectorPanel->setAllowedAreas(Qt::RightDockWidgetArea);
     inspectorPanel->setWidget(inspector);
-    window->addDockWidget(Qt::RightDockWidgetArea, inspectorPanel);
     inspectorPanel->setMinimumWidth(240);
+    window->addDockWidget(Qt::RightDockWidgetArea, inspectorPanel);
 
+    problemPage = bottom.problems;
     bottomTabs = new QTabWidget(window);
     bottomTabs->setObjectName(QStringLiteral("WorkbenchBottomTabs"));
     bottomTabs->setDocumentMode(true);
-    bottomTabs->addTab(watch, tr("Watch"));
-    bottomTabs->addTab(search, tr("Search"));
-    bottomTabs->addTab(requestLog, tr("Log"));
-    bottomTabs->addTab(problems, tr("Problems"));
-    bottomTabs->addTab(diagnostics, tr("Diagnostics"));
-    bottomTabs->addTab(raw, tr("Raw"));
-    bottomPanel = new QDockWidget(tr("Output"), window);
+    const QList<std::pair<QWidget *, QString>> lower{{bottom.output, tr("Output")},
+        {bottom.log, tr("Log")}, {bottom.problems, tr("Problems")}};
+    const QStringList ids{QStringLiteral("output"), QStringLiteral("log"), QStringLiteral("problems")};
+    for (qsizetype i = 0; i < lower.size(); ++i) {
+        const auto &[page, title] = lower[i];
+        if (!page) continue;
+        bottomTabs->addTab(page, title);
+        bottomTitles.insert(page, title);
+        bottomIds.insert(page, ids[i]);
+    }
+    bottomPanel = new QDockWidget(tr("Panel"), window);
     bottomPanel->setObjectName(QStringLiteral("WorkbenchBottomDock"));
     bottomPanel->setAllowedAreas(Qt::BottomDockWidgetArea);
+    bottomPanel->setFeatures(QDockWidget::NoDockWidgetFeatures);
     bottomPanel->setWidget(bottomTabs);
-    window->addDockWidget(Qt::BottomDockWidgetArea, bottomPanel);
+    bottomPanel->setTitleBarWidget(new QWidget(bottomPanel));
     bottomPanel->setMinimumHeight(130);
+    window->addDockWidget(Qt::BottomDockWidgetArea, bottomPanel);
 
-    auto *toggleInspector = new QAction(tr("Toggle Inspector"), window);
-    toggleInspector->setObjectName(QStringLiteral("WorkbenchToggleInspector"));
-    toggleInspector->setShortcut(QKeySequence(QStringLiteral("Ctrl+Alt+I")));
-    connect(toggleInspector, &QAction::triggered, inspectorPanel, [this]() {
-        const bool show = inspectorPanel->isHidden();
-        if (show) {
-            setActivity(WorkbenchActivity::Mibs);
-            showMibTree();
-        }
-        inspectorPanel->setVisible(show);
-    });
-    window->addAction(toggleInspector);
-    auto *toggleBottom = new QAction(tr("Toggle Bottom Panel"), window);
-    toggleBottom->setObjectName(QStringLiteral("WorkbenchToggleBottom"));
-    toggleBottom->setShortcut(QKeySequence(QStringLiteral("Ctrl+J")));
-    connect(toggleBottom, &QAction::triggered, bottomPanel, [this]() {
-        bottomPanel->setVisible(!bottomPanel->isVisible());
-    });
-    window->addAction(toggleBottom);
-    const auto focusAction = [this, window](const QString &name, const QString &text,
-                                            const QKeySequence &shortcut,
-                                            const std::function<void()> &focus) {
-        auto *action = new QAction(text, window);
+    auto *controls = new QWidget(header);
+    controls->setObjectName(QStringLiteral("WorkbenchPanelControls"));
+    auto *controlsLayout = new QHBoxLayout(controls);
+    controlsLayout->setContentsMargins(0, 0, 0, 0);
+    activityStatus = new QLabel(controls);
+    activityStatus->setObjectName(QStringLiteral("WorkbenchActivityStatus"));
+    activityStatus->setAccessibleName(tr("Activity status"));
+    controlsLayout->addWidget(activityStatus);
+    panelButton = new QToolButton(controls);
+    panelButton->setObjectName(QStringLiteral("WorkbenchPanelToggle"));
+    panelButton->setCheckable(true);
+    panelButton->setToolTip(tr("Show or hide Output, Log and MIB Problems. Operations keep running while hidden."));
+    controlsLayout->addWidget(panelButton);
+    if (connectionRow) connectionRow->addWidget(controls);
+    else headerBar->addWidget(controls);
+    connect(panelButton, &QToolButton::toggled, this, &WorkbenchShell::setPanelExpanded);
+    connect(bottomPanel, &QDockWidget::visibilityChanged, this, &WorkbenchShell::updatePanelControls);
+
+    const auto focusAction = [this, window](const QString &name, const QString &title,
+        const QString &shortcut, const std::function<void()> &run) {
+        auto *action = new QAction(title, window);
         action->setObjectName(name);
-        action->setShortcut(shortcut);
-        connect(action, &QAction::triggered, this, focus);
+        action->setShortcut(QKeySequence(shortcut));
         window->addAction(action);
+        connect(action, &QAction::triggered, this, run);
     };
-    focusAction(QStringLiteral("WorkbenchFocusSidebar"), tr("Focus Sidebar"),
-                QKeySequence(QStringLiteral("Ctrl+0")), [this]() {
-        if (QWidget *page = sidebars->currentWidget()) {
-            const auto candidates = page->findChildren<QWidget *>();
-            for (QWidget *candidate : candidates) {
-                if (candidate->focusPolicy() != Qt::NoFocus && candidate->isEnabled()) {
-                    candidate->setFocus(Qt::ShortcutFocusReason);
-                    break;
-                }
-            }
-        }
+    focusAction("WorkbenchFocusTree", tr("Focus MIB Tree"), "Ctrl+0", [this, treePane]() {
+        workspaceTabs->setCurrentWidget(queryPage);
+        if (auto *tree = treePane->findChild<QAbstractItemView *>()) tree->setFocus(Qt::ShortcutFocusReason);
     });
-    focusAction(QStringLiteral("WorkbenchFocusDocument"), tr("Focus Work Area"),
-                QKeySequence(QStringLiteral("Ctrl+1")), [this]() {
-        if (QWidget *page = documentTabs->currentWidget()) page->setFocus(Qt::ShortcutFocusReason);
+    focusAction("WorkbenchFocusDocument", tr("Focus Work Area"), "Ctrl+1", [this]() {
+        if (auto *page = workspaceTabs->currentWidget()) page->setFocus(Qt::ShortcutFocusReason);
     });
-    focusAction(QStringLiteral("WorkbenchFocusInspector"), tr("Focus Inspector"),
-                QKeySequence(QStringLiteral("Ctrl+Alt+2")), [this]() {
-        setActivity(WorkbenchActivity::Mibs);
-        showMibTree();
+    focusAction("WorkbenchFocusInspector", tr("Focus Inspector"), "Ctrl+Alt+2", [this]() {
+        workspaceTabs->setCurrentWidget(queryPage);
         inspectorPanel->show();
-        if (inspectorPanel->widget()) inspectorPanel->widget()->setFocus(Qt::ShortcutFocusReason);
+        inspectorPanel->widget()->setFocus(Qt::ShortcutFocusReason);
     });
-    focusAction(QStringLiteral("WorkbenchFocusBottom"), tr("Focus Bottom Panel"),
-                QKeySequence(QStringLiteral("Ctrl+`")), [this]() {
-        bottomPanel->show();
-        if (QWidget *page = bottomTabs->currentWidget()) page->setFocus(Qt::ShortcutFocusReason);
+    focusAction("WorkbenchFocusBottom", tr("Focus Panel"), "Ctrl+`", [this]() {
+        setPanelExpanded(true);
+        if (auto *page = bottomTabs->currentWidget()) page->setFocus(Qt::ShortcutFocusReason);
     });
-    focusAction(QStringLiteral("WorkbenchGlobalSearch"), tr("Search MIBs"),
-                QKeySequence(QStringLiteral("Ctrl+Shift+F")), [this]() {
-        setActivity(WorkbenchActivity::Mibs);
-        if (auto *filter = mainWindow->findChild<QLineEdit *>(QStringLiteral("MibTreeFilter")))
+    focusAction("WorkbenchGlobalSearch", tr("Search MIBs"), "Ctrl+Shift+F", [this]() {
+        workspaceTabs->setCurrentWidget(queryPage);
+        if (auto *filter = mainWindow->findChild<QLineEdit *>(QStringLiteral("CollectionSearch")))
             filter->setFocus(Qt::ShortcutFocusReason);
     });
-
-    window->setStyleSheet(window->styleSheet() + QStringLiteral(R"(
-        QFrame#WorkbenchActivityRail { background: palette(midlight); border-right: 1px solid palette(mid); }
-        QFrame#WorkbenchActivityRail QToolButton { border: 0; padding: 5px 1px; }
-        QFrame#WorkbenchActivityRail QToolButton:checked { background: palette(highlight); color: palette(highlighted-text); border-left: 3px solid palette(highlight); }
-        QStackedWidget#WorkbenchSidebar { border-right: 1px solid palette(mid); background: palette(base); }
-        QLabel#WorkbenchSidebarHeading { padding: 2px 0 5px 0; }
-        QLabel#WorkbenchSidebarDescription { color: palette(text); font-style: italic; padding-bottom: 5px; }
-        QStackedWidget#WorkbenchSidebar QPushButton { text-align: left; padding: 5px 7px; border: 0; }
-        QStackedWidget#WorkbenchSidebar QPushButton:checked { background: palette(highlight); color: palette(highlighted-text); }
-    )"));
+    connect(bottomTabs, &QTabWidget::currentChanged, this, [this]() {
+        pendingPanelId.clear();
+        const QString id = bottomIds.value(bottomTabs->currentWidget());
+        if (workspaceTabs->currentWidget() == workbenchPages.library) mibPanelId = id;
+        else sharedPanelId = id;
+    });
+    buildViewMenu(window);
+    connect(workspaceTabs, &QTabWidget::currentChanged, this, &WorkbenchShell::updateWorkspace);
+    if (bottom.problems) setBottomPageVisible(bottom.problems, false);
+    setActivityCounts(0, 0);
+    setPanelExpanded(false);
 }
 
-void WorkbenchShell::addActivityAction(WorkbenchActivity activity, const QString &text,
-                                       const QKeySequence &shortcut)
+void WorkbenchShell::buildViewMenu(QMainWindow *window)
 {
-    auto *action = new QAction(text, mainWindow);
-    action->setObjectName(QStringLiteral("WorkbenchActivity%1").arg(text));
-    action->setCheckable(true);
-    action->setShortcut(shortcut);
-    action->setToolTip(tr("Switch to %1 (%2)").arg(text, shortcut.toString()));
-    connect(action, &QAction::triggered, this, [this, activity]() { setActivity(activity); });
-    activities.append(action);
-}
-
-QWidget *WorkbenchShell::makeMibSidebar()
-{
-    QWidget *page = sidebarPage(tr("MIBs"), tr("Browse MIB knowledge and manage its runtime context."), sidebars);
-    auto *tree = sidebarButton(page, tr("OID Tree"), QStringLiteral("MibModeTree"));
-    auto *modules = sidebarButton(page, tr("Modules"), QStringLiteral("MibModeModules"));
-    auto *catalog = sidebarButton(page, tr("Catalog"), QStringLiteral("MibModeCatalog"));
-    auto *profiles = sidebarButton(page, tr("Profiles"), QStringLiteral("MibModeProfiles"));
-    tree->setChecked(true);
-    connect(tree, &QPushButton::clicked, this, &WorkbenchShell::showMibTree);
-    connect(modules, &QPushButton::clicked, this, [this]() { showMibLibrary(0); });
-    connect(catalog, &QPushButton::clicked, this, [this]() { showMibLibrary(0); });
-    connect(profiles, &QPushButton::clicked, this, [this]() { showMibLibrary(1); });
-    qobject_cast<QVBoxLayout *>(page->layout())->addStretch();
-    return page;
-}
-
-QWidget *WorkbenchShell::makeQueriesSidebar()
-{
-    QWidget *page = sidebarPage(tr("Queries"),
-        tr("Run an ad-hoc SNMP operation from the MIB Tree. Saved Queries arrive in a later phase."), sidebars);
-    auto *operations = sidebarButton(page, tr("Ad-hoc Operations"), QStringLiteral("QueryModeAdHoc"));
-    operations->setChecked(true);
-    connect(operations, &QPushButton::clicked, this, [this]() { openDocument(workbenchPages.tree); });
-    qobject_cast<QVBoxLayout *>(page->layout())->addStretch();
-    return page;
-}
-
-QWidget *WorkbenchShell::makeEventsSidebar()
-{
-    QWidget *page = sidebarPage(tr("SNMP Events"),
-        tr("Trap and Inform capture. Receiver settings remain in Preferences."), sidebars);
-    auto *capture = sidebarButton(page, tr("Capture Console"), QStringLiteral("EventModeCapture"));
-    capture->setChecked(true);
-    connect(capture, &QPushButton::clicked, this, [this]() { openDocument(workbenchPages.events); });
-    qobject_cast<QVBoxLayout *>(page->layout())->addStretch();
-    return page;
-}
-
-QWidget *WorkbenchShell::defaultDocument(WorkbenchActivity value) const
-{
-    switch (value) {
-    case WorkbenchActivity::Mibs: return workbenchPages.tree;
-    case WorkbenchActivity::Queries: return workbenchPages.tree;
-    case WorkbenchActivity::Events: return workbenchPages.events;
+    auto *bar = window->menuBar();
+    view = new QMenu(tr("&View"), bar);
+    view->setObjectName(QStringLiteral("WorkbenchViewMenu"));
+    const auto top = bar->actions();
+    bar->insertMenu(top.size() > 1 ? top[1] : nullptr, view);
+    const auto add = [this](const QString &name, const QString &title, const std::function<void()> &run) {
+        auto *action = view->addAction(title);
+        action->setObjectName(name);
+        connect(action, &QAction::triggered, this, run);
+        return action;
+    };
+    add("ViewResults", tr("Results"), [this]() { showResults(); });
+    add("ViewMibLibrary", tr("MIB Library"), [this]() { showMibLibrary(0); });
+    add("ViewMibProfiles", tr("MIB Profiles"), [this]() { showMibLibrary(1); });
+    add("ViewMibEditor", tr("MIB Editor"), [this]() { openDocument(workbenchPages.editor); });
+    if (workbenchPages.traps)
+        add("ViewTraps", tr("Traps"), [this]() { openDocument(workbenchPages.traps); });
+    if (workbenchPages.watch)
+        add("ViewWatch", tr("Watch"), [this]() { openDocument(workbenchPages.watch); });
+    view->addSeparator();
+    auto *inspectorAction = inspectorPanel->toggleViewAction();
+    inspectorAction->setObjectName("WorkbenchToggleInspector");
+    inspectorAction->setText(tr("Inspector"));
+    inspectorAction->setShortcut(QKeySequence("Ctrl+Alt+I"));
+    view->addAction(inspectorAction);
+    auto *panelAction = add("WorkbenchToggleBottom", tr("Show panel"), [this]() {
+        setPanelExpanded(bottomPanel->isHidden());
+    });
+    panelAction->setShortcut(QKeySequence("Ctrl+J"));
+    view->addSeparator();
+    for (int i = 0; i < bottomTabs->count(); ++i) {
+        auto *page = bottomTabs->widget(i);
+        add(QStringLiteral("ViewBottom%1").arg(bottomTitles.value(page)), bottomTitles.value(page),
+            [this, page]() { showBottomPage(page); });
     }
-    return workbenchPages.tree;
-}
-
-void WorkbenchShell::setActivity(WorkbenchActivity value)
-{
-    currentActivity = value;
-    sidebars->setCurrentIndex(sidebarIndex(value));
-    if (QAction *action = activityAction(value)) action->setChecked(true);
-    openDocument(defaultDocument(value));
 }
 
 void WorkbenchShell::openDocument(QWidget *document)
 {
-    const int index = documentTabs->indexOf(document);
-    if (index < 0) return;
-    documentTabs->setCurrentIndex(index);
-    inspectorPanel->setVisible(currentActivity == WorkbenchActivity::Mibs &&
-                               document == workbenchPages.tree);
-    const bool durable = document == workbenchPages.editor;
-    if (!durable) {
-        openDocumentTabs->setCurrentIndex(-1);
+    if (!document) return;
+    if (document == workbenchPages.editor) { showMibLibrary(2); return; }
+    if (document == workbenchPages.results) { showResults(); return; }
+    if (document == workbenchPages.watch) {
+        workspaceTabs->setCurrentWidget(queryPage);
+        queryTabs->setCurrentWidget(document);
         return;
     }
-    int tab = openedDocuments.indexOf(document);
-    if (tab < 0) {
-        openedDocuments.append(document);
-        tab = openDocumentTabs->addTab(tr("MIB Editor"));
-    }
-    openDocumentTabs->show();
-    openDocumentTabs->setCurrentIndex(tab);
+    if (document == workbenchPages.search) {
+        if (queryTabs->indexOf(document) < 0) queryTabs->addTab(document, tr("Search"));
+        queryTabs->tabBar()->show();
+        workspaceTabs->setCurrentWidget(queryPage);
+        queryTabs->setCurrentWidget(document);
+    } else if (workspaceTitles.contains(document)) workspaceTabs->setCurrentWidget(document);
+}
+
+void WorkbenchShell::closeDocument(QWidget *document)
+{
+    if (!document || document != workbenchPages.search) return;
+    const int i = queryTabs->indexOf(document);
+    if (i >= 0) queryTabs->removeTab(i);
+    queryTabs->tabBar()->setVisible(queryTabs->count() > 1);
+}
+
+void WorkbenchShell::showResults()
+{
+    workspaceTabs->setCurrentWidget(queryPage);
+    if (workbenchPages.results) queryTabs->setCurrentWidget(workbenchPages.results);
+}
+
+void WorkbenchShell::setResultsNote(const QString &note)
+{
+    const int i = queryTabs->indexOf(workbenchPages.results);
+    if (i >= 0) queryTabs->setTabText(i, note.isEmpty() ? tr("Results")
+        : tr("Results (%1)").arg(note));
+}
+
+void WorkbenchShell::showMibLibrary(int mode)
+{
+    if (!workbenchPages.library) return;
+    workspaceTabs->setCurrentWidget(workbenchPages.library);
+    emit mibLibraryModeRequested(mode);
 }
 
 void WorkbenchShell::showBottomPage(QWidget *page)
 {
-    const int index = bottomTabs->indexOf(page);
-    if (index < 0) return;
-    bottomPanel->show();
-    bottomTabs->setCurrentIndex(index);
-}
-
-void WorkbenchShell::showMibTree() { openDocument(workbenchPages.tree); }
-
-void WorkbenchShell::showMibLibrary(int mode)
-{
-    openDocument(workbenchPages.library);
-    emit mibLibraryModeRequested(mode);
-}
-
-// Position of an activity among the offered activities (and so its sidebar page).
-int WorkbenchShell::sidebarIndex(WorkbenchActivity value)
-{
-    switch (value) {
-    case WorkbenchActivity::Mibs: return 0;
-    case WorkbenchActivity::Queries: return 1;
-    case WorkbenchActivity::Events: return 2;
+    if (!bottomTitles.contains(page)) return;
+    pendingPanelId.clear();
+    if (page == problemPage) {
+        if (!workbenchPages.library) return;
+        problemsAvailable = true; // explicit navigation also permits inspecting an empty report
+        mibPanelId = QStringLiteral("problems");
+        workspaceTabs->setCurrentWidget(workbenchPages.library);
+        updateBottomPages();
+    } else {
+        setBottomPageVisible(page, true);
+        bottomTabs->setCurrentWidget(page);
+        if (workspaceTabs->currentWidget() == workbenchPages.library) mibPanelId = bottomIds.value(page);
+        else sharedPanelId = bottomIds.value(page);
     }
-    return 0;
+    setPanelExpanded(true);
 }
 
-QAction *WorkbenchShell::activityAction(WorkbenchActivity value) const
+void WorkbenchShell::setBottomPageVisible(QWidget *page, bool visible)
 {
-    const int index = sidebarIndex(value);
-    return index >= 0 && index < activities.size() ? activities.at(index) : nullptr;
+    const int i = bottomTabs->indexOf(page);
+    if (i < 0) return;
+    if (page != problemPage) { bottomTabs->setTabVisible(i, visible); return; }
+    problemsAvailable = visible;
+    if (!visible && mibPanelId == QStringLiteral("problems")) mibPanelId = QStringLiteral("output");
+    // Consume the initial report once, including an empty report. Later background
+    // reports never select Problems or change the current workspace/panel visibility.
+    if (pendingPanelId == QStringLiteral("problems")) {
+        pendingPanelId.clear();
+        if (visible) mibPanelId = QStringLiteral("problems");
+    }
+    updateBottomPages();
+}
+
+void WorkbenchShell::updateBottomPages()
+{
+    const bool inMibs = workspaceTabs->currentWidget() == workbenchPages.library;
+    // Qt selects a different tab when hiding the current one. That is presentation,
+    // not user navigation, and must not overwrite either workspace's remembered ID.
+    const QSignalBlocker blocked(bottomTabs);
+    const int problemsIndex = bottomTabs->indexOf(problemPage);
+    if (problemsIndex >= 0) bottomTabs->setTabVisible(problemsIndex, inMibs && problemsAvailable);
+    const QString wanted = inMibs ? mibPanelId : sharedPanelId;
+    int fallback = -1;
+    for (int i = 0; i < bottomTabs->count(); ++i) {
+        if (!bottomTabs->isTabVisible(i)) continue;
+        if (fallback < 0) fallback = i;
+        if (bottomIds.value(bottomTabs->widget(i)) == wanted) {
+            bottomTabs->setCurrentIndex(i);
+            return;
+        }
+    }
+    if (fallback >= 0) bottomTabs->setCurrentIndex(fallback);
+}
+
+void WorkbenchShell::setBottomPageNote(QWidget *page, const QString &note)
+{
+    const int i = bottomTabs->indexOf(page);
+    if (i >= 0) bottomTabs->setTabText(i, note.isEmpty() ? bottomTitles.value(page)
+        : QStringLiteral("%1 (%2)").arg(bottomTitles.value(page), note));
+}
+
+void WorkbenchShell::setFullPageHiddenWidgets(const QList<QWidget *> &widgets)
+{
+    queryOnlyWidgets = widgets;
+    for (auto *widget : queryOnlyWidgets) widget->setVisible(!outsideQuery);
+}
+
+void WorkbenchShell::updateWorkspace()
+{
+    updateBottomPages();
+    const bool wanted = workspaceTabs->currentWidget() != queryPage;
+    if (wanted == outsideQuery) return;
+    if (wanted) inspectorShown = !inspectorPanel->isHidden();
+    outsideQuery = wanted;
+    inspectorPanel->setVisible(!wanted && inspectorShown);
+    inspectorPanel->toggleViewAction()->setEnabled(!wanted);
+    for (auto *widget : queryOnlyWidgets) widget->setVisible(!wanted);
+}
+
+void WorkbenchShell::setPanelExpanded(bool expanded)
+{
+    if (!expanded && !bottomPanel->isHidden()) panelHeight = bottomPanel->height();
+    bottomPanel->setVisible(expanded);
+    if (expanded) mainWindow->resizeDocks({bottomPanel},
+        {qBound(130, panelHeight, qMax(130, mainWindow->height() - 200))}, Qt::Vertical);
+    updatePanelControls();
+}
+
+void WorkbenchShell::updatePanelControls()
+{
+    const bool expanded = !bottomPanel->isHidden();
+    const QSignalBlocker blocked(panelButton);
+    panelButton->setChecked(expanded);
+    const QString text = expanded ? tr("Hide panel") : tr("Show panel");
+    panelButton->setText(text);
+    if (auto *action = mainWindow->findChild<QAction *>("WorkbenchToggleBottom")) action->setText(text);
+}
+
+void WorkbenchShell::setActivityCounts(int running, int problems)
+{
+    running = qMax(0, running); problems = qMax(0, problems);
+    QStringList parts;
+    if (running) parts << tr("%1 running").arg(running);
+    if (problems) parts << (problems == 1 ? tr("1 problem") : tr("%1 problems").arg(problems));
+    activityStatus->setText(parts.isEmpty() ? tr("Idle") : parts.join(QStringLiteral(" · ")));
+    activityStatus->setToolTip(tr("Running SNMP requests and MIB environment builds. Inspect Log for failed requests and MIBs > Problems for MIB errors or warnings."));
 }
 
 void WorkbenchShell::restorePresentationState()
 {
     QSettings settings;
-    // A stored 1 is the retired Devices activity; anything unknown opens MIBs.
-    const int stored = settings.value(activityKey, 0).toInt();
-    const auto restored = stored == static_cast<int>(WorkbenchActivity::Queries)
-        ? WorkbenchActivity::Queries
-        : stored == static_cast<int>(WorkbenchActivity::Events)
-            ? WorkbenchActivity::Events : WorkbenchActivity::Mibs;
-    setActivity(restored);
-    const bool inspectorRequested = settings.value(inspectorVisibleKey,
-        restored == WorkbenchActivity::Mibs).toBool();
-    inspectorPanel->setVisible(inspectorRequested && restored == WorkbenchActivity::Mibs &&
-                               documentTabs->currentWidget() == workbenchPages.tree);
-    bottomPanel->setVisible(settings.value(bottomVisibleKey, true).toBool());
-    {
-        const QString wanted = settings.value(bottomTabKey).toString();
-        for (int i = 0; i < bottomTabs->count(); ++i)
-            if (bottomTabs->tabText(i) == wanted) bottomTabs->setCurrentIndex(i);
+    showResults();
+    headerBar->show();
+    mainWindow->setCorner(Qt::BottomRightCorner, Qt::BottomDockWidgetArea);
+    inspectorShown = settings.value(inspectorKey, true).toBool();
+    inspectorPanel->setVisible(inspectorShown);
+    const auto state = settings.value(splitterKey).toByteArray();
+    if (!state.isEmpty()) contentSplitter->restoreState(state);
+    panelHeight = qBound(130, settings.value(panelHeightKey, 300).toInt(), 10000);
+    pendingPanelId.clear();
+    // Keep old settings until normal save. The former shared Problems selection
+    // becomes a MIB-only preference; Query starts on its own Output/Log selection.
+    const auto validId = [](QString id) {
+        if (id == QStringLiteral("results")) id = QStringLiteral("output");
+        return id == QStringLiteral("output") || id == QStringLiteral("log") ||
+               id == QStringLiteral("problems") ? id : QStringLiteral("output");
+    };
+    const QString legacy = validId(settings.value(panelTabKey, QStringLiteral("output")).toString());
+    sharedPanelId = legacy == QStringLiteral("problems") ? QStringLiteral("output") : legacy;
+    mibPanelId = validId(settings.value(mibPanelTabKey, legacy).toString());
+    if (mibPanelId == QStringLiteral("problems") && !problemsAvailable) {
+        pendingPanelId = mibPanelId;
+        mibPanelId = QStringLiteral("output");
     }
-    const QByteArray splitterState = settings.value(contentSplitterKey).toByteArray();
-    if (!splitterState.isEmpty()) contentSplitter->restoreState(splitterState);
+    updateBottomPages();
+    setPanelExpanded(settings.value(panelVisibleKey, false).toBool());
 }
 
 void WorkbenchShell::savePresentationState() const
 {
     QSettings settings;
-    settings.setValue(activityKey, static_cast<int>(currentActivity));
-    // Explicit hidden state is stable even when the parent window is closing;
-    // isVisible() would incorrectly persist false after the window is hidden.
-    settings.setValue(inspectorVisibleKey, !inspectorPanel->isHidden());
-    settings.setValue(bottomVisibleKey, !bottomPanel->isHidden());
-    settings.setValue(bottomTabKey, bottomTabs->tabText(bottomTabs->currentIndex()));
-    settings.setValue(contentSplitterKey, contentSplitter->saveState());
+    settings.setValue(inspectorKey, outsideQuery ? inspectorShown : !inspectorPanel->isHidden());
+    settings.setValue(splitterKey, contentSplitter->saveState());
+    settings.setValue(panelVisibleKey, !bottomPanel->isHidden());
+    settings.setValue(panelHeightKey, bottomPanel->isHidden() ? panelHeight : bottomPanel->height());
+    settings.setValue(panelTabKey, sharedPanelId);
+    settings.setValue(mibPanelTabKey, pendingPanelId.isEmpty() ? mibPanelId : pendingPanelId);
 }

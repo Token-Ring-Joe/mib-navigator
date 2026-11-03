@@ -620,7 +620,7 @@ int CSNMPMessageQueue::HandleEvents(const struct pollfd *readfds,
           LOG(engine_id.get_printable());
           LOG_END;
 
-          v3MP::I->add_to_engine_id_table(engine_id,
+          m_snmpSession->get_v3mp()->add_to_engine_id_table(engine_id,
                                           (char*)addr.IpAddress::get_printable(),
                                           addr.get_port());
         }
@@ -756,7 +756,7 @@ int CSNMPMessageQueue::HandleEvents(const int maxfds,
             LOG(addr.get_printable());
             LOG(engine_id.get_printable());
             LOG_END;
-            v3MP::I->add_to_engine_id_table(engine_id,
+            m_snmpSession->get_v3mp()->add_to_engine_id_table(engine_id,
                                          (char*)addr.IpAddress::get_printable(),
                                           addr.get_port());
           }
@@ -821,8 +821,8 @@ int CSNMPMessageQueue::DoRetries(const msec &now)
         DeleteEntry(req_id);
 #ifdef _SNMPv3
         // delete entry in cache
-        if (v3MP::I)
-          v3MP::I->delete_from_cache(req_id);
+        if (m_snmpSession->get_v3mp())
+          m_snmpSession->get_v3mp()->delete_from_cache(req_id);
 
         LOG_BEGIN(loggerModuleName, INFO_LOG | 6);
         LOG("MsgQueue: Message timed out, removed id from v3MP cache (rid)");

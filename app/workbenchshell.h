@@ -1,79 +1,102 @@
 #ifndef WORKBENCHSHELL_H
 #define WORKBENCHSHELL_H
 
-#include <QObject>
+#include <QHash>
 #include <QList>
+#include <QObject>
 
-class QAction;
+class QBoxLayout;
 class QDockWidget;
 class QGridLayout;
-class QKeySequence;
+class QLabel;
 class QMainWindow;
-class QStackedWidget;
+class QMenu;
 class QSplitter;
-class QTabBar;
 class QTabWidget;
+class QToolBar;
+class QToolButton;
 class QWidget;
 
-// The numeric values are persisted in settings ("workbench/activity"); do not renumber.
-// 1 was the retired Devices activity and is no longer offered.
-enum class WorkbenchActivity { Mibs = 0, Queries = 2, Events = 3 };
-
+// Permanent workspaces own the existing feature widgets. The shared bottom panel is
+// presentation only: hiding it or changing workspaces never changes operation lifetimes.
 class WorkbenchShell final : public QObject
 {
     Q_OBJECT
 public:
-    struct Pages {
-        QWidget *tree = nullptr;
-        QWidget *library = nullptr;
+    struct Documents {
+        QWidget *results = nullptr;
+        QWidget *library = nullptr; // contains Library | Profiles | Editor
         QWidget *editor = nullptr;
-        QWidget *events = nullptr;
+        QWidget *search = nullptr;
+        QWidget *traps = nullptr;
+        QWidget *watch = nullptr; // permanent local Query tab
+    };
+    struct BottomPages {
+        QWidget *output = nullptr;
+        QWidget *log = nullptr;
+        QWidget *problems = nullptr;
     };
 
     WorkbenchShell(QMainWindow *window, QWidget *centralRoot, QGridLayout *centralLayout,
-                   QWidget *contextStrip, QTabWidget *documents, const Pages &pages,
-                   QWidget *inspector, QWidget *watch, QWidget *search, QWidget *requestLog,
-                   QWidget *problems, QWidget *diagnostics, QWidget *raw,
-                   QObject *parent = nullptr);
+                   QWidget *header, QWidget *treePane, QTabWidget *workspaces,
+                   const Documents &pages, QWidget *inspector, const BottomPages &bottom,
+                   QObject *parent = nullptr, QBoxLayout *connectionRow = nullptr);
 
-    WorkbenchActivity activity() const { return currentActivity; }
-    void setActivity(WorkbenchActivity activity);
     void openDocument(QWidget *document);
-    void showMibTree();
-    void showBottomPage(QWidget *page);   // bring one of the bottom tabs forward
-    void showMibLibrary(int mode);
+    void closeDocument(QWidget *document); // only the optional Search page can close
+    void showResults();
+    void setResultsNote(const QString &note);
+    void showBottomPage(QWidget *page); // explicit user navigation opens the shared panel
+    void setBottomPageNote(QWidget *page, const QString &note);
+    void setBottomPageVisible(QWidget *page, bool visible);
+    void showMibLibrary(int mode); // 0 Library, 1 Profiles, 2 Editor
+    void setPanelExpanded(bool expanded);
+    void setActivityCounts(int running, int problems);
+    void setFullPageHiddenWidgets(const QList<QWidget *> &widgets);
+    bool isFullPage() const { return outsideQuery; }
     void restorePresentationState();
     void savePresentationState() const;
 
     QDockWidget *inspectorDock() const { return inspectorPanel; }
     QDockWidget *bottomDock() const { return bottomPanel; }
-    QStackedWidget *sidebarStack() const { return sidebars; }
-    QAction *activityAction(WorkbenchActivity activity) const;
+    QSplitter *treeSplitter() const { return contentSplitter; }
+    QMenu *viewMenu() const { return view; }
+    QToolBar *header() const { return headerBar; }
 
 signals:
     void mibLibraryModeRequested(int mode);
 
 private:
-    QWidget *makeMibSidebar();
-    QWidget *makeQueriesSidebar();
-    QWidget *makeEventsSidebar();
-    void addActivityAction(WorkbenchActivity activity, const QString &text,
-                           const QKeySequence &shortcut);
-    QWidget *defaultDocument(WorkbenchActivity activity) const;
-    static int sidebarIndex(WorkbenchActivity activity);
+    void buildViewMenu(QMainWindow *window);
+    void updateWorkspace();
+    void updatePanelControls();
+    void updateBottomPages();
 
     QMainWindow *mainWindow;
-    QTabWidget *documentTabs;
-    Pages workbenchPages;
-    QStackedWidget *sidebars;
+    QTabWidget *workspaceTabs;
+    QTabWidget *queryTabs;
+    QWidget *queryPage;
+    Documents workbenchPages;
+    QHash<QWidget *, QString> workspaceTitles;
+    QHash<QWidget *, QString> bottomTitles;
+    QHash<QWidget *, QString> bottomIds;
     QSplitter *contentSplitter;
     QDockWidget *inspectorPanel;
     QDockWidget *bottomPanel;
     QTabWidget *bottomTabs;
-    QTabBar *openDocumentTabs;
-    QList<QWidget *> openedDocuments;
-    QList<QAction *> activities;
-    WorkbenchActivity currentActivity = WorkbenchActivity::Mibs;
+    QToolBar *headerBar;
+    QToolButton *panelButton;
+    QLabel *activityStatus;
+    QMenu *view = nullptr;
+    QList<QWidget *> queryOnlyWidgets;
+    bool outsideQuery = false;
+    bool inspectorShown = true;
+    int panelHeight = 300;
+    QWidget *problemPage = nullptr; // owned by bottomTabs
+    bool problemsAvailable = false;
+    QString sharedPanelId = QStringLiteral("output");
+    QString mibPanelId = QStringLiteral("output");
+    QString pendingPanelId; // wait for the initial MIB report before restoring Problems
 };
 
 #endif

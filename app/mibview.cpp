@@ -68,9 +68,11 @@ BasicMibView::BasicMibView (QWidget * parent) : QTreeWidget(parent)
     // Create context menu actions
     expandAct = new QAction(tr("Expand"), this);
     expandAct->setIcon(QIcon(":/icon/expand"));
+    expandAct->setProperty("appearanceIcon", QStringLiteral("expand"));
     connect(expandAct, SIGNAL(triggered()), this, SLOT(ExpandFromNode()));
     collapseAct = new QAction(tr("Collapse"), this);
     collapseAct->setIcon(QIcon(":/icon/collapse"));
+    collapseAct->setProperty("appearanceIcon", QStringLiteral("collapse"));
     connect(collapseAct, SIGNAL(triggered()), this, SLOT(CollapseFromNode()));
     findAct = new QAction(tr("Find"), this);
     connect(findAct, SIGNAL(triggered()), this, SLOT(FindFromNode()));

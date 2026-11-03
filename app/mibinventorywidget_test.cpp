@@ -23,6 +23,11 @@
 #include <QTreeWidget>
 #include <QGroupBox>
 #include <QComboBox>
+#include <QAbstractButton>
+#include <QLayout>
+#include <QTabBar>
+#include <functional>
+#include "mibdependencyindex.h"
 #include <QSplitter>
 #include <QTextEdit>
 #include <iostream>
@@ -137,6 +142,39 @@ int main(int argc, char **argv)
         plan.effectiveModules = plan.explicitModules; plan.sha256 = "test-plan"; return plan;
     };
     MibLibraryWidget widget({}, nullptr, &transport, callbacks);
+    {
+        // Every input control is placed by a layout (a splitter places its own children). An
+        // unplaced child is drawn at its parent's top-left corner: the "All states" filter once
+        // sat over the Library / Profiles tab names that way.
+        std::function<bool(const QLayout *, const QWidget *)> inLayout =
+            [&inLayout](const QLayout *layout, const QWidget *control) {
+            if (!layout) return false;
+            for (int i = 0; i < layout->count(); ++i) {
+                QLayoutItem *item = layout->itemAt(i);
+                if (item->widget() == control) return true;
+                if (item->layout() && inLayout(item->layout(), control)) return true;
+            }
+            return false;
+        };
+        QStringList unplaced;
+        for (QWidget *control : widget.findChildren<QWidget *>()) {
+            if (!qobject_cast<QComboBox *>(control) && !qobject_cast<QAbstractButton *>(control) &&
+                !qobject_cast<QLineEdit *>(control)) continue;
+            QWidget *parent = control->parentWidget();
+            // Controls that belong to another control (a combo box's editor, a tab bar's buttons,
+            // a header's select-all box in its viewport) are placed by their owner.
+            if (!parent || qobject_cast<QComboBox *>(parent) || qobject_cast<QTabBar *>(parent) ||
+                qobject_cast<QHeaderView *>(parent) || qobject_cast<QAbstractScrollArea *>(parent) ||
+                qobject_cast<QAbstractScrollArea *>(parent->parentWidget()) ||   // drawn in a viewport
+                qobject_cast<QSplitter *>(parent) || control->isWindow() ||
+                parent->inherits("QAbstractSpinBox") || parent->inherits("QScrollBar")) continue;
+            if (!inLayout(parent->layout(), control))
+                unplaced << (control->objectName().isEmpty() ? QString::fromLatin1(control->metaObject()->className())
+                                                             : control->objectName());
+        }
+        if (!unplaced.isEmpty()) std::cerr << "unplaced: " << unplaced.join(", ").toStdString() << '\n';
+        ok &= check(unplaced.isEmpty(), "every Library and Profiles control is placed in a layout");
+    }
     int initialPublications = 0;
     bool publishedOnGuiThread = false;
     QObject::connect(&widget, &MibLibraryWidget::initialRefreshFinished,
@@ -191,16 +229,19 @@ int main(int argc, char **argv)
     const QByteArray effectivePlanSourceText = effectivePlanSource.readAll();
     const QByteArray viewSourceText = viewSource.readAll();
     const QByteArray applicationBuildText = applicationBuild.readAll();
-    ok &= check(applicationSourceText.contains("removeTab(legacyModulesTab)") &&
-                applicationSourceText.contains("insertTab(1, mibLibrary, tr(\"MIBs\"))"),
-                "top-level navigation exposes one consolidated MIBs workspace");
+    ok &= check(!mainWindowUiText.contains("name=\"ModulesTab\"") &&
+                !mainWindowUiText.contains("MibLibraryCheckDependencies") &&
+                !applicationSourceText.contains("w.MibLibraryCheckDependencies") &&
+                applicationSourceText.contains("documents.library = mibLibrary;"),
+                "the legacy MIB Library tab is gone and the Library opens as one middle-area document");
     ok &= check(applicationSourceText.contains("CurrentEnvironmentStatus") &&
                 applicationSourceText.contains("ConnectionBar") &&
                 applicationSourceText.contains("QueryToolBar") &&
                 applicationSourceText.contains("QueryObjectAddress") &&
-                applicationSourceText.contains("MibTreeFilter") &&
-                applicationSourceText.contains("StructuredQueryResults"),
-                "Wave 1 exposes persistent context, query actions, target, filter, and structured results");
+                applicationSourceText.contains("MibTreeFilter"),
+                "the main window exposes persistent context, query actions, target, and the MIB tree filter");
+    // Results is checked through the real application in launch-smoke and through
+    // query-results workflows, rather than requiring its implementation in snmpb.cpp.
     ok &= check(!moduleSourceText.contains("MainUI()->LoadedModules") &&
                 !moduleSourceText.contains("MainUI()->UnloadedModules") &&
                 !moduleSourceText.contains("MainUI()->ModuleAdd") &&
@@ -488,7 +529,7 @@ int main(int argc, char **argv)
     auto *profileGuidance = widget.findChild<QLabel *>("MibProfileGuidance");
     ok &= check(profileSelector && profileSummary && !profileSummary->isHidden() &&
                 profileLabel && profileLabel->text() == "Active MIB Profile:" &&
-                profileGuidance && profileGuidance->text().contains("exact files") &&
+                profileGuidance && profileGuidance->text().contains("Custom profile") &&
                 widget.findChild<QPushButton *>("MibLibraryCheckDependencies") &&
                 !widget.findChild<QPushButton *>("MibProfileCheckDependencies") &&
                 !widget.findChild<QPushButton *>("MibProfileDownloadMissing") &&
@@ -547,12 +588,22 @@ int main(int argc, char **argv)
     auto *syncTable = synchronizationWidget.findChild<QTableWidget *>("MibLibraryTable");
     auto *syncAvailableFilter = synchronizationWidget.findChild<QLineEdit *>("MibProfileAvailableFilter");
     auto *syncMemberFilter = synchronizationWidget.findChild<QLineEdit *>("MibProfileMemberFilter");
-    auto *syncAvailable = synchronizationWidget.findChild<QListWidget *>("MibProfileAvailableList");
+    auto *syncAvailable = synchronizationWidget.findChild<QTreeWidget *>("MibProfileAvailableTree");
     auto *syncRequired = synchronizationWidget.findChild<QListWidget *>("MibProfileRequiredDependencies");
     auto *syncIncludeStandards = synchronizationWidget.findChild<QCheckBox *>("MibProfileIncludeStandards");
     const bool standardsStateBefore = syncIncludeStandards->isChecked();
     auto containsListIdentity = [](QListWidget *list, const QString &identity) {
         return !list->findItems(identity, Qt::MatchExactly).isEmpty();
+    };
+    // The Profiles page lists Library files with the modules each declares.
+    auto containsTreeIdentity = [](QTreeWidget *tree, const QString &identity) {
+        std::function<bool(QTreeWidgetItem *)> walk = [&](QTreeWidgetItem *item) {
+            if (item->data(0, Qt::UserRole + 3).toStringList().contains(identity)) return true;
+            for (int i = 0; i < item->childCount(); ++i) if (walk(item->child(i))) return true;
+            return false;
+        };
+        for (int i = 0; tree && i < tree->topLevelItemCount(); ++i) if (walk(tree->topLevelItem(i))) return true;
+        return false;
     };
     auto containsTableIdentity = [](QTableWidget *inventory, const QString &identity) {
         for (int row = 0; row < inventory->rowCount(); ++row)
@@ -560,7 +611,7 @@ int main(int argc, char **argv)
         return false;
     };
     ok &= check(!containsTableIdentity(syncTable, "NORTEL-nnSRNode-MIB") &&
-                !containsListIdentity(syncAvailable, "NORTEL-nnSRNode-MIB"),
+                syncAvailable && !containsTreeIdentity(syncAvailable, "NORTEL-nnSRNode-MIB"),
                 "new custom identity is absent before dependency discovery");
     bool initiallyMissing = false;
     for (int row = 0; row < syncRequired->count(); ++row)
@@ -573,7 +624,7 @@ int main(int argc, char **argv)
     application.processEvents();
     ok &= check(containsTableIdentity(syncTable, "NORTEL-nnSRNode-MIB"),
                 "Check Dependencies refreshes Inventory with learned identity immediately");
-    ok &= check(containsListIdentity(syncAvailable, "NORTEL-nnSRNode-MIB"),
+    ok &= check(containsTreeIdentity(syncAvailable, "NORTEL-nnSRNode-MIB"),
                 "Check Dependencies refreshes Profile Available MIBs immediately");
     ok &= check(syncSelector->currentData().toString() == MibProfileDefinitions::standardsId() &&
                 syncAvailableFilter->text() == "NORTEL" && syncMemberFilter->text() == "BASE" &&
@@ -594,5 +645,138 @@ int main(int argc, char **argv)
     }
     ok &= check(learnedRows == 1 && !staleMissing,
                 "required dependencies refresh to one available row without stale missing duplicate");
+    // ---- Profiles page: follow folders, exclude and take back files, add single files ----------
+    {
+        constexpr int PathRole = Qt::UserRole, KindRole = Qt::UserRole + 1, ExcludedRole = Qt::UserRole + 2;
+        const QDir library(QFileInfo(fixtureRoot).canonicalFilePath());
+        QDir().mkpath(library.filePath("Acme/Lab/deep"));
+        writeMib(library.filePath("Acme/Lab/a.mib"), "ACME-A DEFINITIONS ::= BEGIN\nEND\n");
+        writeMib(library.filePath("Acme/Lab/deep/b.mib"), "ACME-B DEFINITIONS ::= BEGIN\nEND\n");
+        QDir().mkpath(library.filePath("Acme/Empty"));
+        const QString lab = QFileInfo(library.filePath("Acme/Lab")).canonicalFilePath();
+        const QString aFile = QFileInfo(library.filePath("Acme/Lab/a.mib")).canonicalFilePath();
+        const QString bFile = QFileInfo(library.filePath("Acme/Lab/deep/b.mib")).canonicalFilePath();
+        const QString standardsFile = QFileInfo(QDir(standardsRoot).filePath("A-MIB")).canonicalFilePath();
+        MibLibraryWidget::Callbacks folderCallbacks = callbacks;
+        folderCallbacks.libraryFiles = [&]() {
+            QList<MibDependencyFileRecord> files;
+            const auto add = [&files](const QString &path, const QString &module) {
+                if (!QFileInfo::exists(path)) return;
+                MibDependencyFileRecord file; file.canonicalPath = QFileInfo(path).canonicalFilePath();
+                file.filename = QFileInfo(path).fileName(); file.sha256 = "aa";
+                file.importsByModule.insert(module, {}); files << file;
+            };
+            add(library.filePath("Acme/Lab/a.mib"), "ACME-A");
+            add(library.filePath("Acme/Lab/deep/b.mib"), "ACME-B");
+            add(library.filePath("Acme/Moved/a.mib"), "ACME-A");
+            add(standardsFile, "A-MIB");
+            return files;
+        };
+        MibLibraryWidget page({}, nullptr, &transport, folderCallbacks);
+        page.refresh();
+        page.showWorkspaceMode(1);
+        auto *available = page.findChild<QTreeWidget *>("MibProfileAvailableTree");
+        auto *members = page.findChild<QTreeWidget *>("MibProfileMemberTree");
+        auto *statusLine = page.findChild<QLabel *>("MibLibraryStatus");
+        QPushButton *add = nullptr, *remove = nullptr;
+        bool oldButtonsGone = true;
+        for (QPushButton *button : page.findChildren<QPushButton *>()) {
+            if (button->text() == "Add >") add = button;
+            if (button->text() == "< Remove") remove = button;
+            oldButtonsGone = oldButtonsGone && !button->text().startsWith("Add Files") &&
+                             !button->text().startsWith("Add Folder Snapshot");
+        }
+        ok &= check(available && members && statusLine && add && remove && oldButtonsGone,
+                    "the Profiles page has folder trees with Add and Remove, and no Add Files or Add Folder Snapshot");
+        const auto find = [](QTreeWidget *tree, const QString &kind, const QString &path) -> QTreeWidgetItem * {
+            QTreeWidgetItem *found = nullptr;
+            std::function<void(QTreeWidgetItem *)> walk = [&](QTreeWidgetItem *item) {
+                if (item->data(0, KindRole).toString() == kind && item->data(0, PathRole).toString() == path) found = item;
+                for (int i = 0; i < item->childCount(); ++i) walk(item->child(i));
+            };
+            for (int i = 0; tree && i < tree->topLevelItemCount(); ++i) walk(tree->topLevelItem(i));
+            return found;
+        };
+        const auto selectOnly = [](QTreeWidget *tree, QTreeWidgetItem *item) {
+            tree->clearSelection(); if (item) item->setSelected(true);
+        };
+        ok &= check(find(available, "folder", lab) && find(available, "file", bFile) &&
+                    find(available, "folder", QFileInfo(library.filePath("Acme/Empty")).canonicalFilePath()),
+                    "the left side shows the Library's folders (even empty ones) and the MIB files in them");
+
+        // The built-in profile cannot be edited, and says what to do instead.
+        page.selectProfile(MibProfileDefinitions::standardsId());
+        selectOnly(available, find(available, "folder", lab));
+        add->setEnabled(true); add->click();
+        // (Here the Standards id is held by a profile from before exact files; either way it is not
+        // changed, the page says why, and its modules are listed.)
+        const MibProfileRecord *standards = page.profileService()->find(MibProfileDefinitions::standardsId());
+        ok &= check(standards && standards->folders.isEmpty() && !statusLine->text().isEmpty() &&
+                    !statusLine->text().startsWith("Profile updated") &&
+                    members->topLevelItemCount() > 0 &&
+                    (members->topLevelItem(0)->text(2) == "Built in" || members->topLevelItem(0)->text(2) == "Listed module"),
+                    "a profile that cannot follow folders is left unchanged, the page says why, and its modules are listed");
+
+        QString error;
+        const QString id = page.profileService()->create("Folder lab", &error);
+        page.refresh();
+        page.selectProfile(id);
+        selectOnly(available, find(available, "folder", lab));
+        add->click();
+        const MibProfileRecord *profile = page.profileService()->find(id);
+        QTreeWidgetItem *followed = find(members, "followed-folder", lab);
+        ok &= check(profile && profile->folders.size() == 1 && profile->folders.at(0).canonicalPath == lab &&
+                    followed && followed->childCount() == 2 && followed->text(2) == "Followed · 2 MIB file(s)" &&
+                    find(available, "folder", lab)->text(1) == "Followed" &&
+                    find(available, "file", aFile)->text(1) == "Via folder",
+                    "Add on a folder follows it; the profile shows the folder with its files");
+
+        selectOnly(members, find(members, "folder-file", bFile));
+        remove->click();
+        profile = page.profileService()->find(id);
+        QTreeWidgetItem *excludedRow = find(members, "folder-file", bFile);
+        ok &= check(profile->folders.size() == 1 && profile->folders.at(0).excludedFiles == QStringList{bFile} && excludedRow &&
+                    excludedRow->data(0, ExcludedRole).toBool() && excludedRow->text(2) == "Excluded" &&
+                    find(members, "followed-folder", lab)->text(2) == "Followed · 1 MIB file(s) · 1 excluded" &&
+                    find(available, "file", bFile)->text(1) == "Excluded",
+                    "Remove on a file inside a followed folder excludes just that file, and both sides show it");
+
+        selectOnly(available, find(available, "file", bFile));
+        add->click();
+        ok &= check(page.profileService()->find(id)->folders.size() == 1 &&
+                    page.profileService()->find(id)->folders.at(0).excludedFiles.isEmpty() &&
+                    find(members, "folder-file", bFile) && find(members, "folder-file", bFile)->text(2) == "Included",
+                    "Add on an excluded file takes it back in");
+
+        selectOnly(available, find(available, "file", aFile));
+        add->click();
+        ok &= check(page.profileService()->find(id)->roots.isEmpty() && statusLine->text().contains("not added again"),
+                    "adding a file that the followed folder already brings in changes nothing and says why");
+
+        selectOnly(available, find(available, "file", standardsFile));
+        add->click();
+        profile = page.profileService()->find(id);
+        ok &= check(profile->roots.size() == 1 && find(members, "single-file", standardsFile) &&
+                    find(available, "file", standardsFile)->text(1) == "Added",
+                    "Add on a file outside the followed folders adds it as a single file");
+
+        selectOnly(members, find(members, "followed-folder", lab));
+        remove->click();
+        profile = page.profileService()->find(id);
+        ok &= check(profile->folders.isEmpty() && profile->roots.size() == 1 && !find(members, "followed-folder", lab),
+                    "Remove on a followed folder stops following it and keeps the single files");
+
+        // A followed folder that is moved away shows as missing; nothing is dropped.
+        selectOnly(available, find(available, "folder", lab));
+        add->click();
+        ok &= check(QDir().rename(lab, library.filePath("Acme/Moved")), "folder moved for the test");
+        page.refresh();
+        page.selectProfile(id);
+        QTreeWidgetItem *gone = find(members, "followed-folder", lab);
+        ok &= check(page.profileService()->find(id)->folders.size() == 1 && gone &&
+                    gone->text(2) == "Folder not found" && gone->childCount() == 0,
+                    "a followed folder that was moved away stays in the profile, marked Folder not found");
+        QDir().rename(library.filePath("Acme/Moved"), lab);
+    }
     return ok ? 0 : 1;
 }

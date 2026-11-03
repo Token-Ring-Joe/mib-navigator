@@ -114,8 +114,8 @@ QList<ConnectionCredentialChoice> ConnectionModel::credentialChoices(
     if (community) {
         for (const CommunityCredentialRecord &record : community->records()) {
             const QString id = record.identity.credentialId;
-            choices.append({communityKey(id, 1), communityLabel(record, 1), 1});
-            choices.append({communityKey(id, 0), communityLabel(record, 0), 0});
+            if (record.protocol != 0) choices.append({communityKey(id, 1), communityLabel(record, 1), 1});
+            if (record.protocol != 1) choices.append({communityKey(id, 0), communityLabel(record, 0), 0});
         }
     }
     if (usm) {
@@ -124,7 +124,7 @@ QList<ConnectionCredentialChoice> ConnectionModel::credentialChoices(
             const QString levelText = level == 2 ? QObject::tr("authPriv")
                 : level == 1 ? QObject::tr("authNoPriv") : QObject::tr("noAuthNoPriv");
             choices.append({usmKey(record.identity.credentialId),
-                            QObject::tr("%1 - SNMPv3 %2").arg(record.securityName, levelText), 2});
+                            QObject::tr("%1 - SNMPv3 %2").arg(record.displayName, levelText), 2});
         }
     }
     return choices;
@@ -158,6 +158,7 @@ ConnectionError ConnectionModel::build(
         const CommunityCredentialRecord *record = community ? community->find(parts.at(1)) : nullptr;
         if (!record) return ConnectionError::CredentialMissing;
         protocol = parts.at(2) == QLatin1String("v1") ? 0 : 1;
+        if (record->protocol >= 0 && protocol != record->protocol) return ConnectionError::CredentialIncomplete;
         values = CredentialResolver::communityValues(*record);
         if (values.readCommunity.isEmpty()) return ConnectionError::CredentialIncomplete;
     } else if (parts.size() == 2 && parts.at(0) == QLatin1String("usm")) {
@@ -165,13 +166,10 @@ ConnectionError ConnectionModel::build(
         if (!record) return ConnectionError::CredentialMissing;
         if (!UsmCredentialService::requirementsSatisfied(*record))
             return ConnectionError::CredentialIncomplete;
-        // The SNMPv3 engine looks the user up by security name, so two saved users with the
-        // same name cannot be told apart; refuse rather than guess which one is meant.
-        if (!usm->isSecurityNameUnambiguous(record->securityName))
-            return ConnectionError::CredentialAmbiguous;
         protocol = 2;
         values.securityName = record->securityName;
         values.securityLevel = UsmCredentialService::securityLevel(*record);
+        values.usmCredential = *record;
     } else {
         return ConnectionError::CredentialMissing;
     }

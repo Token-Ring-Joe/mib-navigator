@@ -32,9 +32,9 @@ int main(int argc, char **argv)
     QCoreApplication app(argc, argv);
     QTemporaryDir dir;
     bool ok = check(dir.isValid(), "temporary directory");
-    UsmCredentialRecord noAuth = usm("no-auth", 0, 0);
+    UsmCredentialRecord noAuth = usm("no-auth", 1, 1);
     noAuth.authSecret = {}; noAuth.privacySecret = {};
-    UsmCredentialRecord authNoPriv = usm("auth-only", 4, 0);
+    UsmCredentialRecord authNoPriv = usm("auth-only", 4, 1);
     authNoPriv.authSecret = {}; authNoPriv.privacySecret = {};
     UsmCredentialRecord authPriv = usm("auth-priv", 4, 3);
     authPriv.authSecret = {}; authPriv.privacySecret = {};
@@ -51,6 +51,16 @@ int main(int argc, char **argv)
                 "AuthNoPriv rejected complete requirements");
     ok &= check(UsmCredentialService::requirementsSatisfied(authPriv),
                 "AuthPriv rejected complete requirements");
+    ok &= check(UsmCredentialService::securityLevel(noAuth) == 0 &&
+                UsmCredentialService::securityLevel(authNoPriv) == 1 &&
+                UsmCredentialService::securityLevel(authPriv) == 2,
+                "SNMP++ protocol IDs map to the three security levels");
+    auto invalidProtocol = noAuth; invalidProtocol.authProtocol = 0;
+    ok &= check(!UsmCredentialService::requirementsSatisfied(invalidProtocol),
+                "zero is not a SNMP++ protocol ID");
+    auto privacyWithoutAuth = authPriv; privacyWithoutAuth.authProtocol = UsmProtocolNone;
+    ok &= check(!UsmCredentialService::requirementsSatisfied(privacyWithoutAuth),
+                "privacy requires an authentication protocol even with stored secrets");
     const QString identityFile = dir.filePath("credential-identities.conf");
     UsmCredentialRepository repository(identityFile);
 
@@ -178,7 +188,7 @@ int main(int argc, char **argv)
                 "ambiguous names are not merged");
     ok &= check(!ambiguous.isSecurityNameUnambiguous("duplicate"),
                 "two users with one name are reported as ambiguous");
-    UsmCredentialService incompatible({usm("noauth", 0, 0)}, repository);
+    UsmCredentialService incompatible({usm("noauth", 1, 1)}, repository);
     ok &= check(UsmCredentialService::securityLevel(incompatible.records().first()) == 0,
                 "a user with no authentication is noAuthNoPriv");
     ok &= check(reloaded.remove(stableId) && !reloaded.find(stableId),
@@ -228,6 +238,32 @@ int main(int argc, char **argv)
                     original.maxRepetitions == resolved.maxRepetitions &&
                     original.nonRepeaters == resolved.nonRepeaters,
                     "v1/v2c/v3 legacy credential resolution equivalence");
+    }
+
+    // New storage is independent of the wire username. Legacy mappings remain untouched.
+    {
+        UsmCredentialRepository variantRepository(dir.filePath("variants.ini"));
+        UsmCredentialService variants({usm("shared-user")}, variantRepository);
+        auto records = variants.records();
+        records[0].displayName = "Switch Engine";
+        auto alternate = variants.createWorkingRecord("shared-user");
+        alternate.displayName = "Fabric Engine"; alternate.authProtocol = 2;
+        alternate.authSecret = CredentialSecret("different-auth");
+        records.append(alternate);
+        ok &= check(variants.validateWorkingCopy(records), "same username with different named variants is valid");
+        ok &= check(variants.saveWorkingCopy(records), "variant store saves atomically");
+        UsmCredentialService restart({usm("irrelevant-legacy-user")}, variantRepository);
+        ok &= check(restart.records() == records && restart.storageError().isEmpty(),
+                    "restart preserves IDs, names, protocols and secrets for same-user variants");
+        ok &= check(!QFile::exists(variantRepository.path()), "new store does not rewrite legacy sidecar");
+        QFile file(variantRepository.recordPath());
+        ok &= check(file.open(QIODevice::WriteOnly), "corruption fixture opens");
+        file.write("{broken"); file.close();
+        UsmCredentialService corrupt({usm("must-not-fallback")}, variantRepository);
+        ok &= check(!corrupt.storageError().isEmpty() && corrupt.records().isEmpty() &&
+                    !corrupt.saveWorkingCopy(records), "corrupt store is reported and cannot be overwritten");
+        UsmCredentialRepository missingParent(dir.filePath("missing/path/identities.ini"));
+        ok &= check(!missingParent.saveRecords(records), "persistence failure is surfaced");
     }
 
     return ok ? 0 : 1;

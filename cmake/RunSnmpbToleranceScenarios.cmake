@@ -33,6 +33,84 @@ goodValue OBJECT-TYPE
     STATUS current
     DESCRIPTION "value"
     ::= { goodMIB 1 }
+goodTable OBJECT-TYPE
+    SYNTAX SEQUENCE OF GoodEntry
+    MAX-ACCESS not-accessible
+    STATUS current
+    DESCRIPTION "table"
+    ::= { goodMIB 2 }
+goodEntry OBJECT-TYPE
+    SYNTAX GoodEntry
+    MAX-ACCESS not-accessible
+    STATUS current
+    DESCRIPTION "row"
+    INDEX { goodName }
+    ::= { goodTable 1 }
+GoodEntry ::= SEQUENCE { goodName OCTET STRING, goodCount Integer32, goodNote OCTET STRING }
+goodName OBJECT-TYPE
+    SYNTAX OCTET STRING (SIZE (1..16))
+    MAX-ACCESS not-accessible
+    STATUS current
+    DESCRIPTION "index"
+    ::= { goodEntry 1 }
+goodCount OBJECT-TYPE
+    SYNTAX Integer32
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION "count"
+    ::= { goodEntry 2 }
+goodNote OBJECT-TYPE
+    SYNTAX OCTET STRING
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION "note"
+    ::= { goodEntry 3 }
+goodExtTable OBJECT-TYPE
+    SYNTAX SEQUENCE OF GoodExtEntry
+    MAX-ACCESS not-accessible
+    STATUS current
+    DESCRIPTION "table that augments goodTable"
+    ::= { goodMIB 3 }
+goodExtEntry OBJECT-TYPE
+    SYNTAX GoodExtEntry
+    MAX-ACCESS not-accessible
+    STATUS current
+    DESCRIPTION "row"
+    AUGMENTS { goodEntry }
+    ::= { goodExtTable 1 }
+GoodExtEntry ::= SEQUENCE { goodExtLevel Integer32 }
+goodExtLevel OBJECT-TYPE
+    SYNTAX Integer32
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION "level"
+    ::= { goodExtEntry 1 }
+goodImpTable OBJECT-TYPE
+    SYNTAX SEQUENCE OF GoodImpEntry
+    MAX-ACCESS not-accessible
+    STATUS current
+    DESCRIPTION "table with an IMPLIED index"
+    ::= { goodMIB 4 }
+goodImpEntry OBJECT-TYPE
+    SYNTAX GoodImpEntry
+    MAX-ACCESS not-accessible
+    STATUS current
+    DESCRIPTION "row"
+    INDEX { IMPLIED goodImpName }
+    ::= { goodImpTable 1 }
+GoodImpEntry ::= SEQUENCE { goodImpName OCTET STRING, goodImpValue Integer32 }
+goodImpName OBJECT-TYPE
+    SYNTAX OCTET STRING (SIZE (1..16))
+    MAX-ACCESS not-accessible
+    STATUS current
+    DESCRIPTION "index"
+    ::= { goodImpEntry 1 }
+goodImpValue OBJECT-TYPE
+    SYNTAX Integer32
+    MAX-ACCESS read-only
+    STATUS current
+    DESCRIPTION "value"
+    ::= { goodImpEntry 2 }
 END
 ]=])
 # The object definition has no "::=", which is a syntax error on line 14.
@@ -118,8 +196,8 @@ END
 #   REQUIRE_EXIT_ZERO | ALLOW_EXIT_ONE
 #   EXPECT <regex> ...)                    each must match launch-smoke.log
 function(run_scenario name)
-    cmake_parse_arguments(S "REQUIRE_EXIT_ZERO;ALLOW_EXIT_ONE;LIVE;NO_STANDARDS_SCOPE;BROKEN_SMI" ""
-        "FILES;ROOTS;MODIFIED_ROOTS;UNRESOLVED;EXPECT;REJECT;EDIT_FILE;EDIT_FROM;EDIT_TO" ${ARGN})
+    cmake_parse_arguments(S "REQUIRE_EXIT_ZERO;ALLOW_EXIT_ONE;LIVE;LIVE_SINGLE;NO_STANDARDS_SCOPE;BROKEN_SMI" ""
+        "FILES;ROOTS;MODIFIED_ROOTS;UNRESOLVED;EXPECT;REJECT;EDIT_FILE;EDIT_FROM;EDIT_TO;LIVE_TABLE;LIVE_WALK;LIVE_BIGWALK;LIVE_CREDENTIAL" ${ARGN})
     set(dir "${SNMPB_TOLERANCE_DIR}/${name}")
     set(library "${dir}/MIB-Library")
     file(MAKE_DIRECTORY "${library}/Standards" "${dir}/snmpb.sourceforge.net" "${dir}/state/mibs")
@@ -183,6 +261,11 @@ function(run_scenario name)
     file(WRITE "${dir}/snmpb.sourceforge.net/SnmpB.ini"
         "[mib-library]\nroot=${library}\ncurrent-profile=custom.test\n")
 
+    # Exercise real Get/timeout/Watch/Log/Detect workflows in persisted Dark mode;
+    # other scenarios retain Follow System coverage.
+    if(name STREQUAL "live-get-through-connection-bar")
+        file(APPEND "${dir}/snmpb.sourceforge.net/SnmpB.ini" "\n[ui]\ntheme=dark\n")
+    endif()
     set(smoke_mib "${library}/Standards/SNMPv2-MIB")
     set(edit_args "")
     if(S_EDIT_FILE)
@@ -196,6 +279,23 @@ function(run_scenario name)
         "${escaped_path}"
         "${SNMPB_EXECUTABLE}" --launch-smoke-test "${dir}"
         --smoke-mib "${smoke_mib}" ${edit_args})
+    set(live_credential "Smoke lab - SNMPv2c")
+    if(S_LIVE_CREDENTIAL)
+        set(live_credential "${S_LIVE_CREDENTIAL}")
+    endif()
+    set(live_table_args "")
+    if(S_LIVE_TABLE)
+        set(live_table_args --smoke-live-table "${S_LIVE_TABLE}")
+    endif()
+    if(S_LIVE_WALK)
+        list(APPEND live_table_args --smoke-live-walk "${S_LIVE_WALK}")
+    endif()
+    if(S_LIVE_BIGWALK)
+        list(APPEND live_table_args --smoke-live-bigwalk "${S_LIVE_BIGWALK}")
+    endif()
+    if(S_LIVE_SINGLE)
+        list(APPEND live_table_args --smoke-live-single)
+    endif()
     if(S_LIVE)
         # The test agent listens on 127.0.0.1 only and answers until asked to exit (or idle for 60 seconds). Both processes run
         # at the same time.
@@ -206,7 +306,7 @@ function(run_scenario name)
                 ${live_port} smokero "${dir}/agent.log" 0 60
             COMMAND ${app_command} --smoke-network
                 --smoke-live-target "127.0.0.1:${live_port}"
-                --smoke-live-credential "Smoke lab - SNMPv2c"
+                --smoke-live-credential "${live_credential}" ${live_table_args}
             WORKING_DIRECTORY "${dir}"
             RESULT_VARIABLE exit_codes
             OUTPUT_VARIABLE out ERROR_VARIABLE err
@@ -289,9 +389,9 @@ run_scenario(duplicate-providers REQUIRE_EXIT_ZERO
     FILES "Prod/IMPORTER-MIB=IMPORTER_MIB" "Alpha/DUP-MIB=DUP_MIB_A" "Beta/DUP-MIB=DUP_MIB_B"
     ROOTS "IMPORTER-MIB@Prod/IMPORTER-MIB"
     EXPECT "ENVIRONMENT status=Complete loaded=3"
-           "category=\"Duplicate providers\" module=DUP-MIB"
-           "Alpha/DUP-MIB was used because it comes first by path"
-           "Also found: [^\"]*Beta/DUP-MIB")
+           "category=\"Conflicting definitions\" module=DUP-MIB"
+           "Alpha/DUP-MIB \\(revision 2026-01-01 00:00\\) — used"
+           "Beta/DUP-MIB \\(revision 2026-01-01 00:00\\)")
 
 # 6b. Two selected files declare the same module (two revisions side by side in one folder, as in
 #     real vendor collections): one is used, the other is set aside, and the profile still loads.
@@ -299,9 +399,34 @@ run_scenario(duplicate-selected-files REQUIRE_EXIT_ZERO
     FILES "Prod/DUP-REV-A=DUP_MIB_A" "Prod/DUP-REV-B=DUP_MIB_B" "Prod/GOOD-MIB=GOOD_MIB"
     ROOTS "DUP-MIB@Prod/DUP-REV-A" "DUP-MIB@Prod/DUP-REV-B" "GOOD-MIB@Prod/GOOD-MIB"
     EXPECT "ENVIRONMENT status=[A-Za-z]+ loaded=[1-9]"
-           "category=\"Duplicate providers\" module=DUP-MIB"
-           "DUP-REV-A was used because it comes first by path"
+           "category=\"Conflicting definitions\" module=DUP-MIB"
+           "DUP-REV-A \\(revision 2026-01-01 00:00\\) — used"
     REJECT "Profile Environment build failed" "Multiple exact providers")
+
+string(REPLACE "202601010000Z" "202610010000Z" DUP_MIB_NEW "${DUP_MIB_B}")
+foreach(kind IN ITEMS selected dependency)
+    if(kind STREQUAL "selected")
+        set(revision_roots "DUP-MIB@Prod/A-old" "DUP-MIB@Prod/Z-new")
+    else()
+        set(revision_roots "IMPORTER-MIB@Prod/IMPORTER-MIB")
+    endif()
+    run_scenario(newest-revision-${kind} REQUIRE_EXIT_ZERO
+        FILES "Prod/A-old=DUP_MIB_A" "Prod/Z-new=DUP_MIB_NEW" "Prod/IMPORTER-MIB=IMPORTER_MIB"
+        ROOTS ${revision_roots}
+        EXPECT "category=\"Conflicting definitions\" module=DUP-MIB"
+               "Z-new.*revision 2026-10-01 00:00.*— used"
+               "Selection: newest LAST-UPDATED revision"
+        REJECT "Profile Environment build failed")
+endforeach()
+
+# A Modified note on an edited duplicate must not hide its conflicting-definition warning.
+run_scenario(edited-conflicting-roots REQUIRE_EXIT_ZERO
+    FILES "Prod/A-old=DUP_MIB_A" "Prod/Z-new=DUP_MIB_NEW"
+    ROOTS "DUP-MIB@Prod/A-old" "DUP-MIB@Prod/Z-new" MODIFIED_ROOTS "DUP-MIB"
+    EXPECT "category=\"Conflicting definitions\" module=DUP-MIB"
+           "category=\"Modified\" module=DUP-MIB file=Z-new"
+           "Selection: newest LAST-UPDATED revision"
+    REJECT "Profile Environment build failed")
 
 # 6c. A MIB the parser cannot fully understand must never crash the application.
 run_scenario(unknown-type-in-textual-convention REQUIRE_EXIT_ZERO BROKEN_SMI
@@ -380,7 +505,7 @@ if(SNMPB_PYTHON)
         EXPECT "PASS: live: the Get through the connection bar returned the agent's sysDescr"
                "PASS: live: the target was remembered in the recent-target history"
                "PASS: live: a request that gets no answer shows an error line above the Results table"
-               "PASS: live: a watch polls repeatedly and shows change and rate"
+               "PASS: live: a watch continues polling with its workspace hidden and panel collapsed"
                "PASS: live: the watch kept its own target after the connection bar changed"
                "PASS: live: the Watch tab shows the row and its change"
                "PASS: live: removing a watch removes its row"
@@ -404,6 +529,124 @@ if(SNMPB_PYTHON)
     endif()
 else()
     message(STATUS "Scenario live-get-through-connection-bar: skipped (no Python interpreter)")
+endif()
+
+# 13. Query Table through the connection bar, over real SNMP to the loopback agent: a table whose
+#     index column is not accessible and whose last column only one row has. SNMPv2c uses
+#     GETBULK, SNMPv1 uses GETNEXT and noSuchName; both must give the same three rows.
+if(SNMPB_PYTHON)
+    foreach(table_credential "Smoke lab - SNMPv2c" "Smoke lab - SNMPv1")
+        string(REGEX REPLACE "[^A-Za-z0-9]+" "-" table_name "live-table-${table_credential}")
+        run_scenario(${table_name} REQUIRE_EXIT_ZERO LIVE
+            LIVE_TABLE "1.3.6.1.4.1.90001.2.1" LIVE_CREDENTIAL "${table_credential}"
+            FILES "Prod/GOOD-MIB=GOOD_MIB" ROOTS "GOOD-MIB@Prod/GOOD-MIB"
+            EXPECT "LIVE-TABLE-HEADER Instance,Index,goodCount,goodNote"
+                   "LIVE-TABLE-ROW 4.101.116.104.48,goodName=\"eth0\",10,"
+                   "LIVE-TABLE-ROW 4.101.116.104.49,goodName=\"eth1\",20,uplink"
+                   "LIVE-TABLE-ROW 2.108.111,goodName=\"lo\",30,"
+                   "LIVE-TABLE-ROWS 3"
+                   "PASS: live-table: the table finished with three rows and no error line"
+                   "PASS: live-table: the status line summarises the table"
+                   "PASS: live-table: Copy table as CSV puts the table on the clipboard"
+                   "PASS: live-table: Copy results as CSV puts the Results table on the clipboard"
+                   "PASS: live-table: the Log lists the table request with its outcome and row count"
+                   "LIVE-LOG op=Table target=127\\.0\\.0\\.1:[0-9]+ identity=\"SNMPv(1|2c)\" result=\"OK\" objects=3"
+                   "PASS: live-table: Copy as CSV text matches the table"
+                   "PASS: live-row: discovery shows progress without a false empty-result message"
+                   "PASS: live-row: Results contains only the selected row with every readable column"
+                   "PASS: live-row: cancelling selection preserves previous results"
+                   "PASS: live-row: Stop cancels discovery and preserves existing results"
+                   "PASS: live-table: the table holds exactly the objects a plain Walk of the same subtree returns"
+            REJECT "FAIL")
+    endforeach()
+    # AUGMENTS (the row shares goodTable's index) and IMPLIED (the last string index has no
+    # length prefix), decoded from the MIB and read over SNMPv2c GETBULK.
+    run_scenario(live-table-augments-and-implied REQUIRE_EXIT_ZERO LIVE
+        LIVE_TABLE "1.3.6.1.4.1.90001.3.1,1.3.6.1.4.1.90001.4.1"
+        FILES "Prod/GOOD-MIB=GOOD_MIB" ROOTS "GOOD-MIB@Prod/GOOD-MIB"
+        EXPECT "LIVE-TABLE-HEADER Instance,Index,goodExtLevel"
+               "LIVE-TABLE-ROW 4.101.116.104.48,goodName=\"eth0\",1"
+               "LIVE-TABLE-ROW 2.108.111,goodName=\"lo\",3"
+               "LIVE-TABLE-HEADER Instance,Index,goodImpValue"
+               "LIVE-TABLE-ROW 97.98,goodImpName=\"ab\",5"
+               "LIVE-TABLE-ROW 120.121.122,goodImpName=\"xyz\",6"
+               "LIVE-TABLE-ROWS 3"
+               "LIVE-TABLE-ROWS 2"
+        REJECT "FAIL")
+endif()
+
+# 14a. Get, GetNext, GetBulk, failing Gets and Set through the connection bar, SNMPv2c and SNMPv1.
+#      Set is sent to the loopback test agent only, which keeps the new value in memory.
+#      The exact text each one shows is checked: the Query pane, the status line and the Log.
+#      v1 reports a missing object as noSuchName naming the varbind; this test agent answers a
+#      missing object over v2c with endOfMibView, which shows nothing.
+if(SNMPB_PYTHON)
+    set(single_common
+        "LIVE-SINGLE get query=\"-----SNMP query started----- 1: mib-2\\.1\\.1\\.0 Loopback test agent \\(not a real device\\) -----SNMP query finished----- Total # of Requests = 1 Total # of Objects = 1\""
+        "LIVE-SINGLE get status failed=0 text=\"Finished: 1 object\\(s\\) in 1 request\\(s\\)\\.\""
+        "LIVE-SINGLE get log op=Get oid=1\\.3\\.6\\.1\\.2\\.1\\.1\\.1\\.0 result=\"OK\" objects=1"
+        "LIVE-SINGLE getnext status failed=0 text=\"Finished: 1 object\\(s\\) in 1 request\\(s\\)\\.\""
+        "LIVE-SINGLE getnext log op=GetNext oid=1\\.3\\.6\\.1\\.2\\.1\\.1\\.1 result=\"OK\" objects=1"
+        "LIVE-SINGLE getbulk log op=GetBulk oid=1\\.3\\.6\\.1\\.2\\.1\\.1 result=\"OK\" objects="
+        "LIVE-SINGLE set query=\"-----SNMP set started----- 1: mib-2\\.1\\.5\\.0 renamed-by-set -----SNMP set finished-----\""
+        "LIVE-SINGLE set status failed=0 text=\"1: mib-2\\.1\\.5\\.0 renamed-by-set SNMP set finished\""
+        "LIVE-SINGLE set log op=Set oid=1\\.3\\.6\\.1\\.2\\.1\\.1\\.5\\.0 result=\"OK\" objects=1"
+        "LIVE-SINGLE set-readback row SNMPv2-SMI::mib-2\\.1\\.5\\.0 \\| 1\\.5\\.0 \\| 1\\.3\\.6\\.1\\.2\\.1\\.1\\.5\\.0 \\|  \\| renamed-by-set "
+        "LIVE-SINGLE set-unknown log op=Set oid=1\\.3\\.6\\.1\\.2\\.1\\.1\\.99\\.0 result=\"Failed\" objects=1")
+    run_scenario(live-single-Smoke-lab-SNMPv2c REQUIRE_EXIT_ZERO LIVE LIVE_SINGLE
+        LIVE_CREDENTIAL "Smoke lab - SNMPv2c"
+        FILES "Prod/GOOD-MIB=GOOD_MIB" ROOTS "GOOD-MIB@Prod/GOOD-MIB"
+        EXPECT ${single_common}
+               "LIVE-SINGLE getbulk status failed=0 text=\"Finished: 10 object\\(s\\) in 1 request\\(s\\)\\.\""
+               "LIVE-SINGLE getbulk row GOOD-MIB::goodCount\\.4\\.101\\.116\\.104\\.49 \\| 4\\.101\\.116\\.104\\.49 "
+               "LIVE-SINGLE get-missing status failed=0 text=\"Finished: 0 object\\(s\\) in 1 request\\(s\\)\\. The device returned no objects\\.\""
+               "LIVE-SINGLE set-readonly status failed=1 text=\"ERROR on varbind #1: mib-2\\.1\\.1\\.0 notWritable: this object cannot be changed \\(SNMP error 17\\) SNMP set finished\""
+               "LIVE-SINGLE set-wrongtype status failed=1 text=\"ERROR on varbind #1: mib-2\\.1\\.5\\.0 wrongType: the value has the wrong data type for this object \\(SNMP error 7\\) SNMP set finished\""
+               "LIVE-SINGLE set-wrongvalue status failed=1 text=\"ERROR on varbind #1: goodValue\\.0 wrongValue: the device does not accept this value for this object \\(SNMP error 10\\) SNMP set finished\""
+               "LIVE-SINGLE set-unknown status failed=1 text=\"ERROR on varbind #1: mib-2\\.1\\.99\\.0 noAccess: this community or user is not allowed to change this object \\(SNMP error 6\\) SNMP set finished\""
+        REJECT "FAIL")
+    run_scenario(live-single-Smoke-lab-SNMPv1 REQUIRE_EXIT_ZERO LIVE LIVE_SINGLE
+        LIVE_CREDENTIAL "Smoke lab - SNMPv1"
+        FILES "Prod/GOOD-MIB=GOOD_MIB" ROOTS "GOOD-MIB@Prod/GOOD-MIB"
+        EXPECT ${single_common}
+               "LIVE-SINGLE getbulk status failed=0 text=\"Finished: 1 object\\(s\\) in 1 request\\(s\\)\\.\""
+               "LIVE-SINGLE get-missing query=\"-----SNMP query started----- ERROR on varbind #1: mib-2\\.1\\.9\\.0 SNMP: Variable does not exist -----SNMP query finished-----"
+               "LIVE-SINGLE set-readonly status failed=1 text=\"ERROR on varbind #1: mib-2\\.1\\.1\\.0 readOnly: this object cannot be changed \\(SNMP error 4\\) SNMP set finished\""
+               "LIVE-SINGLE set-wrongtype status failed=1 text=\"ERROR on varbind #1: mib-2\\.1\\.5\\.0 badValue: "
+               "LIVE-SINGLE set-unknown status failed=1 text=\"ERROR on varbind #1: mib-2\\.1\\.99\\.0 noSuchName: the device does not have this object \\(SNMP error 2\\) SNMP set finished\""
+               "LIVE-SINGLE getnext-end query=\"-----SNMP query started----- ERROR on varbind #1: goodMIB\\.9\\.9 SNMP: Variable does not exist"
+        REJECT "FAIL")
+endif()
+
+# 14. Walk against an agent that answers out of order: after 9.1 and 9.2 it returns 9.1 again.
+#     The walk must end by itself with a plain reason and keep the two objects already read
+#     (it used to run until Stop was pressed). SNMPv2c uses GETBULK, SNMPv1 GETNEXT.
+if(SNMPB_PYTHON)
+    foreach(walk_credential "Smoke lab - SNMPv2c" "Smoke lab - SNMPv1")
+        string(REGEX REPLACE "[^A-Za-z0-9]+" "-" walk_name "live-walk-out-of-order-${walk_credential}")
+        run_scenario(${walk_name} REQUIRE_EXIT_ZERO LIVE
+            LIVE_WALK "1.3.6.1.4.1.90001.9" LIVE_CREDENTIAL "${walk_credential}"
+            FILES "Prod/GOOD-MIB=GOOD_MIB" ROOTS "GOOD-MIB@Prod/GOOD-MIB"
+            EXPECT "LIVE-WALK rows=2 oids=1\\.3\\.6\\.1\\.4\\.1\\.90001\\.9\\.1,1\\.3\\.6\\.1\\.4\\.1\\.90001\\.9\\.2 stopEnabled=0"
+                   "LIVE-STATUS-AFTER-WALK failed=1 text=\"[^\"]*not in increasing order"
+                   "LIVE-LOG op=Walk target=127\\.0\\.0\\.1:[0-9]+ identity=\"SNMPv(1|2c)\" result=\"Failed\" objects=2"
+                   "PASS: live: Walk lists the subtree and finishes"
+            REJECT "FAIL" "LIVE-WALK-NEEDED-STOP")
+    endforeach()
+endif()
+
+# 15. A large Walk (3000 objects made up by the test agent) must not freeze the window, and the
+#     Stop action must end it promptly. The window freezing used to make the desktop report that
+#     the application was not responding.
+if(SNMPB_PYTHON)
+    run_scenario(live-walk-large-and-stop REQUIRE_EXIT_ZERO LIVE
+        LIVE_BIGWALK "1.3.6.1.4.1.90001.10" LIVE_CREDENTIAL "Smoke lab - SNMPv2c"
+        FILES "Prod/GOOD-MIB=GOOD_MIB" ROOTS "GOOD-MIB@Prod/GOOD-MIB"
+        EXPECT "PASS: live: a large Walk lists every object and finishes"
+               "PASS: live: the window stays responsive during a large Walk"
+               "PASS: live: Stop ends a large Walk promptly and says it was stopped"
+               "PASS: live: the window stays responsive while a Walk is stopped"
+        REJECT "FAIL")
 endif()
 
 if(failures)

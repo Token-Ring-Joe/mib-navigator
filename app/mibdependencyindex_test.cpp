@@ -192,6 +192,13 @@ int main(int argc, char **argv)
                 MibDependencyIndex::pathForLibraryRoot(libraryB),
                 "each canonical Library root has a distinct persistent index path");
 
+    app.setProperty("snmpb.isolatedStateRoot", temp.filePath("state"));
+    const QString isolatedIndexPath = MibDependencyIndex::pathForLibraryRoot(libraryA);
+    ok &= check(isolatedIndexPath.startsWith(temp.filePath("state/mibs/indexes/")) &&
+                isolatedIndexPath != MibDependencyIndex::pathForLibraryRoot(libraryB),
+                "isolated indexes stay under the isolated state root and retain Library identity");
+    app.setProperty("snmpb.isolatedStateRoot", QVariant());
+
     const QString sharedOwnershipPath = QDir(ownershipFixture.path()).filePath("shared.json");
     MibDependencyIndex storedA(sharedOwnershipPath, libraryA); storedA.update({standardsA});
     MibDependencyIndex wrongOwner(sharedOwnershipPath, libraryB);

@@ -1,3 +1,4 @@
+#include "appearancecolors.h"
 /*
     Copyright (C) 2004-2011 Martin Jolicoeur (snmpb1@gmail.com) 
 
@@ -173,6 +174,26 @@ MibHighlighter::MibHighlighter(QTextDocument *parent): QSyntaxHighlighter(parent
     string.setForeground(Qt::darkGreen);
     string_start = QRegularExpression("\"");
     string_end = QRegularExpression("\"");
+    applyPalette(QGuiApplication::palette());
+}
+
+void MibHighlighter::applyPalette(const QPalette &palette)
+{
+    constexpr int original = QTextFormat::UserProperty + 301;
+    const auto recolor = [&palette](QTextCharFormat &format) {
+        if (!format.hasProperty(original)) format.setProperty(original, format.foreground().color());
+        const QColor ink = format.property(original).value<QColor>();
+        QColor color = palette.color(QPalette::Link);
+        if (ink == QColor(Qt::red)) color = palette.color(QPalette::Disabled, QPalette::Text);
+        else if (ink == QColor(Qt::darkGreen)) color = AppearanceColors::foreground(palette, AppearanceColors::Success);
+        else if (ink == QColor(Qt::darkYellow)) color = AppearanceColors::foreground(palette, AppearanceColors::Warning);
+        else if (ink == QColor(Qt::darkRed)) color = AppearanceColors::foreground(palette, AppearanceColors::Error);
+        else if (ink == QColor(Qt::magenta)) color = palette.color(QPalette::LinkVisited);
+        format.setForeground(color);
+    };
+    for (auto &rule : rules) recolor(rule.format);
+    recolor(string);
+    rehighlight(); // formatting only: source bytes and editor undo state are untouched
 }
 
 void MibHighlighter::highlightBlock(const QString &text)

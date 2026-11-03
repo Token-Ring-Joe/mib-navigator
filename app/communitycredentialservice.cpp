@@ -1,10 +1,11 @@
 #include "communitycredentialservice.h"
 #include <QUuid>
+#include <algorithm>
 
 CommunityCredentialService::CommunityCredentialService(
     const QString &credentialFile, QObject *parent)
     : QObject(parent), credentialRepository(credentialFile),
-      credentials(credentialRepository.load()) {}
+      credentials(credentialRepository.load(&loadError)) {}
 
 const QList<CommunityCredentialRecord> &CommunityCredentialService::records() const { return credentials; }
 const CommunityCredentialRecord *CommunityCredentialService::find(const QString &id) const
@@ -46,4 +47,27 @@ bool CommunityCredentialService::remove(const QString &id)
 }
 
 QString CommunityCredentialService::newId() { return QUuid::createUuid().toString(QUuid::WithoutBraces); }
-bool CommunityCredentialService::saveCredentials() { return credentialRepository.save(credentials); }
+bool CommunityCredentialService::saveCredentials() { return loadError.isEmpty() && credentialRepository.save(credentials); }
+
+bool CommunityCredentialService::saveWorkingCopy(const QList<CommunityCredentialRecord> &records) const
+{
+    return loadError.isEmpty() && credentialRepository.save(records);
+}
+void CommunityCredentialService::applyCommitted(const QList<CommunityCredentialRecord> &records)
+{
+    if (credentials == records) return;
+    const auto before = credentials;
+    credentials = records;
+    for (const auto &old : before) if (!find(old.identity.credentialId)) emit credentialDeleted(old.identity.credentialId);
+    for (const auto &r : records) {
+        const auto it = std::find_if(before.cbegin(), before.cend(), [&](const auto &old) {
+            return old.identity.credentialId == r.identity.credentialId;
+        });
+        if (it == before.cend()) emit credentialCreated(r.identity.credentialId);
+        else if (!(*it == r)) {
+            if (it->displayName != r.displayName) emit credentialRenamed(r.identity.credentialId);
+            emit credentialUpdated(r.identity.credentialId);
+        }
+    }
+    emit credentialsChanged();
+}

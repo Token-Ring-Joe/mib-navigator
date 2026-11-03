@@ -1,3 +1,4 @@
+#include "appearancecolors.h"
 #include "watchpanel.h"
 
 #include <QAction>
@@ -25,8 +26,11 @@ WatchPanel::WatchPanel(WatchService *watchService,
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(4, 4, 4, 4);
 
+    auto *hint = new QLabel(tr("Right-click an object in the Query tree or a value in Results and choose Watch."), this);
+    hint->setWordWrap(true);
+    layout->addWidget(hint);
     auto *bar = new QHBoxLayout;
-    bar->addWidget(new QLabel(tr("Right-click a value in Results and choose Watch. New watches repeat every"), this));
+    bar->addWidget(new QLabel(tr("New watches repeat every"), this));
     interval = new QSpinBox(this);
     interval->setObjectName(QStringLiteral("WatchInterval"));
     interval->setRange(1, 3600); interval->setValue(5); interval->setSuffix(tr(" s"));
@@ -45,6 +49,7 @@ WatchPanel::WatchPanel(WatchService *watchService,
 
     table = new QTableWidget(0, ColumnCount, this);
     table->setObjectName(QStringLiteral("WatchTable"));
+    table->setItemDelegate(new AppearanceColors::ItemDelegate(table));
     table->setHorizontalHeaderLabels({tr("Target"), tr("Credential"), tr("Object"), tr("Value"), tr("Change"),
                                       tr("Rate"), tr("Received"), tr("Notes"), tr("Every"), tr("Status"), tr("Updated")});
     table->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -141,8 +146,8 @@ void WatchPanel::fill(int row, const WatchRow &data)
         item->setToolTip(column == Status || column == Notes ? cells.at(column) : QString());
         if (column == Value || column == Change || column == Rate || column == Received)
             item->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-        item->setBackground(failed ? QBrush(QColor(0xf8, 0xd7, 0xda))
-                                   : !data.warnings.isEmpty() ? QBrush(QColor(0xff, 0xe4, 0xc2)) : QBrush());
-        item->setForeground(data.paused ? QBrush(QColor(0x80, 0x80, 0x80)) : QBrush());
+        item->setData(AppearanceColors::ToneRole, failed ? AppearanceColors::Error
+            : !data.warnings.isEmpty() ? AppearanceColors::Warning : AppearanceColors::None);
+        item->setData(AppearanceColors::MutedRole, data.paused);
     }
 }

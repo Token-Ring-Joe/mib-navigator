@@ -15,6 +15,9 @@ public:
 
     const QList<UsmCredentialRecord> &records() const;
     bool saveIdentities() const;
+    bool saveWorkingCopy(const QList<UsmCredentialRecord> &records) const;
+    QString storageError() const { return loadError; }
+    bool needsMigration() const { return loadError.isEmpty() && !repository.hasRecordStore() && !credentials.isEmpty(); }
     bool rename(const QString &credentialId, const QString &securityName);
     bool remove(const QString &credentialId);
     const UsmCredentialRecord *find(const QString &credentialId) const;
@@ -39,6 +42,7 @@ private:
     int indexOfId(const QString &credentialId) const;
     QList<UsmCredentialRecord> credentials;
     UsmCredentialRepository repository;
+    QString loadError;
 };
 
 #endif

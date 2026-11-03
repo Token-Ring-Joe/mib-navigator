@@ -12,6 +12,9 @@ set(library_root "${SNMPB_SMOKE_DIR}/MIB-Library")
 file(MAKE_DIRECTORY "${settings_dir}")
 file(MAKE_DIRECTORY "${library_root}/Standards")
 file(WRITE "${settings_dir}/SnmpB.ini"
+"[ui]\n"
+"theme=dark\n"
+"\n"
 "[mib-library]\n"
 "root=${library_root}\n"
 "current-profile=builtin.standards-mib2\n"

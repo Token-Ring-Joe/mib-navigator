@@ -106,6 +106,11 @@ bool setCloseOnExecFlag(SnmpSocket fd);
 class DLLOPT Snmp: public SnmpSynchronized
 {
  public:
+#ifdef _SNMPv3
+  // A session may own an independent security context; legacy sessions use v3MP::I.
+  void set_v3mp(v3MP *model) { session_v3mp = model; }
+  v3MP *get_v3mp() const;
+#endif
   //------------------[ constructors ]----------------------------------
 
   /** @name Constructors and Destructor */
@@ -581,6 +586,9 @@ protected:
 #endif
 
  protected:
+#ifdef _SNMPv3
+  v3MP *session_v3mp = 0;
+#endif
 
   /**
    * Generate a unique (for this Snmp obect) request id.

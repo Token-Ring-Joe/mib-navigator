@@ -359,6 +359,11 @@ v3MP::Cache::Cache()
 
 v3MP::Cache::~Cache()
 {
+  clear();
+}
+
+void v3MP::Cache::clear()
+{
   if (table)
   {
     if (entries > 0)
@@ -654,17 +659,17 @@ void v3MP::Cache::delete_content(struct v3MP::Cache::Entry_T &ce)
 
 // Initialize the v3MP.
 v3MP::v3MP(const OctetStr& snmpEngineID,
-           unsigned int engineBoots, int &construct_status)
+           unsigned int engineBoots, int &construct_status, bool make_default)
   : own_engine_id(0), usm(0)
 {
-  if (I)
+  if (make_default && I)
   {
     debugprintf(0, "v3MP: You must not create two objects of this class!");
     construct_status = SNMPv3_MP_ERROR;
     return;
   }
 
-  I = this;
+  if (make_default) I = this;
 
   snmpUnknownSecurityModels = 0;
   snmpInvalidMsgs = 0;
@@ -697,6 +702,8 @@ v3MP::v3MP(const OctetStr& snmpEngineID,
 // Free all allocated ressources of the v3MP.
 v3MP::~v3MP()
 {
+  // Cached security references belong to USM and must be released while it is alive.
+  cache.clear();
   if (own_engine_id)
     delete [] own_engine_id;
   own_engine_id = 0;
@@ -707,7 +714,7 @@ v3MP::~v3MP()
     usm = 0;
   }
 
-  I = 0;
+  if (I == this) I = 0;
 }
 
 // Remove all occurences of this engine id from v3MP and USM.

@@ -4,8 +4,10 @@
 
 namespace {
 constexpr quint64 kCounter32Modulus = 4294967296ull;
-// Without sysUpTime a falling Counter32 can be a wrap or a reset. A counter that was already in
-// the top quarter of its range is far more likely to have wrapped; anything else is a reset.
+// A falling Counter32 can be a wrap or a reset (for example "clear counters"). sysUpTime cannot
+// tell them apart, because a cleared counter does not restart the device. A counter that was
+// already in the top quarter of its range is far more likely to have wrapped; anything else is a
+// reset.
 constexpr quint64 kLikelyWrapFloor = 0xC0000000ull;
 
 QString signedText(qint64 delta)
@@ -57,7 +59,7 @@ WatchChange ComputeWatchChange(const WatchSample &previous, const WatchSample &c
         if (current.counter >= previous.counter) {
             delta = current.counter - previous.counter;
         } else if (current.kind == WatchSample::Kind::Counter32 &&
-                   (bothUptime || previous.counter >= kLikelyWrapFloor)) {
+                   previous.counter >= kLikelyWrapFloor) {
             delta = kCounter32Modulus - previous.counter + current.counter;
             result.note = QObject::tr("Counter wrapped");
         } else {

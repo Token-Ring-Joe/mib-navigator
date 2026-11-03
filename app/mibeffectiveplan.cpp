@@ -8,6 +8,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMap>
+#include <QRegularExpression>
 #include <QSet>
 #include <algorithm>
 #include <functional>
@@ -417,6 +418,22 @@ QByteArray MibEffectivePlanResolver::canonicalBytes(const MibEffectivePlan &plan
         value.insert(QStringLiteral("alternatives"), alternatives);
         members.append(value);
     }
+    // Reports are part of the cached Environment too: a losing provider can change or
+    // disappear while the selected files stay identical. Hash the source facts, not translated
+    // wording, so Refresh cannot return an Environment with an obsolete conflict report.
+    QJsonArray findings;
+    for (const auto &finding : plan.resolutionDiagnostics) {
+        QJsonArray candidates;
+        for (const auto &candidate : finding.candidates)
+            candidates.append(QJsonObject{{QStringLiteral("path"), candidate.canonicalPath},
+                {QStringLiteral("hash"), candidate.sha256}});
+        findings.append(QJsonObject{{QStringLiteral("identity"), finding.identity},
+            {QStringLiteral("tier"), static_cast<int>(finding.tier)},
+            {QStringLiteral("scope"), finding.scope},
+            {QStringLiteral("requesters"), strings(finding.requesters)},
+            {QStringLiteral("candidates"), candidates}});
+    }
+    root.insert(QStringLiteral("findings"), findings);
     root.insert(QStringLiteral("members"), members);
     root.insert(QStringLiteral("order"), strings(plan.initialLoadOrder));
     root.insert(QStringLiteral("cycles"), strings(plan.cycles));
@@ -513,6 +530,85 @@ MibEffectivePlan MibEffectiveRuntimePlanResolver::resolve(
         return nullptr;
     };
 
+    // Read only conflicting providers, once per resolve. Strings and comments are tokens,
+    // so dates in descriptions or another module in a multi-module file cannot win.
+    QMap<QString, QMap<QString, QDateTime>> revisions;
+    const auto revisionFor = [&revisions](const QString &path, const QString &identity) {
+        if (!revisions.contains(path)) {
+            QMap<QString, QDateTime> dates;
+            QFile file(path);
+            if (file.open(QIODevice::ReadOnly)) {
+                const QString text = QString::fromUtf8(file.readAll());
+                const QRegularExpression lexer(QStringLiteral(
+                    R"rx(--[^\r\n]*?(?:--|(?=\r?\n|$))|"(?:""|[^"])*"|[A-Za-z][A-Za-z0-9-]*|::=)rx"));
+                QStringList tokens;
+                auto matches = lexer.globalMatch(text);
+                while (matches.hasNext()) {
+                    const QString token = matches.next().captured();
+                    if (!token.startsWith(QStringLiteral("--"))) tokens.append(token);
+                }
+                QString module;
+                bool moduleIdentity = false;
+                for (qsizetype i = 0; i < tokens.size(); ++i) {
+                    if (i + 2 < tokens.size() &&
+                        (tokens[i + 1] == QStringLiteral("DEFINITIONS") ||
+                         tokens[i + 1] == QStringLiteral("PIB-DEFINITIONS")) &&
+                        tokens[i + 2] == QStringLiteral("::=")) {
+                        module = tokens[i]; moduleIdentity = false;
+                    } else if (tokens[i] == QStringLiteral("MODULE-IDENTITY") && i > 0 &&
+                               i + 1 < tokens.size() && tokens[i + 1] == QStringLiteral("LAST-UPDATED")) {
+                        moduleIdentity = true;
+                    } else if (moduleIdentity && tokens[i] == QStringLiteral("LAST-UPDATED") &&
+                               i + 1 < tokens.size() && !module.isEmpty()) {
+                        QString date = tokens[++i];
+                        if (date.startsWith('"') && date.endsWith('"')) date = date.mid(1, date.size() - 2);
+                        if (date.size() == 11) date.prepend(QStringLiteral("19"));
+                        QDateTime parsed = QDateTime::fromString(date, QStringLiteral("yyyyMMddHHmmt"));
+                        if (parsed.isValid() && parsed.toString(QStringLiteral("yyyyMMddHHmm'Z'")) == date)
+                            dates.insert(module, parsed);
+                        moduleIdentity = false;
+                    } else if (tokens[i] == QStringLiteral("END")) {
+                        module.clear(); moduleIdentity = false;
+                    }
+                }
+            }
+            revisions.insert(path, dates);
+        }
+        return revisions.value(path).value(identity);
+    };
+    const auto chooseProvider = [&revisionFor, &key](const QString &identity,
+                                                    QList<MibIndexedProvider> candidates) {
+        std::sort(candidates.begin(), candidates.end(), [&key](const auto &a, const auto &b) {
+            return key(a.canonicalPath) < key(b.canonicalPath);
+        });
+        const bool dated = std::all_of(candidates.cbegin(), candidates.cend(), [&](const auto &p) {
+            return revisionFor(p.canonicalPath, identity).isValid();
+        });
+        if (dated) std::stable_sort(candidates.begin(), candidates.end(), [&](const auto &a, const auto &b) {
+            return revisionFor(a.canonicalPath, identity) > revisionFor(b.canonicalPath, identity);
+        });
+        return candidates.first();
+    };
+    const auto conflictReason = [&revisionFor, &library](const QString &identity,
+        const QList<MibIndexedProvider> &candidates, const MibIndexedProvider &chosen) {
+        QStringList descriptions;
+        bool allDated = true, newest = true;
+        const QDateTime selectedDate = revisionFor(chosen.canonicalPath, identity);
+        for (const auto &candidate : candidates) {
+            const QDateTime date = revisionFor(candidate.canonicalPath, identity);
+            allDated &= date.isValid();
+            if (candidate.canonicalPath != chosen.canonicalPath && date >= selectedDate) newest = false;
+            const QString path = library.libraryRoot().isEmpty() ? candidate.canonicalPath
+                : QDir(library.libraryRoot()).relativeFilePath(candidate.canonicalPath);
+            descriptions.append(QObject::tr("%1 (revision %2)%3").arg(path,
+                date.isValid() ? date.toString(QStringLiteral("yyyy-MM-dd HH:mm")) : QObject::tr("unknown"),
+                candidate.canonicalPath == chosen.canonicalPath ? QObject::tr(" — used") : QString()));
+        }
+        return QObject::tr("%1 has conflicting definitions: %2. Selection: %3.").arg(identity,
+            descriptions.join(QStringLiteral("; ")), allDated && newest
+                ? QObject::tr("newest LAST-UPDATED revision")
+                : QObject::tr("first by path (revisions equal or missing)"));
+    };
     QMap<QString, Selection> selected;
     QList<MibPlanResolutionDiagnostic> diagnostics;
     for (MibProfileMember root : input.roots) {
@@ -554,35 +650,29 @@ MibEffectivePlan MibEffectiveRuntimePlanResolver::resolve(
                      : QObject::tr("Exact user-selected root")});
     }
 
-    // Several selected files can declare the same module: different revisions of a standard MIB
-    // sitting side by side in a vendor folder are common. One module must have one provider in
-    // the environment, so keep the first file by path, set the others aside for that module, and
-    // report it. This must never stop the profile from loading.
-    {
-        QMap<QString, QString> keptBy;   // module -> key of the file that provides it
-        const QStringList order = selected.keys();
-        for (const QString &fileKey : order) {
-            auto it = selected.find(fileKey);
-            QStringList kept, setAside;
-            for (const QString &identity : std::as_const(it->member.identities)) {
-                if (keptBy.contains(identity)) setAside << identity;
-                else { keptBy.insert(identity, fileKey); kept << identity; }
-            }
-            if (setAside.isEmpty()) continue;
-            for (const QString &identity : std::as_const(setAside)) {
-                const QString keptPath = selected.value(keptBy.value(identity)).member.canonicalPath;
-                QList<MibIndexedProvider> candidates;
-                for (const auto &provider : library.providersFor(identity))
-                    if (samePath(provider.canonicalPath, keptPath) || samePath(provider.canonicalPath, it->member.canonicalPath))
-                        candidates.append(provider);
-                diagnostics.append({identity, {}, QStringLiteral("ROOT"), candidates,
-                    MibPlanResolutionTier::Ambiguous, keptPath,
-                    QObject::tr("Several selected files declare this module; %1 was used because it comes first "
-                                "by path, and %2 was set aside for this module")
-                        .arg(keptPath, it->member.canonicalPath)});
-            }
-            if (kept.isEmpty()) selected.remove(fileKey);
-            else it->member.identities = kept;
+    // Resolve each module once, then prune losing identities without retaining indexes or
+    // references into a container that is being changed.
+    QMap<QString, QList<MibIndexedProvider>> rootProviders;
+    for (const auto &selection : std::as_const(selected))
+        for (const QString &identity : selection.member.identities)
+            for (const auto &provider : library.providersFor(identity))
+                if (samePath(provider.canonicalPath, selection.member.canonicalPath))
+                    rootProviders[identity].append(provider);
+    for (auto group = rootProviders.cbegin(); group != rootProviders.cend(); ++group) {
+        if (group.value().size() < 2) continue;
+        const auto chosen = chooseProvider(group.key(), group.value());
+        QSet<QString> hashes;
+        for (const auto &candidate : group.value()) hashes.insert(candidate.sha256);
+        if (hashes.size() > 1)
+            diagnostics.append({group.key(), {}, QStringLiteral("ROOT"), group.value(),
+                MibPlanResolutionTier::Ambiguous, chosen.canonicalPath,
+                conflictReason(group.key(), group.value(), chosen)});
+        for (const auto &candidate : group.value()) {
+            if (samePath(candidate.canonicalPath, chosen.canonicalPath)) continue;
+            auto loser = selected.find(key(candidate.canonicalPath));
+            if (loser == selected.end()) continue;
+            loser->member.identities.removeAll(group.key());
+            if (loser->member.identities.isEmpty()) selected.erase(loser);
         }
     }
 
@@ -690,18 +780,19 @@ MibEffectivePlan MibEffectiveRuntimePlanResolver::resolve(
             for (const auto &provider : std::as_const(winning)) hashes.insert(provider.sha256);
             MibIndexedProvider chosen = winning.first();
             if (hashes.size() != 1 || hashes.contains(QString())) {
-                // Several different files declare this module. Do not refuse it: use the
-                // first readable one by path (a stable rule) and say so in the report.
-                const auto usable = std::find_if(winning.cbegin(), winning.cend(),
-                    [](const auto &provider) { return !provider.sha256.isEmpty(); });
+                QList<MibIndexedProvider> readable;
+                for (const auto &provider : std::as_const(winning))
+                    if (!provider.sha256.isEmpty()) readable.append(provider);
+                if (readable.isEmpty()) {
+                    diagnostics.append({identity, requesters, QStringLiteral("IMPORTS"), winning,
+                        MibPlanResolutionTier::Ambiguous, winningScope,
+                        QObject::tr("Several files declare this module and none can be read")});
+                    continue;
+                }
+                chosen = chooseProvider(identity, readable);
                 diagnostics.append({identity, requesters, QStringLiteral("IMPORTS"), winning,
                     MibPlanResolutionTier::Ambiguous, winningScope,
-                    usable == winning.cend()
-                        ? QObject::tr("Several files declare this module and none can be read")
-                        : QObject::tr("Several different files declare this module; %1 was used "
-                                      "because it comes first by path").arg(usable->canonicalPath)});
-                if (usable == winning.cend()) continue;
-                chosen = *usable;
+                    conflictReason(identity, winning, chosen)});
             }
             const auto *record = recordFor(chosen.canonicalPath, chosen.sha256);
             if (!record) continue;
@@ -727,7 +818,7 @@ MibEffectivePlan MibEffectiveRuntimePlanResolver::resolve(
                     ? QObject::tr("Requester directory %1").arg(winningScope)
                 : tier == MibPlanResolutionTier::RequesterBatch ? QObject::tr("Requester batch %1").arg(winningScope)
                 : QObject::tr("Ordered scope %1").arg(winningScope);
-            if (winning.size() > 1)
+            if (winning.size() > 1 && hashes.size() == 1)
                 rationale += QObject::tr("; %1 byte-identical alternatives; chose canonical path first")
                     .arg(winning.size());
             selected.insert(key(dependency.canonicalPath), {dependency, tier, rationale});
@@ -750,15 +841,25 @@ MibEffectivePlan MibEffectiveRuntimePlanResolver::resolve(
         if (selection.member.reason == MibProfileMemberReason::Added)
             for (const QString &identity : selection.member.identities) rootIdentities.insert(identity);
     }
-    QMap<QString, MibPlanResolutionDiagnostic> finalByIdentity;
+    // Notes and warnings for one module are independent findings. A Modified note or
+    // stale pin must never replace the warning that explains the selected provider.
+    QMap<QPair<QString, int>, MibPlanResolutionDiagnostic> finalByIdentity;
     for (const auto &diagnostic : std::as_const(diagnostics)) {
+        // Modified describes a file actually used by this Environment. A shadowed root is
+        // already explained by the conflict finding; never claim that it was loaded as well.
+        if (diagnostic.tier == MibPlanResolutionTier::ModifiedRoot) {
+            const auto owner = selected.constFind(key(diagnostic.scope));
+            if (owner == selected.cend() || !owner->member.identities.contains(diagnostic.identity))
+                continue;
+        }
         const bool reportEvenWhenProvided = diagnostic.tier == MibPlanResolutionTier::Ambiguous ||
             diagnostic.tier == MibPlanResolutionTier::StalePin;
         if (diagnostic.dependencyKind != QStringLiteral("ROOT") && provided.contains(diagnostic.identity) &&
             !reportEvenWhenProvided)
             continue;
-        auto existing = finalByIdentity.find(diagnostic.identity);
-        if (existing == finalByIdentity.end()) finalByIdentity.insert(diagnostic.identity, diagnostic);
+        const auto findingKey = qMakePair(diagnostic.identity, static_cast<int>(diagnostic.tier));
+        auto existing = finalByIdentity.find(findingKey);
+        if (existing == finalByIdentity.end()) finalByIdentity.insert(findingKey, diagnostic);
         else existing->requesters = sortedUnique(existing->requesters + diagnostic.requesters);
     }
     const QList<MibPlanResolutionDiagnostic> finalDiagnostics = finalByIdentity.values();
@@ -847,4 +948,25 @@ MibEffectivePlanResolverInput MibResolverInputForProfile(const MibProfileRecord 
         input.orderedScopes.append(standardsFolder);
     input.pins = profile.providerPins;
     return input;
+}
+
+MibEffectivePlan MibPlanForProfile(const MibProfileRecord &profile, const MibDependencyIndex &library)
+{
+    if (!MibProfileIsManifest(profile)) {
+        MibEffectivePlan plan;
+        plan.profileId = profile.id;
+        plan.profileName = profile.name;
+        plan.authorityError = QObject::tr("Profile still uses legacy authority and must be migrated before activation");
+        return plan;
+    }
+    QStringList missingFolders;
+    const MibProfileRecord expanded = MibProfileWithFolderFiles(profile, library.files(), &missingFolders);
+    const MibEffectivePlanResolverInput input = MibResolverInputForProfile(expanded, library.libraryRoot());
+    MibEffectivePlan plan = MibEffectiveRuntimePlanResolver().resolve(input, library);
+    plan.profileName = profile.name;
+    plan.profileType = profile.type;
+    MibEffectivePlanAddListedNotFound(&plan, profile.unresolvedLegacyModules);
+    MibEffectivePlanAddMissingFolders(&plan, missingFolders);
+    MibEffectivePlanResolver::sealRuntimeAuthority(&plan);
+    return plan;
 }

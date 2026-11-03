@@ -2,36 +2,52 @@
 #define CREDENTIALSDIALOG_H
 
 #include <QDialog>
+#include "credentialrecords.h"
 
-class CommunityCredentialManager;
 class CommunityCredentialService;
-class QTabWidget;
-class USMProfileManager;
+class UsmCredentialService;
+class QListWidget;
+class QLineEdit;
+class QComboBox;
+class QLabel;
+class QStackedWidget;
+class QPushButton;
+class QDialogButtonBox;
 
-// One screen for every saved credential: SNMPv1/v2c communities and SNMPv3 users on two tabs
-// with a single OK and Cancel. OK saves both tabs; Cancel discards the edits on both.
 class CredentialsDialog : public QDialog
 {
     Q_OBJECT
 public:
-    enum Tab { Communities = 0, Users = 1 };
-
-    CredentialsDialog(CommunityCredentialService *communities, USMProfileManager *users,
+    enum Tab { Communities = 0, Users = 1 }; // preferred initial selection, not separate tabs
+    CredentialsDialog(CommunityCredentialService *communities, UsmCredentialService *users,
                       QWidget *parent = nullptr);
-    // Loads the saved credentials (dropping unsaved edits) and shows the requested tab.
-    void prepare(Tab tab);
-    // prepare(), then runs the dialog.
-    void execute(Tab tab);
-    // Saves both tabs. Returns false (and keeps the screen open) when the SNMPv3 users are
-    // invalid or could not be written. The communities are saved only after the users succeed.
+    void prepare(Tab preferred = Communities);
+    void execute(Tab preferred = Communities);
     bool applyChanges();
     void accept() override;
-    QTabWidget *tabs() const { return tabWidget; }
-
+    QListWidget *credentialList() const { return list; }
 private:
-    CommunityCredentialManager *communityEditor;
-    USMProfileManager *userEditor;
-    QTabWidget *tabWidget;
+    void storeFields();
+    void selectRow();
+    void rebuildList(const QString &selectedId = QString(), CredentialKind kind = CredentialKind::Community);
+    void addCredential(int version);
+    void duplicateCredential();
+    void deleteCredential();
+    void updateSecurityFields();
+    QString uniqueName(const QString &base) const;
+    CommunityCredentialService *communityService;
+    UsmCredentialService *userService;
+    QList<CommunityCredentialRecord> communities;
+    QList<UsmCredentialRecord> users;
+    QString currentId;
+    CredentialKind currentKind = CredentialKind::Community;
+    QListWidget *list;
+    QWidget *editor;
+    QLineEdit *displayName, *readCommunity, *writeCommunity, *securityName, *authSecret, *privacySecret;
+    QComboBox *authProtocol, *privacyProtocol;
+    QLabel *versionLabel, *status;
+    QStackedWidget *pages;
+    QPushButton *removeButton, *duplicateButton;
+    QDialogButtonBox *buttons;
 };
-
 #endif

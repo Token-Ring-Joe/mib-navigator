@@ -54,6 +54,7 @@ char snmpmsg_cpp_version[]="#(@) SNMP++ $Id: snmpmsg.cpp 2361 2013-05-09 22:15:0
 
 #include "snmp_pp/config_snmp_pp.h"
 #include "snmp_pp/snmpmsg.h"                    // header file for SnmpMessage
+#include "snmp_pp/uxsnmp.h"
 #include "snmp_pp/oid_def.h"                    // changed (Frank Fock)
 #include "snmp_pp/log.h"
 #include "snmp_pp/vb.h"
@@ -437,7 +438,7 @@ int SnmpMessage::load(const Pdu &cpdu,
       return SNMP_CLASS_INVALID_TARGET;
     }
 
-    status = v3MP::I->snmp_build(raw_pdu, databuff, (int *)&bufflen,
+    status = (message_v3mp ? message_v3mp : v3MP::I)->snmp_build(raw_pdu, databuff, (int *)&bufflen,
                                  *engine_id, *security_name, security_model,
                                  pdu->get_security_level(),
                                  pdu->get_context_engine_id(),
@@ -553,7 +554,7 @@ int SnmpMessage::unload(Pdu &pdu,                 // Pdu object
   long int security_level = SNMP_SECURITY_LEVEL_NOAUTH_NOPRIV;
 
   if ((security_model) && (security_name) && (engine_id) && (snmp_session)) {
-    status = v3MP::I->snmp_parse(snmp_session, raw_pdu,
+    status = snmp_session->get_v3mp()->snmp_parse(snmp_session, raw_pdu,
                          databuff, (int)bufflen, *engine_id,
                          *security_name, context_engine_id, context_name,
                          security_level, *security_model, version, *from_addr);

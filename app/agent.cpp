@@ -1,3 +1,4 @@
+#include "queryresultspanel.h"
 /*
     Copyright (C) 2004-2011 Martin Jolicoeur (snmpb1@gmail.com) 
 
@@ -34,6 +35,7 @@
 
 #include "mibview.h"
 #include "agent.h"
+#include "tableindex.h"
 #include "communitycredentialservice.h"
 #include "connectionbar.h"
 #include "diagnosticlogger.h"
@@ -49,13 +51,13 @@
 #include "mibselection.h"
 #include "mibvaluesemantics.h"
 #include "snmpreport.h"
+#include "snmpquerytext.h"
 #include "requestlog.h"
 #include <QLabel>
 #include <QStatusBar>
 #include <QStyle>
 #include <QTextDocumentFragment>
 
-#define ASYNC_TIMER_MSEC 5
 #define TRAP_TIMER_MSEC 100
 
 typedef struct
@@ -75,7 +77,8 @@ QTableWidget *structuredResults(Snmpb *snmpb)
 // One line above the Results table saying how the last request ended. Errors (timeouts,
 // refused SNMPv3 requests, ...) used to appear only on the Raw tab, so a failed request
 // looked like nothing had happened.
-void presentRequestStatus(Snmpb *snmpb, const QString &html, int objects)
+// Progress/selection notices must not finish a query or claim that an empty reply arrived.
+void presentRequestStatus(Snmpb *snmpb, const QString &html, int objects, bool completed = true)
 {
     auto *label = snmpb->MainUI()->Query->window()->findChild<QLabel *>(
         QStringLiteral("StructuredQueryStatus"));
@@ -84,102 +87,56 @@ void presentRequestStatus(Snmpb *snmpb, const QString &html, int objects)
     QString text = QTextDocumentFragment::fromHtml(html).toPlainText().simplified();
     text.remove(QStringLiteral("-----"));
     text = text.simplified();
-    if (!error && objects == 0)
+    if (completed && !error && objects == 0)
         text += QObject::tr(" The device returned no objects.");
     label->setText(text);
     label->setProperty("failed", error);
     label->setToolTip(text);
     label->style()->unpolish(label);
     label->style()->polish(label);
-    label->show();
+    label->setVisible(!completed || error || objects == 0 || !snmpb->Results() || !snmpb->Results()->isTableResult());
+    if (completed && snmpb->Results()) snmpb->Results()->finishQuery();
 }
 
 void clearStructuredResults(Snmpb *snmpb)
 {
-    if (auto *label = snmpb->MainUI()->Query->window()->findChild<QLabel *>(
-            QStringLiteral("StructuredQueryStatus")))
-        label->clear();
-    if (auto *table = structuredResults(snmpb)) {
-        table->setSortingEnabled(false);
-        table->setRowCount(0);
-        table->setSortingEnabled(true);
-    }
+    if (snmpb->Results()) snmpb->Results()->beginQuery(QString(), QString());
 }
 
-void appendStructuredResult(Snmpb *snmpb, const MibResolvedObject &resolved,
-                            const Oid &oid, const Vb &vb)
+QueryResultValue resultValue(const MibResolvedObject &resolved, const Oid &oid, const Vb &vb)
 {
-    auto *table = structuredResults(snmpb);
-    if (!table) return;
-    const bool sorting = table->isSortingEnabled();
-    table->setSortingEnabled(false);
-    const int row = table->rowCount();
-    table->insertRow(row);
-    const QString numericOid = QString::fromLatin1(oid.get_printable());
-    const QString object = resolved.node && !resolved.node->qualifiedName.isEmpty()
-        ? resolved.node->qualifiedName : resolved.node ? resolved.node->name : numericOid;
-    const QString syntax = resolved.node
-        ? (!resolved.node->syntaxName.isEmpty() ? resolved.node->syntaxName
-                                                : resolved.node->typeId)
-        : QString::number(vb.get_syntax());
-    // The value as the MIB interprets it, next to what actually arrived on the wire, with a
-    // plain-English note wherever the two disagree with the MIB's definition.
+    QueryResultValue value;
+    value.oid = QString::fromLatin1(oid.get_printable());
+    value.object = resolved.node && !resolved.node->qualifiedName.isEmpty() ? resolved.node->qualifiedName
+        : resolved.node ? resolved.node->name : value.oid;
+    value.instance = resolved.instanceSuffix.join('.');
+    value.syntax = resolved.node ? (!resolved.node->syntaxName.isEmpty() ? resolved.node->syntaxName : resolved.node->typeId)
+        : SnmpSyntaxName(vb.get_syntax());
     const MibValueCheck check = CheckMibValue(resolved, vb);
-    const QString received = check.rawValue == check.receivedType
-        ? check.receivedType : QStringLiteral("%1: %2").arg(check.receivedType, check.rawValue);
-    const QStringList values{object, resolved.instanceSuffix.join('.'), numericOid, syntax,
-                             RenderMibValue(resolved, vb), received, check.warnings.join(QStringLiteral("  ")),
-                             QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz"))};
-    for (int column = 0; column < values.size(); ++column) {
-        auto *item = new QTableWidgetItem(values[column]);
-        if (column == 1 || column == 2 || column == 4 || column == 5)
-            item->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-        if (!check.warnings.isEmpty()) {
-            item->setBackground(QColor(0xff, 0xe4, 0xc2));
-            item->setToolTip(check.warnings.join(QLatin1Char('\n')));
-        }
-        table->setItem(row, column, item);
-    }
-    table->setSortingEnabled(sorting);
+    value.type = check.receivedType; value.raw = check.rawValue;
+    value.interpreted = RenderMibValue(resolved, vb);
+    value.received = check.rawValue == check.receivedType ? check.receivedType
+        : QStringLiteral("%1: %2").arg(check.receivedType, check.rawValue);
+    value.warnings = check.warnings.join(QStringLiteral("  "));
+    value.time = QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz"));
+    return value;
 }
+void appendStructuredResult(Snmpb *snmpb, const MibResolvedObject &resolved, const Oid &oid, const Vb &vb)
+{
+    if (snmpb->Results()) snmpb->Results()->appendValue(resultValue(resolved, oid, vb));
+}
+
 }
 
 Q_DECLARE_METATYPE(vb_data);
 
 // C Callback functions for snmp++
-void callback_walk(int reason, Snmp *, Pdu &pdu, SnmpTarget &target, void *cd)
-{
-    if (cd)
-    {
-        // just call the real callback member function...
-        ((Agent*)cd)->AsyncCallback(reason, pdu, target, 1);
-    }
-}
-
-void callback_set(int reason, Snmp *, Pdu &pdu, SnmpTarget &target, void *cd)
-{
-    if (cd)
-    {
-        // just call the real callback member function...
-        ((Agent*)cd)->AsyncCallbackSet(reason, pdu, target);
-    }
-}
-
 void callback_trap(int reason, Snmp *, Pdu &pdu, SnmpTarget &target, void *cd)
 {
     if (cd)
     {
         // just call the real callback member function...
         ((Agent*)cd)->AsyncCallbackTrap(reason, pdu, target);
-    }
-}
-
-void callback(int reason, Snmp *, Pdu &pdu, SnmpTarget &target, void *cd)
-{
-    if (cd)
-    {
-        // just call the real callback member function...
-        ((Agent*)cd)->AsyncCallback(reason, pdu, target, 0);
     }
 }
 
@@ -194,6 +151,14 @@ Agent::Agent(Snmpb *snmpb, bool offline_mode)
     instanceRunner = new SnmpInstanceAsyncRunner(this);
     connect(instanceRunner, &SnmpInstanceAsyncRunner::completed,
             this, &Agent::PresentInstanceResult);
+    singleRunner = new SnmpSingleAsyncRunner(this);
+    connect(singleRunner, &SnmpSingleAsyncRunner::completed,
+            this, &Agent::PresentSingleResult);
+    walkRunner = new SnmpWalkAsyncRunner(this);
+    connect(walkRunner, &SnmpWalkAsyncRunner::progress,
+            this, &Agent::PresentWalkBatch);
+    connect(walkRunner, &SnmpWalkAsyncRunner::completed,
+            this, &Agent::PresentWalkResult);
 
     int status, status2;
 
@@ -361,6 +326,8 @@ void Agent::Init(void)
              this, SLOT( SetFrom(const QString&) ) );
     connect( s->MainUI()->MIBTree, SIGNAL( Stop() ),
              this, SLOT( Stop() ));
+    connect(s->MainUI()->MIBTree, &MibModelView::TableRowSelectFromOid,
+            this, &Agent::TableRowSelectFrom);
     connect( s->MainUI()->MIBTree, SIGNAL( TableViewFromOid(const QString&) ),
              this, SLOT( TableViewFrom(const QString&) ) );
     connect(s->MainUI()->QueryTable, &QPushButton::clicked,
@@ -433,17 +400,19 @@ void Agent::Init(void)
     v3mp = new v3MP(engineId, snmpEngineBoots, status);
     if (status != SNMPv3_MP_OK)
     {
-        QString err = tr("Could not create v3MP object:\n")
-                              .arg(Snmp::error_msg(status));
+        QString err = tr("Could not create v3MP object:\n%1")
+                              .arg(QString::fromLatin1(Snmp::error_msg(status)));
         QMessageBox::warning ( NULL, "MIB Navigator", err,
                                QMessageBox::Ok, Qt::NoButton);
     }
     
     // The v3MP creates a USM object, get the pointer to it
+    // (null when the v3MP could not be created, e.g. a second v3MP in the same process)
     USM *usm = v3mp->get_usm();
     
     // Load the USM users from a file, if any
-    usm->load_users(s->GetUsmUsersConfigFile().toLatin1().data());
+    if (usm)
+        usm->load_users(s->GetUsmUsersConfigFile().toLatin1().data());
 }
 
 void Agent::UpdateTableQueryAvailability()
@@ -504,6 +473,13 @@ Agent::~Agent()
     tableRunner->wait();
     instanceRunner->cancel();
     instanceRunner->wait();
+    // A walk is only checked for cancellation between requests, so a request still waiting for
+    // an answer could hold shutdown for its whole timeout. The runner waits a bounded time
+    // (SnmpWalkAsyncRunner::kShutdownWaitMs) and then leaves the worker to finish by itself.
+    delete walkRunner;
+    walkRunner = nullptr;
+    delete singleRunner;
+    singleRunner = nullptr;
     delete snmp;
     snmp = nullptr;
     Snmp::socket_cleanup();
@@ -518,6 +494,7 @@ void Agent::Shutdown()
     if (snmp) snmp->notify_unregister();
     if (tableRunner) tableRunner->cancel();
     if (instanceRunner) instanceRunner->cancel();
+    if (walkRunner) walkRunner->cancel();
     DiagnosticLogger::log("Traps", "Agent cooperative shutdown end", false);
 }
 
@@ -589,31 +566,36 @@ int Agent::Setup(const AgentRequestSelection &selection, const QString& oid,
     return 0;
 }
 
+quint64 Agent::startLog(const QString &name, const SnmpRequestConfig &config, const QString &oid)
+{
+    if (!requestLog) return 0;
+    const QString identity = config.version == SnmpRequestVersion::V3
+        ? tr("SNMPv3 %1 (%2)").arg(config.securityName,
+              config.securityLevel == 2 ? QStringLiteral("authPriv")
+              : config.securityLevel == 1 ? QStringLiteral("authNoPriv") : QStringLiteral("noAuthNoPriv"))
+        : config.version == SnmpRequestVersion::V1 ? QStringLiteral("SNMPv1") : QStringLiteral("SNMPv2c");
+    return requestLog->begin(name, QStringLiteral("%1:%2").arg(config.address, config.port), identity, oid);
+}
+
 void Agent::BeginRequest(const SnmpRequestConfig &config,
                          SnmpRequestOperation operation)
 {
     activeRequestContext =
         std::make_unique<SnmpRequestContext>(config, operation,
                                              MibEnvironmentRegistry::active());
-    if (requestLog) {
-        static const char *const names[] = {"Get", "GetNext", "GetBulk", "Walk", "Set"};
-        const QString identity = config.version == SnmpRequestVersion::V3
-            ? tr("SNMPv3 %1 (%2)").arg(config.securityName,
-                  config.securityLevel == 2 ? QStringLiteral("authPriv")
-                  : config.securityLevel == 1 ? QStringLiteral("authNoPriv") : QStringLiteral("noAuthNoPriv"))
-            : config.version == SnmpRequestVersion::V1 ? QStringLiteral("SNMPv1") : QStringLiteral("SNMPv2c");
-        QString name = QStringLiteral("Request");
-        switch (operation) {
-        case SnmpRequestOperation::Get: name = names[0]; break;
-        case SnmpRequestOperation::GetNext: name = names[1]; break;
-        case SnmpRequestOperation::GetBulk: name = names[2]; break;
-        case SnmpRequestOperation::Walk: name = names[3]; break;
-        case SnmpRequestOperation::Set: name = names[4]; break;
-        default: break;
-        }
-        activeLogId = requestLog->begin(name, QStringLiteral("%1:%2").arg(config.address, config.port), identity,
-                                        QString::fromLatin1(theoid.get_printable()));
+    QString name = QStringLiteral("Request");
+    switch (operation) {
+    case SnmpRequestOperation::Get: name = QStringLiteral("Get"); break;
+    case SnmpRequestOperation::GetNext: name = QStringLiteral("GetNext"); break;
+    case SnmpRequestOperation::GetBulk: name = QStringLiteral("GetBulk"); break;
+    case SnmpRequestOperation::Walk: name = QStringLiteral("Walk"); break;
+    case SnmpRequestOperation::Set: name = QStringLiteral("Set"); break;
+    default: break;
     }
+    const QString numeric = QString::fromLatin1(theoid.get_printable());
+    if (s->Results()) s->Results()->beginQuery(name + QStringLiteral(" ") +
+        (theoid.valid() ? RenderMibOid(activeRequestContext->environment(), theoid) : tr("multiple objects")), numeric);
+    activeLogId = startLog(name, config, numeric);
 }
 
 void Agent::finishLog(const QString &resultHtml, int objectCount)
@@ -798,380 +780,50 @@ void Agent::AsyncCallbackTrap(int reason, Pdu &pdu, SnmpTarget &target)
     nbr++;
 }
 
-void Agent::AsyncCallback(int reason, Pdu &pdu,
-                          SnmpTarget &target, int iswalk)
+// While results arrive the Results table stays unsorted and is sorted once when the query is
+// over. Re-sorting after every row grew with the table, so a large Walk froze the window (8000
+// rows took minutes) and Stop could not be handled.
+void Agent::HoldResultSorting()
 {
-    int pdu_error;
-    int vb_error = 0;
-    int pdu_index = 0;
-    int start_index = 0;
-    int status;
-    Vb vb;   // empty Vb
-    int z = 0;
-    QString statusHtml;   // one-line summary for the status line above the Results table
-
-    switch(reason)
-    {
-    case SNMP_CLASS_NOTIFICATION:
-    case SNMP_CLASS_ASYNC_RESPONSE:
-    case SNMP_CLASS_SESSION_DESTROYED:
-        break;
-    case SNMP_CLASS_TIMEOUT:
-        msg = tr("<font color=red>Timeout: no response from the device. Check the Target address and that SNMP is enabled on the device. SNMPv1/v2c devices silently ignore a wrong community, and SNMPv3 devices may ignore unknown users.</font>");
-        goto cleanup;
-    default:
-        msg = tr("<font color=red>No response received: (%1) %2</font>")
-                       .arg(reason).arg(Snmp::error_msg(reason));
-        goto cleanup;
+    if (resultSortingHeld) return;
+    if (auto *table = structuredResults(s)) {
+        resultSortingWasOn = table->isSortingEnabled();
+        table->setSortingEnabled(false);
+        resultSortingHeld = true;
     }
-    
-    {
-        // An SNMPv3 REPORT is the device refusing the request; never present it as data.
-        const QString explained = ExplainSnmpReport(pdu,
-            activeRequestContext ? activeRequestContext->config().securityName : QString());
-        if (!explained.isEmpty()) {
-            msg = QStringLiteral("<font color=red>%1</font>").arg(explained.toHtmlEscaped());
-            goto cleanup;
-        }
-    }
-
-    // Look at the error status of the Pdu
-    pdu_error = pdu.get_error_status();
-
-    if (pdu_error)
-    {
-        if (iswalk && (pdu_error == SNMP_ERROR_NO_SUCH_NAME))
-            goto end;
-
-        pdu_index = pdu.get_error_index();
-        if (pdu_index > 0)
-            start_index = objects = pdu_index-1;
-        else
-        {
-            msg = tr("<font color=red>%1</font><br>")
-                .arg(Snmp::error_msg(pdu_error));
-            goto cleanup;
-        }
-    }
-
-    // The Pdu must contain at least one Vb
-    if (pdu.get_vb_count() == 0)
-    {
-        msg = tr("<font color=red>Pdu is empty</font>");
-        goto cleanup;
-    }
-
-    requests++;
- 
-    for ( z=start_index; z < pdu.get_vb_count(); z++)
-    {
-        pdu.get_vb( vb, z );
-
-        // look for var bind exception, applies to v2 only   
-        if ( (vb_error = vb.get_syntax()) != sNMP_SYNTAX_ENDOFMIBVIEW )
-        {
-            Oid tmp;
-            vb.get_oid(tmp);
-
-            if ((vb_error != sNMP_SYNTAX_NOSUCHOBJECT) && 
-                (vb_error != sNMP_SYNTAX_NOSUCHINSTANCE))
-                vb_error = 0;
-
-            // Stop there if we're out of scope
-            if (iswalk && tmp.nCompare(theoid.len(), theoid))
-            {
-                goto end;
-            }
-            else
-            {
-                objects++;
-
-                const auto resolved=ResolveMibObject(
-                    activeRequestContext?activeRequestContext->environment():MibEnvironmentPtr{},tmp);
-                appendStructuredResult(s, resolved, tmp, vb);
-                if (resolved.node)
-                {
-                    if (vb_error || (pdu_error && (z+1 == pdu_index)))
-                        msg += tr("<font color=red>ERROR on varbind #</font>");
-
-                    // Print the OID part
-                    msg += QString("%1: %2").arg(objects).arg(RenderMibOid(resolved.environment,tmp));
-
-                    if (vb_error || (pdu_error && (z+1 == pdu_index)))
-                    {
-                        if (pdu_error)
-                            msg += tr("<font color=red><br>%1</font><br>")
-                                           .arg(Snmp::error_msg(pdu_error));
-                        else
-                            msg += tr("<font color=red><br>%1</font><br>")
-                                    .arg(vb_error==sNMP_SYNTAX_NOSUCHOBJECT?
-                                             //: These two strings might best be left untranslated. It's like "not found" in a "404 Not Found".
-                                             tr("No Such Object"):tr("No Such Instance"));
-                        goto end;
-                    }
-
-                    // Print the value part
-                    msg += tr("    <font color=blue>%1</font>")
-                               .arg(RenderMibValue(resolved,vb).toHtmlEscaped());
-                }
-                else
-                {
-                    if (vb_error || (pdu_error && (z+1 == pdu_index)))
-                    {
-                        msg += tr("<font color=red>ERROR on varbind #</font>%1: %2")
-                                       .arg(objects).arg(vb.get_printable_oid());
-                        if (pdu_error)
-                            msg += tr("<font color=red><br>%3</font><br>")
-                                           .arg(Snmp::error_msg(pdu_error));
-                        else
-                            msg += tr("<font color=red><br>%3</font><br>")
-                                           .arg(vb_error==sNMP_SYNTAX_NOSUCHOBJECT?
-                                            "No Such Object":"No Such Instance");
-                    }
-                    else
-                    {
-                        /* Unknown OID */
-                        msg += tr("%1: %2    <font color=blue>%3</font>")
-                            .arg(objects)
-                            .arg(vb.get_printable_oid())
-                            .arg(vb.get_printable_value());
-                    }
-                }
-            }
-        }
-        else
-            goto end;
-        
-        // TextEdit append is too slow ... :-( 
-        // Buffer each 10 objects before displaying.
-        if (!(objects%10))
-        {
-            s->MainUI()->Query->append(msg);
-            msg = "";
-        }
-        else
-            msg += "<br>";
-    } // for  
-
-    // Walk request, reissue a get_bulk ...
-    if (iswalk && (stop == false))
-    {
-        // Issue next get_bulk ...
-        // last vb becomes seed of next request
-        pdu.set_vblist(&vb, 1);
- 
-        // Now do an async get_bulk
-        if (!activeRequestContext)
-            goto cleanup;
-        status = snmp->get_bulk(pdu, target,
-                                activeRequestContext->nonRepeaters(),
-                                activeRequestContext->maxRepetitions(),
-                                callback_walk, this);
-
-        // Could we send it?
-        if (status == SNMP_CLASS_SUCCESS)
-        {
-            timer.start(ASYNC_TIMER_MSEC);
-            return;
-        }
-        else
-        {
-            msg = tr("<font color=red>Could not send GETBULK request: %1</font>")
-                           .arg(Snmp::error_msg(status));
-            goto cleanup;
-        }
-    }
-   
-end:
-    if (stop == true)
-        msg += tr("<font color=red>-----SNMP query stopped-----</font><br>");
-    else
-        msg += tr("-----SNMP query finished-----<br>");
-    msg += tr("<font color=#009000>Total # of Requests = ");
-    msg += tr("%1<br>Total # of Objects = %2</font>")
-                    .arg(requests).arg(objects);
-    statusHtml = stop == true
-        ? tr("Stopped after %n object(s) in %1 request(s).", nullptr, objects).arg(requests)
-        : tr("Finished: %n object(s) in %1 request(s).", nullptr, objects).arg(requests);
-cleanup:
-    presentRequestStatus(s, statusHtml.isEmpty() ? msg : statusHtml, objects);
-    finishLog(statusHtml.isEmpty() ? msg : statusHtml, objects);
-    s->MainUI()->Query->append(msg);
-    // Dont stop the timer, but put it back to the lower-rate trap timer value
-    timer.start(TRAP_TIMER_MSEC);
-    emit StartWalk(false);
-    s->MainUI()->actionStop->setEnabled(false);
-    activeRequestContext.reset();
 }
 
-void Agent::AsyncCallbackSet(int reason, Pdu &pdu, SnmpTarget &target)
+void Agent::ReleaseResultSorting()
 {
-    int pdu_error;
-    int vb_error = 0;
-    int pdu_index = 0;
-    int start_index = 0;
-    int z = 0;
-    Vb vb;   // empty Vb
-    (void)target;
-
-    switch(reason)
-    {
-    case SNMP_CLASS_NOTIFICATION:
-    case SNMP_CLASS_ASYNC_RESPONSE:
-    case SNMP_CLASS_SESSION_DESTROYED:
-        break;
-    case SNMP_CLASS_TIMEOUT:
-        msg = tr("<font color=red>Timeout: no response from the device. Check the Target address and that SNMP is enabled on the device. SNMPv1/v2c devices silently ignore a wrong community, and SNMPv3 devices may ignore unknown users.</font>");
-        goto cleanup;
-    default:
-        msg = tr("<font color=red>No response received: (%1) %2</font>")
-                       .arg(reason).arg(Snmp::error_msg(reason));
-        goto cleanup;
-    }
-    
-    {
-        // An SNMPv3 REPORT is the device refusing the request; never present it as data.
-        const QString explained = ExplainSnmpReport(pdu,
-            activeRequestContext ? activeRequestContext->config().securityName : QString());
-        if (!explained.isEmpty()) {
-            msg = QStringLiteral("<font color=red>%1</font>").arg(explained.toHtmlEscaped());
-            goto cleanup;
-        }
-    }
-
-    // Look at the error status of the Pdu
-    pdu_error = pdu.get_error_status();
-
-    if (pdu_error)
-    {
-        pdu_index = pdu.get_error_index();
-        if (pdu_index > 0)
-            start_index = objects = pdu_index-1;
-        else
-        {
-            msg = tr("<font color=red>%1</font><br>")
-                .arg(Snmp::error_msg(pdu_error));
-            goto cleanup;
-        }
-    }
-
-    // The Pdu must contain at least one Vb
-    if (pdu.get_vb_count() == 0)
-    {
-        msg = tr("<font color=red>Pdu is empty</font>");
-        goto cleanup;
-    }
-
-    for ( z=start_index; z < pdu.get_vb_count(); z++)
-    {
-        pdu.get_vb( vb, z );
-         
-        // look for var bind exception, applies to v2 only   
-        if ( (vb_error = vb.get_syntax()) != sNMP_SYNTAX_ENDOFMIBVIEW )
-        {          
-            Oid tmp;
-            vb.get_oid(tmp);
-
-            if ((vb_error != sNMP_SYNTAX_NOSUCHOBJECT) && 
-                (vb_error != sNMP_SYNTAX_NOSUCHINSTANCE))
-                vb_error = 0;
-
-            objects++;
-
-            const auto resolved=ResolveMibObject(
-                activeRequestContext?activeRequestContext->environment():MibEnvironmentPtr{},tmp);
-            if (resolved.node)
-            {
-                if (vb_error || (pdu_error && (z+1 == pdu_index)))
-                    msg += tr("<font color=red>ERROR on varbind #</font>");
-
-                // Print the OID part
-                msg += tr("%1: %2").arg(objects).arg(RenderMibOid(resolved.environment,tmp));
-
-                if (vb_error || (pdu_error && (z+1 == pdu_index)))
-                {
-                    if (pdu_error)
-                        msg += tr("<font color=red><br>%1</font><br>")
-                                       .arg(Snmp::error_msg(pdu_error));
-                    else
-                        msg += tr("<font color=red><br>%1</font><br>")
-                                       .arg(vb_error==sNMP_SYNTAX_NOSUCHOBJECT?
-                                            tr("No Such Object"):tr("No Such Instance"));
-                    goto end;
-                }
-
-                // Print the value part
-                msg += tr("    <font color=blue>%1</font>")
-                           .arg(RenderMibValue(resolved,vb).toHtmlEscaped());
-            }
-            else
-            {
-                /* Unknown OID */
-                if (vb_error || (pdu_error && (z+1 == pdu_index)))
-                {
-                    msg += tr("<font color=red>ERROR on varbind #</font>%1: %2")
-                                   .arg(objects).arg(vb.get_printable_oid());
-                    if (pdu_error)
-                        msg += tr("<font color=red><br>%3</font><br>")
-                                       .arg(Snmp::error_msg(pdu_error));
-                    else
-                        msg += tr("<font color=red><br>%3</font><br>")
-                                       .arg(vb_error==sNMP_SYNTAX_NOSUCHOBJECT?
-                                            tr("No Such Object"):tr("No Such Instance"));
-                }
-                else
-                {
-                    msg += tr("%1: %2    <font color=blue>%3</font>")
-                        .arg(objects)
-                        .arg(vb.get_printable_oid())
-                        .arg(vb.get_printable_value());
-                }
-            }
-        }
-        else
-            goto end;
-        
-        // TextEdit append is too slow ... :-( 
-        // Buffer each 10 objects before displaying.
-        if (!(objects%10))
-        {
-            s->MainUI()->Query->append(msg);
-            msg = "";
-        }
-        else
-            msg += "<br>";
-    } // for  
-
-end:
-    msg += tr("-----SNMP set finished-----<br>");
-
-cleanup:
-    presentRequestStatus(s, msg, objects);
-    finishLog(msg, objects);
-    s->MainUI()->Query->append(msg);
-    // Dont stop the timer, but put it back to the lower-rate trap timer value
-    timer.start(TRAP_TIMER_MSEC);
-    activeRequestContext.reset();
+    if (!resultSortingHeld) return;
+    resultSortingHeld = false;
+    if (auto *table = structuredResults(s))
+        if (resultSortingWasOn)
+            table->setSortingEnabled(true);
 }
-
 
 void Agent::WalkFrom(const QString& oid)
 {
-    int status;
+    if (activeRequestContext || tableQueryPending || walkRunner->isBusy())
+        return;
     SnmpRequestConfig requestConfig;
-    
-    // Initialize agent & pdu objects
+
+    // Validate the selection and address; the walk itself builds its own requests.
     SnmpTarget *target;
     Pdu *pdu;
     if (SetupFromCurrentSelection(oid, &target, &pdu, false,
                                   &requestConfig) < 0)
         return;
-    
+    delete target;
+    delete pdu;
+
     // Clear the Query window ...
     s->MainUI()->Query->clear();
     clearStructuredResults(s);
+    HoldResultSorting();
+    lastTable.clear();
     s->MainUI()->Query->append(tr("<font color=black>-----SNMP query started-----</font>"));
-    
+
     // Clear some global vars
     requests = 0;
     objects  = 0;
@@ -1179,31 +831,44 @@ void Agent::WalkFrom(const QString& oid)
     stop = false;
     emit StartWalk(true);
     s->MainUI()->actionStop->setEnabled(true);
- 
-    // Now do an async get_bulk
-    BeginRequest(requestConfig, SnmpRequestOperation::Walk);
-    status = snmp->get_bulk(*pdu, *target,
-                            activeRequestContext->nonRepeaters(),
-                            activeRequestContext->maxRepetitions(),
-                            callback_walk, this);
 
-    // Could we send it?
-    if (status == SNMP_CLASS_SUCCESS)
+    BeginRequest(requestConfig, SnmpRequestOperation::Walk);
+    if (auto *table = structuredResults(s)) table->setSortingEnabled(false);
+    if (!walkRunner->start(*activeRequestContext, theoid,
+                           std::make_unique<SnmpPlusTransport>(requestConfig)))
     {
-        timer.start(ASYNC_TIMER_MSEC);
-    }
-    else
-    {
-        msg = tr("<font color=red>Could not send GETBULK request: %1</font>")
-                       .arg(Snmp::error_msg(status));
+        msg = tr("<font color=red>The walk could not be started.</font>");
         s->MainUI()->Query->append(msg);
         presentRequestStatus(s, msg, 0);
         finishLog(msg, 0);
         activeRequestContext.reset();
+        ReleaseResultSorting();
+        s->MainUI()->actionStop->setEnabled(false);
+        emit StartWalk(false);
     }
-    
-    delete target;
-    delete pdu;
+}
+
+// Objects arrive while the walk is still running, in order, a batch at a time.
+void Agent::PresentWalkBatch(const QVector<Vb> &batch)
+{
+    const MibEnvironmentPtr environment =
+        activeRequestContext ? activeRequestContext->environment() : MibEnvironmentPtr{};
+    QStringList lines;
+    for (const Vb &vb : batch)
+    {
+        const Oid oid = vb.get_oid();
+        ++objects;
+        const auto resolved = ResolveMibObject(environment, oid);
+        appendStructuredResult(s, resolved, oid, vb);
+        lines << FormatObjectLine(objects, resolved, oid, vb);
+    }
+    if (!lines.isEmpty())
+        s->MainUI()->Query->append(lines.join(QStringLiteral("<br>")));
+}
+
+void Agent::PresentWalkResult(const SnmpWalkResult &result)
+{
+    FinishQuery(FormatWalkEnd(result));
 }
 
 void Agent::GetFrom(const QString& oid, int op)
@@ -1226,190 +891,115 @@ void Agent::GetFrom(const QString& oid, int op)
 
 void Agent::Get(const QString& oid, bool usevblist)
 {
-    int status;
+    RunSingleRequest(oid, usevblist, SnmpRequestOperation::Get);
+}
+
+void Agent::GetNext(const QString& oid, bool usevblist)
+{
+    RunSingleRequest(oid, usevblist, SnmpRequestOperation::GetNext);
+}
+
+void Agent::GetBulk(const QString& oid, bool usevblist)
+{
+    RunSingleRequest(oid, usevblist, SnmpRequestOperation::GetBulk);
+}
+
+// Get, GetNext, GetBulk and Set are one request on a worker thread; the answer is shown by
+// PresentSingleResult. A request already in flight is not replaced.
+void Agent::RunSingleRequest(const QString& oid, bool usevblist, SnmpRequestOperation operation)
+{
+    if (activeRequestContext || tableQueryPending || singleRunner->isBusy())
+        return;
     SnmpRequestConfig requestConfig;
-    
+
     // Initialize agent & pdu objects
     SnmpTarget *target;
     Pdu *pdu;
     if (SetupFromCurrentSelection(oid, &target, &pdu, usevblist,
                                   &requestConfig) < 0)
         return;
-    
+    QVector<Vb> varbinds;
+    for (int i = 0; i < pdu->get_vb_count(); ++i)
+    {
+        Vb vb;
+        pdu->get_vb(vb, i);
+        varbinds.append(vb);
+    }
+    delete target;
+    delete pdu;
+
     // Clear the Query window ...
     s->MainUI()->Query->clear();
     clearStructuredResults(s);
-    s->MainUI()->Query->append(tr("<font color=black>-----SNMP query started-----</font>"));
-    
+    lastTable.clear();
+    s->MainUI()->Query->append(operation == SnmpRequestOperation::Set
+        ? tr("<font color=black>-----SNMP set started-----</font>")
+        : tr("<font color=black>-----SNMP query started-----</font>"));
+
     // Clear some global vars
     requests = 0;
     objects  = 0;
     msg = "";
     stop = false;
 
-    // Now do an async get
-    BeginRequest(requestConfig, SnmpRequestOperation::Get);
-    status = snmp->get(*pdu, *target, callback, this);
-
-    // Could we send it?
-    if (status == SNMP_CLASS_SUCCESS)
+    BeginRequest(requestConfig, operation);
+    if (!singleRunner->start(*activeRequestContext, varbinds,
+                             std::make_unique<SnmpPlusTransport>(requestConfig)))
     {
-        timer.start(ASYNC_TIMER_MSEC);
-    }
-    else
-    {
-        msg = QString(tr("<font color=red>Could not send GET request: %1</font>"))
-                       .arg(Snmp::error_msg(status));
+        msg = tr("<font color=red>The request could not be started.</font>");
         s->MainUI()->Query->append(msg);
         presentRequestStatus(s, msg, 0);
         finishLog(msg, 0);
         activeRequestContext.reset();
     }
-    
-    delete target;
-    delete pdu;
 }
 
-void Agent::GetNext(const QString& oid, bool usevblist)
+void Agent::PresentSingleResult(const SnmpSingleResult &result)
 {
-    int status;
-    SnmpRequestConfig requestConfig;
-    
-    // Initialize agent & pdu objects
-    SnmpTarget *target;
-    Pdu *pdu;    
-    if (SetupFromCurrentSelection(oid, &target, &pdu, usevblist,
-                                  &requestConfig) < 0)
-        return;
-        
-    // Clear the Query window ...
-    s->MainUI()->Query->clear();
-    clearStructuredResults(s);
-    s->MainUI()->Query->append(tr("<font color=black>-----SNMP query started-----</font>"));
-    
-    // Clear some global vars
-    requests = 0;
-    objects  = 0;
-    msg = "";
-    stop = false;
- 
-    // Now do an async get_next
-    BeginRequest(requestConfig, SnmpRequestOperation::GetNext);
-    status = snmp->get_next(*pdu, *target, callback, this);
-
-    // Could we send it?
-    if (status == SNMP_CLASS_SUCCESS)
-    {
-        timer.start(ASYNC_TIMER_MSEC);
-    }
+    const MibEnvironmentPtr environment =
+        activeRequestContext ? activeRequestContext->environment() : MibEnvironmentPtr{};
+    const SnmpObjectResolver resolve = [&environment](const Oid &oid) { return ResolveMibObject(environment, oid); };
+    // A Set never touched the Stop button or the "walking" state, so finishing one leaves them alone.
+    if (activeRequestContext && activeRequestContext->operation() == SnmpRequestOperation::Set)
+        FinishQuery(FormatSetResult(result, resolve), false);
     else
-    {
-        msg = QString(tr("<font color=red>Could not send GETNEXT request: %1</font>"))
-                       .arg(Snmp::error_msg(status));
-        s->MainUI()->Query->append(msg);
-        presentRequestStatus(s, msg, 0);
-        finishLog(msg, 0);
-        activeRequestContext.reset();
-    }
-    
-    delete target;
-    delete pdu;
+        FinishQuery(FormatSingleResult(result, resolve, stop));
 }
 
-void Agent::GetBulk(const QString& oid, bool usevblist)
+// Results rows and Query pane text, the status line and the Log entry for a finished query,
+// shared by Walk, Get, GetNext, GetBulk and Set.
+void Agent::FinishQuery(const SnmpQueryText &text, bool restoreControls)
 {
-    int status;
-    SnmpRequestConfig requestConfig;
-    
-    // Initialize agent & pdu objects
-    SnmpTarget *target;
-    Pdu *pdu;    
-    if (SetupFromCurrentSelection(oid, &target, &pdu, usevblist,
-                                  &requestConfig) < 0)
-        return;
-        
-    // Clear the Query window ...
-    s->MainUI()->Query->clear();
-    clearStructuredResults(s);
-    s->MainUI()->Query->append(tr("<font color=black>-----SNMP query started-----</font>"));
-    
-    // Clear some global vars
-    requests = 0;
-    objects  = 0;
-    msg = "";
-    stop = false;
- 
-    // Now do an async get_bulk
-    BeginRequest(requestConfig, SnmpRequestOperation::GetBulk);
-    status = snmp->get_bulk(*pdu, *target,
-                            activeRequestContext->nonRepeaters(),
-                            activeRequestContext->maxRepetitions(),
-                            callback, this);
-
-    // Could we send it?
-    if (status == SNMP_CLASS_SUCCESS)
-    {
-        timer.start(ASYNC_TIMER_MSEC);
+    HoldResultSorting();
+    for (const SnmpQueryRow &row : text.rows)
+        appendStructuredResult(s, row.resolved, row.oid, row.vb);
+    ReleaseResultSorting();
+    const QString last = text.paragraphs.isEmpty() ? QString() : text.paragraphs.last();
+    for (int i = 0; i + 1 < text.paragraphs.size(); ++i)
+        s->MainUI()->Query->append(text.paragraphs.at(i));
+    const QString summary = text.statusHtml.isEmpty() ? last : text.statusHtml;
+    presentRequestStatus(s, summary, text.objects);
+    finishLog(summary, text.objects);
+    s->MainUI()->Query->append(last);
+    if (restoreControls) {
+        emit StartWalk(false);
+        s->MainUI()->actionStop->setEnabled(false);
     }
-    else
-    {
-        msg = tr("<font color=red>Could not send GETBULK request: %1</font>")
-                       .arg(Snmp::error_msg(status));
-        s->MainUI()->Query->append(msg);
-        presentRequestStatus(s, msg, 0);
-        finishLog(msg, 0);
-        activeRequestContext.reset();
-    }
-    
-    delete target;
-    delete pdu;
+    activeRequestContext.reset();
 }
 
 void Agent::Set(const QString& oid, bool usevblist)
 {
-    int status;
-    SnmpRequestConfig requestConfig;
+    RunSingleRequest(oid, usevblist, SnmpRequestOperation::Set);
+}
 
-    // Initialize agent & pdu objects
-    SnmpTarget *target;
-    Pdu *pdu;    
-    if (SetupFromCurrentSelection(oid, &target, &pdu, usevblist,
-                                  &requestConfig) < 0)
-        return;
-
-    // Clear the Query window ...
-    s->MainUI()->Query->clear();
-    clearStructuredResults(s);
-    s->MainUI()->Query->append(tr("<font color=black>-----SNMP set started-----</font>"));
-
-    // Clear some global vars
-    requests = 0;
-    objects = 0;
-    msg = "";
-    stop = false;
-
-    // Now do an async set 
-    BeginRequest(requestConfig, SnmpRequestOperation::Set);
-    status = snmp->set(*pdu, *target, callback_set, this);
-
-    // Could we send it?
-    if (status == SNMP_CLASS_SUCCESS)
-    {
-        timer.start(ASYNC_TIMER_MSEC);
-    }
-    else
-    {
-        msg = tr("<font color=red>Could not send SET request: %1</font>")
-            .arg(Snmp::error_msg(status));
-        s->MainUI()->Query->append(msg);
-        presentRequestStatus(s, msg, 0);
-        finishLog(msg, 0);
-        activeRequestContext.reset();
-    }
-
-
-    delete target;
-    delete pdu;
+// Sets exactly these varbinds (each carries the value to write) as one request.
+void Agent::SetVarbinds(const QVector<Vb> &varbinds, const QString& oid)
+{
+    vblist = varbinds;
+    Set(!oid.isEmpty() || varbinds.isEmpty() ? oid
+                                             : QString::fromLatin1(varbinds.first().get_printable_oid()),
+        true);
 }
 
 void Agent::SetFrom(const QString& oid)
@@ -1421,11 +1011,7 @@ void Agent::SetFrom(const QString& oid)
     {
         Vb *vb = ms.GetVarbind();
         if (vb)
-        {
-            vblist.clear();
-            vblist += *vb;
-            Set(ms.GetOid(), true);
-        }
+            SetVarbinds({*vb}, ms.GetOid());
     }
 }
 
@@ -1436,11 +1022,16 @@ void Agent::Stop(void)
         tableRunner->cancel();
     if (instanceRunner)
         instanceRunner->cancel();
+    if (walkRunner)
+        walkRunner->cancel();
 }
 
-void Agent::TableViewFrom(const QString& oid)
+void Agent::TableViewFrom(const QString& oid) { QueryTableFrom(oid, false); }
+void Agent::TableRowSelectFrom(const QString& oid) { QueryTableFrom(oid, true); }
+
+void Agent::QueryTableFrom(const QString &oid, bool selectInstance)
 {
-    if (tableRunner->isRunning())
+    if (activeRequestContext || tableQueryPending || tableRunner->isRunning() || instanceRunner->isRunning())
         return;
     AgentRequestSelection selection;
     if (!ResolveForRequest(&selection))
@@ -1455,13 +1046,6 @@ void Agent::TableViewFrom(const QString& oid)
     delete validationTarget;
     delete validationPdu;
     
-    // Clear the Query window ...
-    s->MainUI()->Query->clear();
-    clearStructuredResults(s);
-    s->MainUI()->Query->append(tr("<font color=black>-----SNMP query started-----</font>"));
-    
-    s->MainUI()->Query->append(tr("Collecting table objects, please wait ...<br>"));
-    
     /* Set the parent oid & parent node */
     Oid poid(oid.toLatin1().data());
     const auto environment=MibEnvironmentRegistry::active();
@@ -1469,11 +1053,13 @@ void Agent::TableViewFrom(const QString& oid)
     const bool tableNode=pnode&&pnode->kind==MibEnvironmentNodeKind::Table;
     const MibEnvironmentNodeRecord *rowNode=nullptr;
 
+
     /* Make sure the parent is a table or row entry ... */
     if (!environment || ResolveTableRowNode(pnode,pnode?environment->nodeByOid(pnode->rowOid):nullptr,&rowNode) !=
         TableNodeValidation::Valid)
     {
-        s->MainUI()->Query->append(tr("<font color=red>Abort, not a table or row entry</font>"));
+        const QString error = tr("<font color=red>Abort, not a table or row entry</font>");
+        s->MainUI()->Query->append(error); presentRequestStatus(s, error, 0);
         return;
     }
    
@@ -1482,16 +1068,25 @@ void Agent::TableViewFrom(const QString& oid)
     {
         if (!RenderEnvironmentNodeOid(rowNode, &poid))
         {
-            s->MainUI()->Query->append(tr("<font color=red>Abort, not a table or row entry</font>"));
+            const QString error = tr("<font color=red>Abort, not a table or row entry</font>");
+            s->MainUI()->Query->append(error); presentRequestStatus(s, error, 0);
             return;
         }
     }
     SnmpTablePlan plan;
     plan.rowOid = poid;
+    plan.indexSpecs = TableIndexSpecsForRow(*environment, *rowNode);
     for (const QString &column : rowNode->columnOids)
     {
         const auto *node=environment->nodeByOid(column);
         if (!HasValidColumnInfo(node))
+            continue;
+        // A not-accessible column (typically the INDEX itself) is never returned by an agent;
+        // reading it would only fill the table with "not available". Its value is shown in the
+        // Index column, decoded from the instance.
+        if (node->access == MibEnvironmentAccess::NotAccessible ||
+            node->access == MibEnvironmentAccess::NotImplemented ||
+            node->access == MibEnvironmentAccess::Notify)
             continue;
         Oid columnOid;
         if (RenderEnvironmentNodeOid(node, &columnOid))
@@ -1499,30 +1094,85 @@ void Agent::TableViewFrom(const QString& oid)
     }
     const SnmpRequestContext context(config, SnmpRequestOperation::Walk,
                                      environment);
+    if (plan.columns.isEmpty()) {
+        presentRequestStatus(s, tr("<font color=red>This table has no readable columns.</font>"), 0);
+        return;
+    }
+    if (selectInstance) {
+        pendingTableRowContext = std::make_unique<SnmpRequestContext>(context);
+        pendingTableRowPlan = plan;
+        pendingInstanceOid = oid;
+        QVector<Oid> roots;
+        for (const auto &column : plan.columns) roots.append(column.oid);
+        tableQueryPending = true;
+        s->MainUI()->actionStop->setEnabled(true);
+        emit StartWalk(true);
+        activeLogId = startLog(tr("Table Instances"), config, oid);
+        presentRequestStatus(s, tr("Finding table instances…"), 0, false);
+        if (!instanceRunner->start(context, roots, std::make_unique<SnmpPlusTransport>(config))) {
+            pendingTableRowContext.reset(); tableQueryPending = false;
+            const QString error = tr("<font color=red>Instance discovery could not be started.</font>");
+            presentRequestStatus(s, error, 0); finishLog(error, 0);
+            s->MainUI()->actionStop->setEnabled(false); emit StartWalk(false);
+        }
+        return;
+    }
+    StartTableQuery(context, plan, oid);
+}
+
+void Agent::StartTableQuery(const SnmpRequestContext &context, const SnmpTablePlan &plan, const QString &oid)
+{
+    s->MainUI()->Query->clear();
+    clearStructuredResults(s);
+    lastTable.clear();
+    s->MainUI()->Query->append(tr("<font color=black>-----SNMP query started-----</font>"));
+    const QString title = plan.instance.isEmpty() ? tr("Table ") : tr("Table row %1 · ").arg(plan.instance);
+    if (s->Results()) s->Results()->beginQuery(title + RenderMibOid(context.environment(), Oid(oid.toLatin1().constData())), oid);
     s->MainUI()->actionStop->setEnabled(true);
     emit StartWalk(true);
-    if (!tableRunner->start(context, plan,
-                            std::make_unique<SnmpPlusTransport>(config)))
-    {
-        s->MainUI()->actionStop->setEnabled(false);
-        emit StartWalk(false);
+    activeLogId = startLog(plan.instance.isEmpty() ? QStringLiteral("Table") : QStringLiteral("Table Row"), context.config(), oid);
+    tableQueryPending = true;
+    if (!tableRunner->start(context, plan, std::make_unique<SnmpPlusTransport>(context.config()))) {
+        tableQueryPending = false;
+        const QString error = tr("<font color=red>The table could not be started.</font>");
+        presentRequestStatus(s, error, 0); finishLog(error, 0);
+        s->MainUI()->actionStop->setEnabled(false); emit StartWalk(false);
     }
 }
 
 void Agent::PresentTableResult(const SnmpTableResult &result)
 {
+    bool anyIndexText = false;
+    for (const SnmpTableRow &row : result.rows) anyIndexText |= !row.indexText.isEmpty();
     QString output = tr("<table border=\"1\"><tr bgcolor=yellow><td>Instance</td>");
+    QStringList header{tr("Instance")};
+    if (anyIndexText) header << tr("Index");
     for (const SnmpTableColumn &column : result.columns)
+    {
         output += QString("<td>%1</td>").arg(column.name);
+        header << column.name;
+    }
     output += QString("</tr>");
+    lastTable.clear();
+    lastTable.append(header);
+    QList<QueryResultTableRow> grid;
+    QStringList columnNames;
+    for (const auto &column : result.columns) columnNames << column.name;
     for (const SnmpTableRow &row : result.rows)
     {
-        output += QString("<tr><td bgcolor=pink>%1</td>").arg(row.instance);
-        for (int i = 0; i < row.cells.size(); ++i)
+        output += QString("<tr><td bgcolor=pink>%1%2</td>").arg(
+            row.instance,
+            row.indexText.isEmpty() ? QString()
+                                    : QString("<br>%1").arg(row.indexText.toHtmlEscaped()));
+        QueryResultTableRow gridRow; gridRow.instance = row.instance; gridRow.index = row.indexText;
+        QStringList record{row.instance};
+        if (anyIndexText) record << row.indexText;
+        for (int i = 0; i < qMin(row.cells.size(), result.columns.size()); ++i)
         {
             if (!row.cells[i].available)
             {
                 output += tr("<td>not available</td>");
+                record << QString(); gridRow.cells.append(QueryResultValue{});
                 continue;
             }
             Vb vb = row.cells[i].varbind;
@@ -1530,26 +1180,39 @@ void Agent::PresentTableResult(const SnmpTableResult &result)
             Oid instanceOid;
             vb.get_oid(instanceOid);
             if (instanceOid.len() == 0) instanceOid = oid;
-            appendStructuredResult(s, ResolveMibObject(result.environment, instanceOid),
-                                   instanceOid, vb);
-            output += QString("<td>%1</td>").arg(
-                RenderMibValue(ResolveMibObject(result.environment,oid),vb).toHtmlEscaped());
+            gridRow.cells.append(resultValue(ResolveMibObject(result.environment, instanceOid), instanceOid, vb));
+            const QString value = RenderMibValue(ResolveMibObject(result.environment,oid),vb);
+            output += QString("<td>%1</td>").arg(value.toHtmlEscaped());
+            record << value;
         }
+        lastTable.append(record); grid.append(gridRow);
         output += QString("</tr>");
     }
+    if (s->Results()) s->Results()->showTable(columnNames, grid);
     output += QString("</table>");
+    QString ending;
     if (result.status == SnmpOperationStatus::Cancelled)
-        output += tr("<font color=red>Operation cancelled</font><br>");
+        ending = tr("<font color=red>Operation cancelled</font><br>");
     else if (result.status == SnmpOperationStatus::Timeout)
-        output += tr("<font color=red>Timeout</font><br>");
-    else if (result.status == SnmpOperationStatus::SnmpError)
-        output += tr("<font color=red>SNMP error</font><br>");
-    else if (result.status == SnmpOperationStatus::TransportFailure)
-        output += tr("<font color=red>No response received</font><br>");
+        ending = tr("<font color=red>Timeout: the device stopped answering, so the table may be incomplete.</font><br>");
+    else if (result.status == SnmpOperationStatus::SnmpError && result.problem.isEmpty())
+        ending = tr("<font color=red>SNMP error %1: the device refused to continue, so the table may be incomplete.</font><br>")
+                     .arg(result.snmpErrorStatus);
+    else if (result.status == SnmpOperationStatus::TransportFailure && result.problem.isEmpty())
+        ending = tr("<font color=red>No response received</font><br>");
+    if (!result.problem.isEmpty())
+        ending += tr("<font color=red>%1</font><br>").arg(result.problem.toHtmlEscaped());
+    output += ending;
     output += tr("-----SNMP query finished-----<br>");
     output += QString("<font color=#009000>Total # of rows = %1<br>")
                   .arg(result.rows.size());
     s->MainUI()->Query->append(output);
+    const QString summary = result.requestedInstance.isEmpty() ? tr("Table: %1 row(s).").arg(result.rows.size())
+        : tr("Table row %1: %2 row(s).").arg(result.requestedInstance).arg(result.rows.size());
+    presentRequestStatus(s, ending.isEmpty() ? summary : summary + QLatin1Char(' ') + ending,
+                         result.rows.size());
+    finishLog(ending.isEmpty() ? summary : summary + QLatin1Char(' ') + ending, result.rows.size());
+    tableQueryPending = false;
     s->MainUI()->actionStop->setEnabled(false);
     emit StartWalk(false);
 }
@@ -1841,21 +1504,48 @@ void Agent::VarbindsSelected(void)
 
 void Agent::PresentInstanceResult(const SnmpInstanceResult &result)
 {
+    auto rowContext = std::move(pendingTableRowContext);
+    SnmpTablePlan rowPlan = pendingTableRowPlan;
+    const QString selectedTableOid = pendingInstanceOid;
     s->MainUI()->actionStop->setEnabled(false);
     emit StartWalk(false);
-    if (result.status != SnmpOperationStatus::Complete || result.instances.isEmpty())
+    // Looking for instances is a request like any other: say how it ended, even when nothing
+    // is left to choose from (it used to end silently).
+    QString outcome;
+    if (result.status == SnmpOperationStatus::Cancelled)
+        outcome = tr("<font color=red>Operation cancelled</font>");
+    else if (result.status == SnmpOperationStatus::Timeout)
+        outcome = tr("<font color=red>Timeout: the device did not answer.</font>");
+    else if (!result.problem.isEmpty())
+        outcome = tr("<font color=red>%1</font>").arg(result.problem.toHtmlEscaped());
+    else if (result.status == SnmpOperationStatus::SnmpError)
+        outcome = tr("<font color=red>SNMP error %1: the device refused the request.</font>").arg(result.snmpErrorStatus);
+    else if (result.status != SnmpOperationStatus::Complete)
+        outcome = tr("<font color=red>No response received</font>");
+    else if (result.instances.isEmpty())
+        outcome = tr("<font color=red>The device has no instances of this object.</font>");
+    else
+        outcome = tr("%1 instance(s) found.").arg(result.instances.size());
+    finishLog(outcome, result.instances.size());
+    if (result.status != SnmpOperationStatus::Complete || result.instances.isEmpty()) {
+        if (rowContext) tableQueryPending = false;
+        presentRequestStatus(s, outcome, result.instances.size());
         return;
+    }
 
     // Build the instance selection dialog and show it ...
     QDialog dlist(s->MainUI()->MIBTree, Qt::WindowTitleHint);
-    dlist.resize(220, 250);
+    dlist.setObjectName("TableInstanceDialog");
+    dlist.resize(rowContext ? 520 : 220, 300);
     QGridLayout gl1(&dlist);
     QGridLayout gl2;
     QLabel label(tr("Please select table instance to query"), &dlist);
     gl2.addWidget(&label, 0, 0, 1, 1);
     QListWidget ilist(&dlist);
+    ilist.setObjectName("TableInstanceList");
     gl2.addWidget(&ilist, 1, 0, 1, 1);
-    QDialogButtonBox box(QDialogButtonBox::Ok, Qt::Horizontal, &dlist);
+    QDialogButtonBox box(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, Qt::Horizontal, &dlist);
+    connect(&box, &QDialogButtonBox::rejected, &dlist, &QDialog::reject);
     gl2.addWidget(&box, 2, 0, 1, 1);
     gl1.addLayout(&gl2, 0, 0, 1, 1);
     dlist.setWindowTitle(tr("Select Instance"));
@@ -1868,10 +1558,27 @@ void Agent::PresentInstanceResult(const SnmpInstanceResult &result)
     dlist.raise();
     dlist.activateWindow();
 
-    ilist.addItems(result.instances);
-    dlist.exec();
-
-    if (ilist.selectedItems().isEmpty()) return;
+    for (const QString &instance : result.instances) {
+        QString decoded;
+        if (rowContext) {
+            QVector<quint32> suffix;
+            for (const QString &part : instance.split('.')) suffix.append(part.toUInt());
+            DecodeTableInstance(rowPlan.indexSpecs, suffix, &decoded);
+        }
+        auto *item = new QListWidgetItem(decoded.isEmpty() ? instance : instance + "  ·  " + decoded, &ilist);
+        item->setData(Qt::UserRole, instance);
+    }
+    const int accepted = dlist.exec();
+    if (rowContext) tableQueryPending = false;
+    if (accepted != QDialog::Accepted || ilist.selectedItems().isEmpty()) {
+        if (rowContext) presentRequestStatus(s, tr("Table row selection cancelled."), 0, false);
+        return;
+    }
+    if (rowContext) {
+        rowPlan.instance = ilist.selectedItems().first()->data(Qt::UserRole).toString();
+        StartTableQuery(*rowContext, rowPlan, selectedTableOid);
+        return;
+    }
     const QString requestOid = pendingInstanceOid + "." +
                                ilist.selectedItems().at(0)->text();
     if (pendingInstanceOperation == 0) Get(requestOid);
@@ -1920,7 +1627,7 @@ int Agent::SelectTableInstance(const QString &oid, QString &outinstance)
 
 void Agent::GetFromSelectInstance(const QString& oid, int op)
 {
-    if (instanceRunner->isRunning()) return;
+    if (activeRequestContext || tableQueryPending || instanceRunner->isRunning()) return;
     AgentRequestSelection selection;
     if (!ResolveForRequest(&selection)) return;
     SnmpTarget *target;
@@ -1936,6 +1643,7 @@ void Agent::GetFromSelectInstance(const QString& oid, int op)
     pendingInstanceOperation = op;
     s->MainUI()->actionStop->setEnabled(true);
     emit StartWalk(true);
+    activeLogId = startLog(QStringLiteral("Instances"), config, oid);
     instanceRunner->start(SnmpRequestContext(config, SnmpRequestOperation::Walk,
                                              environment),
                           root, std::make_unique<SnmpPlusTransport>(config));

@@ -1,0 +1,21 @@
+<RCC>
+ <qresource prefix="/appearance">
+  <file alias="get">icons/actions/get.svg</file>
+  <file alias="get-next">icons/actions/get-next.svg</file>
+  <file alias="get-bulk">icons/actions/get-bulk.svg</file>
+  <file alias="walk">icons/actions/walk.svg</file>
+  <file alias="table">icons/actions/table.svg</file>
+  <file alias="set">icons/actions/set.svg</file>
+  <file alias="stop">icons/actions/stop.svg</file>
+  <file alias="new">icons/actions/new.svg</file>
+  <file alias="open">icons/actions/open.svg</file>
+  <file alias="save">icons/actions/save.svg</file>
+  <file alias="save-as">icons/actions/save-as.svg</file>
+  <file alias="search">icons/actions/search.svg</file>
+  <file alias="replace">icons/actions/replace.svg</file>
+  <file alias="verify">icons/actions/verify.svg</file>
+  <file alias="expand">icons/actions/expand.svg</file>
+  <file alias="collapse">icons/actions/collapse.svg</file>
+  <file alias="exit">icons/actions/exit.svg</file>
+ </qresource>
+</RCC>

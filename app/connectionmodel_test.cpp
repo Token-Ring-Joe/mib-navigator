@@ -87,8 +87,8 @@ int main(int argc, char **argv)
     const QString lab = communityService.create(community("Lab", "labro"));
     const QString empty = communityService.create(community("Empty", ""));
     UsmCredentialRepository repository(dir.filePath("u.conf"));
-    UsmCredentialService usmService({usm("operator", 2, 2), usm("incomplete", 2, 0)}, repository);
-    UsmCredentialRecord broken = usm("broken", 2, 0); broken.authSecret = CredentialSecret();
+    UsmCredentialService usmService({usm("operator", 2, 2), usm("incomplete", 2, 1)}, repository);
+    UsmCredentialRecord broken = usm("broken", 2, 1); broken.authSecret = CredentialSecret();
     const QString operatorId = usmService.records().first().identity.credentialId;
     const QString incompleteId = usmService.records().at(1).identity.credentialId;
 
@@ -149,8 +149,24 @@ int main(int argc, char **argv)
     {
         UsmCredentialService twins({usm("twin", 2, 2), usm("twin", 2, 2)}, repository);
         ok &= check(ConnectionModel::build("sw1", ConnectionModel::usmKey(twins.records().first().identity.credentialId),
-                        &communityService, &twins, prefs, &selection) == ConnectionError::CredentialAmbiguous,
-                    "two SNMPv3 users with one security name are refused, not guessed between");
+                        &communityService, &twins, prefs, &selection) == ConnectionError::None &&
+                    selection.credentials.usmCredential &&
+                    selection.credentials.usmCredential->identity.credentialId == twins.records().first().identity.credentialId,
+                    "same-name SNMPv3 credentials resolve by their saved ID");
+    }
+    for (int version : {0, 1}) {
+        auto record = community(version ? "Only v2c" : "Only v1", "explicit-ro");
+        record.protocol = version;
+        const auto id = communityService.create(record);
+        int matchingChoices = 0;
+        for (const auto &choice : ConnectionModel::credentialChoices(&communityService, &usmService))
+            if (choice.key == ConnectionModel::communityKey(id, version)) ++matchingChoices;
+        ok &= check(matchingChoices == 1 &&
+                    ConnectionModel::build("sw1", ConnectionModel::communityKey(id, version),
+                        &communityService, &usmService, prefs, &selection) == ConnectionError::None &&
+                    ConnectionModel::build("sw1", ConnectionModel::communityKey(id, 1-version),
+                        &communityService, &usmService, prefs, &selection) == ConnectionError::CredentialIncomplete,
+                    "new community credentials use only their chosen SNMP version, including stale history references");
     }
     for (ConnectionError e : {ConnectionError::NoTarget, ConnectionError::BadTarget, ConnectionError::NoCredential,
                               ConnectionError::CredentialMissing, ConnectionError::CredentialIncomplete,

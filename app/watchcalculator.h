@@ -31,8 +31,10 @@ struct WatchChange
 };
 
 // "octets" objects are shown as bits per second; every other counter as a plain rate per second.
-// A counter wrap is told apart from a device restart using sysUpTime when the device returns it,
-// so a restart never shows up as a huge false rate.
+// sysUpTime, when the device returns it, times the rate and detects a device restart (uptime went
+// backwards), so a restart never shows up as a huge false rate. It is not evidence of a counter
+// wrap: a falling Counter32 is a wrap only when the previous value was in the top quarter of the
+// range, otherwise it is a counter reset (for example "clear counters"). Counter64 never wraps.
 WatchChange ComputeWatchChange(const WatchSample &previous, const WatchSample &current,
                                bool octetCounter);
 

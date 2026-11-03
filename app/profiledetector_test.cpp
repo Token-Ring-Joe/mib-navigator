@@ -48,6 +48,11 @@ int main(int argc, char **argv)
         Vb a{Oid("1.3.6.1.2.1.1.2.0")}; a.set_exception_status(sNMP_SYNTAX_NOSUCHOBJECT); r.pdu += a; t.append(r);
         const DeviceIdentity id = ProfileDetector::read(t, config);
         ok &= check(!id.ok && id.error.contains("sysObjectID"), "a device with no sysObjectID is reported"); }
+    {   ScriptedSnmpTransport t(config); SnmpTransportResult r; r.status = SnmpOperationStatus::TransportFailure;
+        r.transportStatus = SNMPv3_USM_DECRYPTION_ERROR; t.append(r);
+        const DeviceIdentity id = ProfileDetector::read(t, config);
+        ok &= check(!id.ok && id.error.contains("privacy") && !id.error.contains("error 0"),
+                    "a local SNMPv3 decryption failure is explained"); }
     {   ScriptedSnmpTransport t(config); t.append(SnmpTransportResult{});
         ok &= check(!ProfileDetector::read(t, config).ok, "a failed send is not an identity"); }
 

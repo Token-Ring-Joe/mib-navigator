@@ -11,4 +11,17 @@
 // Returns an empty string when the PDU is an ordinary response.
 QString ExplainSnmpReport(const Pdu &pdu, const QString &securityName);
 
+// SNMP++ returns a positive code for two different things: the device's own SNMP error-status
+// (tooBig = 1 ... inconsistentName = 18) and its own SNMPv3 USM failures (1400 and up), which
+// happen on this side of the wire. Only the first is an error the device reported.
+bool IsSnmpErrorStatusCode(int code);
+
+// Plain-English reason for a request that failed on this side of the wire, from the SNMP++
+// return code (for example SNMPv3_USM_DECRYPTION_ERROR). Always returns text, never empty.
+QString ExplainSnmpTransportFailure(int transportStatus, const QString &securityName);
+
+// Plain-English meaning of a device's SNMP error-status (1-18), for example
+// "notWritable: this object cannot be changed (SNMP error 17)". Always returns text.
+QString ExplainSnmpErrorStatus(int errorStatus);
+
 #endif

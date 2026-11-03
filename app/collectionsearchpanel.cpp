@@ -1,3 +1,4 @@
+#include "appearancecolors.h"
 #include "collectionsearchpanel.h"
 
 #include "mibcollectionservice.h"
@@ -30,6 +31,7 @@ CollectionSearchPanel::CollectionSearchPanel(MibCollectionService *collection, L
 
     table = new QTableWidget(0, ColumnCount, this);
     table->setObjectName(QStringLiteral("SearchResults"));
+    table->setItemDelegate(new AppearanceColors::ItemDelegate(table));
     table->setHorizontalHeaderLabels({tr("Name"), tr("Kind"), tr("Module"), tr("OID"), tr("In profiles"), tr("File")});
     table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     table->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -101,7 +103,7 @@ void CollectionSearchPanel::search(const QString &query)
             if (column == Oid && oidText.isEmpty()) item->setText(entry.kind == QLatin1String("Type") ? QString() : tr("(unresolved)"));
             if (column == Oid && !entry.unresolved.isEmpty()) item->setToolTip(entry.unresolved);
             if (column == File) item->setToolTip(entry.file);
-            if (inActive) item->setBackground(QBrush(QColor(0xdf, 0xf2, 0xe4)));
+            if (inActive) item->setData(AppearanceColors::ToneRole, AppearanceColors::Success);
             table->setItem(row, column, item);
         }
         table->item(row, Oid)->setText(oidText.isEmpty() && entry.kind != QLatin1String("Type") ? tr("(unresolved)") : oidText);

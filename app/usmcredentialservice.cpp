@@ -9,19 +9,33 @@ UsmCredentialService::UsmCredentialService(
     const UsmCredentialRepository &identityRepository, QObject *parent)
     : QObject(parent), credentials(legacyRecords), repository(identityRepository)
 {
+    if (repository.hasRecordStore()) {
+        credentials = repository.loadRecords(&loadError);
+        return;
+    }
     const QList<UsmCredentialIdentityRecord> stored = repository.load();
     QHash<QString, QList<QString>> idsByName;
     QHash<QString, int> runtimeCounts;
     for (const auto &entry : stored) idsByName[entry.securityName].append(entry.credentialId);
     for (const auto &record : credentials) ++runtimeCounts[record.securityName];
+    int legacyOrdinal = 0;
     for (UsmCredentialRecord &record : credentials)
     {
         record.identity.kind = CredentialKind::Usm;
         const QList<QString> ids = idsByName.value(record.securityName);
         if (runtimeCounts.value(record.securityName) == 1 && ids.size() == 1)
             record.identity.credentialId = ids.first();
-        else
-            record.identity.credentialId = createId();
+        else {
+            // A read-only import must retain stable references even before its first save.
+            QString key = record.securityName;
+            if (runtimeCounts.value(record.securityName) > 1) key += QStringLiteral(":%1").arg(legacyOrdinal);
+            record.identity.credentialId = QUuid::createUuidV5(
+                QUuid("{92cfe514-92e8-4bd5-9a68-784ec051237d}"), key.toUtf8()).toString(QUuid::WithoutBraces);
+        }
+        ++legacyOrdinal;
+        for (const auto &entry : stored)
+            if (entry.credentialId == record.identity.credentialId && !entry.displayName.isEmpty())
+                record.displayName = entry.displayName;
         if (record.displayName.isEmpty()) record.displayName = record.securityName;
     }
 }
@@ -39,32 +53,33 @@ UsmCredentialRecord UsmCredentialService::createWorkingRecord(
 bool UsmCredentialService::validateWorkingCopy(
     const QList<UsmCredentialRecord> &records) const
 {
-    QSet<QString> ids, names;
+    QSet<QString> ids;
     for (const UsmCredentialRecord &record : records)
     {
         const QString name = record.securityName.trimmed();
         if (record.identity.credentialId.isEmpty() || name.isEmpty() ||
             !requirementsSatisfied(record) ||
-            ids.contains(record.identity.credentialId) || names.contains(name))
+            record.displayName.trimmed().isEmpty() || ids.contains(record.identity.credentialId))
             return false;
         ids.insert(record.identity.credentialId);
-        names.insert(name);
+
     }
     return true;
 }
 
 int UsmCredentialService::securityLevel(const UsmCredentialRecord &record)
 {
-    return record.privacyProtocol != 0 ? 2 : (record.authProtocol != 0 ? 1 : 0);
+    return record.privacyProtocol != UsmProtocolNone ? 2 : (record.authProtocol != UsmProtocolNone ? 1 : 0);
 }
 
 bool UsmCredentialService::requirementsSatisfied(const UsmCredentialRecord &record)
 {
-    if (record.securityName.trimmed().isEmpty()) return false;
+    if (record.securityName.trimmed().isEmpty() || record.authProtocol < UsmProtocolNone ||
+        record.privacyProtocol < UsmProtocolNone) return false;
     const int level = securityLevel(record);
-    if (level >= 1 && (record.authProtocol == 0 || record.authSecret.isEmpty()))
+    if (level >= 1 && (record.authProtocol <= UsmProtocolNone || record.authSecret.isEmpty()))
         return false;
-    if (level == 2 && (record.privacyProtocol == 0 ||
+    if (level == 2 && (record.privacyProtocol <= UsmProtocolNone ||
                        record.privacySecret.isEmpty()))
         return false;
     return true;
@@ -73,6 +88,7 @@ bool UsmCredentialService::requirementsSatisfied(const UsmCredentialRecord &reco
 void UsmCredentialService::applyCommitted(
     const QList<UsmCredentialRecord> &records)
 {
+    if (credentials == records) return;
     QHash<QString, UsmCredentialRecord> oldById, newById;
     for (const auto &record : credentials)
         oldById.insert(record.identity.credentialId, record);
@@ -86,8 +102,8 @@ void UsmCredentialService::applyCommitted(
         else
         {
             const UsmCredentialRecord old = oldById.value(id);
-            if (old.securityName != record.securityName)
-                emit credentialRenamed(id, old.securityName, record.securityName);
+            if (old.securityName != record.securityName || old.displayName != record.displayName)
+                emit credentialRenamed(id, old.displayName, record.displayName);
             if (old.securityName != record.securityName ||
                 old.displayName != record.displayName ||
                 old.authProtocol != record.authProtocol ||
@@ -121,7 +137,7 @@ bool UsmCredentialService::saveIdentities() const
 {
     QList<UsmCredentialIdentityRecord> identities;
     for (const auto &record : credentials)
-        identities.append({record.identity.credentialId, record.securityName});
+        identities.append({record.identity.credentialId, record.securityName, record.displayName});
     return repository.save(identities);
 }
 
@@ -130,7 +146,7 @@ bool UsmCredentialService::rename(const QString &id, const QString &name)
     const int index = indexOfId(id);
     if (index < 0 || name.trimmed().isEmpty()) return false;
     credentials[index].securityName = name.trimmed();
-    credentials[index].displayName = name.trimmed();
+
     return true;
 }
 
@@ -158,4 +174,9 @@ int UsmCredentialService::indexOfId(const QString &id) const
     for (int i = 0; i < credentials.size(); ++i)
         if (credentials[i].identity.credentialId == id) return i;
     return -1;
+}
+
+bool UsmCredentialService::saveWorkingCopy(const QList<UsmCredentialRecord> &records) const
+{
+    return loadError.isEmpty() && validateWorkingCopy(records) && repository.saveRecords(records);
 }

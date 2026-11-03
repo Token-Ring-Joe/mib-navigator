@@ -7,10 +7,10 @@ class InstanceWorker : public QObject
 {
     Q_OBJECT
 public:
-    InstanceWorker(const SnmpRequestContext &context, const Oid &root,
+    InstanceWorker(const SnmpRequestContext &context, const QVector<Oid> &roots,
                    std::unique_ptr<ISnmpTransport> transport,
                    std::shared_ptr<SnmpCancellationToken> cancellation)
-        : operation(context, root), transport(std::move(transport)),
+        : operation(context, roots), transport(std::move(transport)),
           cancellation(std::move(cancellation)) {}
 public slots:
     void run() { emit finished(operation.execute(*transport, *cancellation)); }
@@ -34,10 +34,16 @@ bool SnmpInstanceAsyncRunner::start(const SnmpRequestContext &context,
                                     const Oid &root,
                                     std::unique_ptr<ISnmpTransport> transport)
 {
-    if (isRunning() || !transport) return false;
+    return start(context, QVector<Oid>{root}, std::move(transport));
+}
+bool SnmpInstanceAsyncRunner::start(const SnmpRequestContext &context,
+                                  const QVector<Oid> &roots,
+                                  std::unique_ptr<ISnmpTransport> transport)
+{
+    if (thread || !transport) return false;
     cancellation = std::make_shared<SnmpCancellationToken>();
     thread = new QThread;
-    auto *worker = new InstanceWorker(context, root, std::move(transport), cancellation);
+    auto *worker = new InstanceWorker(context, roots, std::move(transport), cancellation);
     worker->moveToThread(thread);
     connect(thread, &QThread::started, worker, &InstanceWorker::run);
     connect(worker, &InstanceWorker::finished, this,

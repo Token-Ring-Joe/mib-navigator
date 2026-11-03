@@ -19,7 +19,7 @@ include(GNUInstallDirs)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Qt6 6.10 REQUIRED COMPONENTS Core Widgets Network)
+find_package(Qt6 6.10 REQUIRED COMPONENTS Core Widgets Network Svg)
 # Optional: only the loopback SNMP test scenario needs Python.
 find_package(Python3 COMPONENTS Interpreter QUIET)
 

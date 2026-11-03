@@ -1,3 +1,4 @@
+#include "appearancecolors.h"
 #include "miblibrarywidget.h"
 
 #include "diagnosticlogger.h"
@@ -33,6 +34,7 @@
 #include <QPointer>
 #include <QThreadPool>
 #include <QTreeWidget>
+#include <QDirIterator>
 #include <QVBoxLayout>
 
 namespace {
@@ -163,6 +165,7 @@ MibLibraryWidget::MibLibraryWidget(const QStringList &paths,
     auto *outer = new QVBoxLayout(this);
     workspaceTabs = new QTabWidget(this);
     workspaceTabs->setObjectName("MibLibraryTabs");
+    connect(workspaceTabs, &QTabWidget::currentChanged, this, &MibLibraryWidget::workspaceModeChanged);
     outer->addWidget(workspaceTabs);
     auto *inventoryPage = new QWidget(workspaceTabs);
     auto *layout = new QVBoxLayout(inventoryPage);
@@ -202,7 +205,10 @@ MibLibraryWidget::MibLibraryWidget(const QStringList &paths,
     checkUpdates->hide();
     cancelButton = new QPushButton(tr("Cancel"), this);
     cancelButton->setObjectName("MibLibraryCancel"); cancelButton->hide();
-    filters->addWidget(search, 1); filters->addWidget(sourceFilter); filters->addWidget(localRefresh);
+    // Every filter control must be in the layout: an unplaced child is drawn at the widget's
+    // top-left corner, over the Library / Profiles tab names.
+    filters->addWidget(search, 1); filters->addWidget(sourceFilter); filters->addWidget(statusFilter);
+    filters->addWidget(localRefresh);
     filters->addWidget(checkDependencies);
     filters->addWidget(refreshButton); filters->addWidget(checkUpdates); filters->addWidget(cancelButton);
     layout->addLayout(filters);
@@ -371,7 +377,8 @@ MibLibraryWidget::MibLibraryWidget(const QStringList &paths,
         });
     }
     layout->addWidget(inventorySplitter, 1);
-    status = new QLabel(tr("Ready"), this); status->setWordWrap(true); layout->addWidget(status);
+    status = new QLabel(tr("Ready"), this); status->setObjectName("MibLibraryStatus");
+    status->setWordWrap(true); layout->addWidget(status);
 
     auto *profilePage = new QWidget(workspaceTabs);
     auto *profileLayout = new QVBoxLayout(profilePage);
@@ -379,15 +386,12 @@ MibLibraryWidget::MibLibraryWidget(const QStringList &paths,
     profileCombo = new QComboBox(profilePage); profileCombo->setObjectName("MibProfileEditorSelector");
     auto *newProfile = new QPushButton(tr("New Profile"), profilePage);
     auto *duplicateProfileButton = new QPushButton(tr("Duplicate"), profilePage);
-    auto *addFilesButton = new QPushButton(tr("Add Files..."), profilePage);
-    auto *addFolderButton = new QPushButton(tr("Add Folder Snapshot..."), profilePage);
     renameProfileButton = new QPushButton(tr("Rename"), profilePage);
     deleteProfileButton = new QPushButton(tr("Delete"), profilePage);
     auto *activeProfileLabel = new QLabel(tr("Active MIB Profile:"), profilePage);
     activeProfileLabel->setObjectName("MibProfileActiveLabel");
     profileActions->addWidget(activeProfileLabel); profileActions->addWidget(profileCombo, 1);
-    for (QPushButton *button : {newProfile, duplicateProfileButton, addFilesButton,
-                                addFolderButton, renameProfileButton, deleteProfileButton})
+    for (QPushButton *button : {newProfile, duplicateProfileButton, renameProfileButton, deleteProfileButton})
         profileActions->addWidget(button);
     profileLayout->addLayout(profileActions);
     auto *profileDetails = new QHBoxLayout;
@@ -402,26 +406,43 @@ MibLibraryWidget::MibLibraryWidget(const QStringList &paths,
     profileGuidance->setWordWrap(true); profileLayout->addWidget(profileGuidance);
     auto *profileSplitter = new QSplitter(profilePage);
     auto *availablePane = new QWidget(profileSplitter); auto *availableLayout = new QVBoxLayout(availablePane);
-    availableLayout->addWidget(new QLabel(tr("Available MIBs"), availablePane));
+    availableLayout->addWidget(new QLabel(tr("MIB Library folders"), availablePane));
     availableSearch = new QLineEdit(availablePane); availableSearch->setObjectName("MibProfileAvailableFilter");
-    availableSearch->setPlaceholderText(tr("Filter available"));
-    availableList = new QListWidget(availablePane); availableList->setObjectName("MibProfileAvailableList");
-    availableList->setSelectionMode(QAbstractItemView::ExtendedSelection);
-    availableLayout->addWidget(availableSearch); availableLayout->addWidget(availableList);
+    availableSearch->setPlaceholderText(tr("Filter folders, files and modules"));
+    availableTree = new QTreeWidget(availablePane); availableTree->setObjectName("MibProfileAvailableTree");
+    availableTree->setColumnCount(2);
+    availableTree->setHeaderLabels({tr("Folder or file"), tr("In this profile")});
+    availableTree->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    availableTree->setToolTip(tr("Select folders or files and press Add. A folder is followed: MIBs added "
+                                 "to it or removed from it later change the profile."));
+    availableTree->header()->setStretchLastSection(false);
+    availableTree->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    availableTree->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    availableLayout->addWidget(availableSearch); availableLayout->addWidget(availableTree);
     auto *movePane = new QWidget(profileSplitter); auto *moveLayout = new QVBoxLayout(movePane);
     moveLayout->addStretch(); addMemberButton = new QPushButton(tr("Add >"), movePane);
     removeMemberButton = new QPushButton(tr("< Remove"), movePane);
     moveLayout->addWidget(addMemberButton); moveLayout->addWidget(removeMemberButton); moveLayout->addStretch();
     auto *memberPane = new QWidget(profileSplitter); auto *memberLayout = new QVBoxLayout(memberPane);
-    memberLayout->addWidget(new QLabel(tr("Profile files — File · Declared identities · Why · Status"), memberPane));
+    memberLayout->addWidget(new QLabel(tr("In this profile"), memberPane));
     memberSearch = new QLineEdit(memberPane); memberSearch->setObjectName("MibProfileMemberFilter");
     memberSearch->setPlaceholderText(tr("Filter profile"));
-    memberList = new QListWidget(memberPane); memberList->setObjectName("MibProfileMemberList");
-    memberList->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    memberTree = new QTreeWidget(memberPane); memberTree->setObjectName("MibProfileMemberTree");
+    memberTree->setItemDelegate(new AppearanceColors::ItemDelegate(memberTree));
+    memberTree->setColumnCount(3);
+    memberTree->setHeaderLabels({tr("Folder or file"), tr("Modules"), tr("Status")});
+    memberTree->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    memberTree->setToolTip(tr("Remove takes a followed folder or a single file out of the profile. On a file "
+                              "inside a followed folder it leaves just that file out (Excluded)."));
     includeStandards = new QCheckBox(tr("Include standard SNMP / MIB-II base"), memberPane);
     includeStandards->setObjectName("MibProfileIncludeStandards");
     includeStandards->hide();
-    memberLayout->addWidget(memberSearch); memberLayout->addWidget(memberList); memberLayout->addWidget(includeStandards);
+    memberTree->header()->setStretchLastSection(false);
+    memberTree->header()->setSectionResizeMode(0, QHeaderView::Stretch);
+    memberTree->header()->setSectionResizeMode(1, QHeaderView::Interactive);
+    memberTree->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    memberTree->header()->resizeSection(1, 160);
+    memberLayout->addWidget(memberSearch); memberLayout->addWidget(memberTree, 2); memberLayout->addWidget(includeStandards);
     profileEmptyState = new QLabel(memberPane);
     profileEmptyState->setObjectName("MibProfileEmptyState");
     profileEmptyState->setWordWrap(true); profileEmptyState->hide();
@@ -436,7 +457,7 @@ MibLibraryWidget::MibLibraryWidget(const QStringList &paths,
     dependencyCheckSummary->setWordWrap(true); memberLayout->addWidget(dependencyCheckSummary);
     profileSplitter->addWidget(availablePane); profileSplitter->addWidget(movePane); profileSplitter->addWidget(memberPane);
     profileSplitter->setStretchFactor(0, 1); profileSplitter->setStretchFactor(2, 1);
-    profileLayout->addWidget(profileSplitter);
+    profileLayout->addWidget(profileSplitter, 1);   // the folder lists get the page's spare height
     workspaceTabs->addTab(profilePage, tr("Profiles"));
     connect(search, &QLineEdit::textChanged, this, &MibLibraryWidget::applyFilter);
     connect(sourceFilter, &QComboBox::currentTextChanged, this, &MibLibraryWidget::applyFilter);
@@ -486,16 +507,26 @@ MibLibraryWidget::MibLibraryWidget(const QStringList &paths,
     connect(renameProfileButton, &QPushButton::clicked, this, &MibLibraryWidget::renameProfile);
     connect(deleteProfileButton, &QPushButton::clicked, this, &MibLibraryWidget::deleteProfile);
     connect(addMemberButton, &QPushButton::clicked, this, &MibLibraryWidget::addProfileMembers);
-    connect(addFilesButton, &QPushButton::clicked, this, &MibLibraryWidget::addProfileFiles);
-    connect(addFolderButton, &QPushButton::clicked, this, &MibLibraryWidget::addProfileFolder);
     connect(removeMemberButton, &QPushButton::clicked, this, &MibLibraryWidget::removeProfileMembers);
     connect(includeStandards, &QCheckBox::toggled, this, [this]() { saveCurrentProfile(); });
-    connect(availableSearch, &QLineEdit::textChanged, this, [this](const QString &text) {
-        for (int i=0;i<availableList->count();++i) availableList->item(i)->setHidden(!availableList->item(i)->text().contains(text, Qt::CaseInsensitive));
-    });
-    connect(memberSearch, &QLineEdit::textChanged, this, [this](const QString &text) {
-        for (int i=0;i<memberList->count();++i) memberList->item(i)->setHidden(!memberList->item(i)->text().contains(text, Qt::CaseInsensitive));
-    });
+    // A filter shows matching items and the folders that lead to them.
+    const auto filterTree = [](QTreeWidget *tree, const QString &text) {
+        std::function<bool(QTreeWidgetItem *)> apply = [&](QTreeWidgetItem *item) {
+            bool childMatches = false;
+            for (int i = 0; i < item->childCount(); ++i) childMatches = apply(item->child(i)) || childMatches;
+            bool matches = text.isEmpty();
+            for (int column = 0; !matches && column < tree->columnCount(); ++column)
+                matches = item->text(column).contains(text, Qt::CaseInsensitive);
+            item->setHidden(!matches && !childMatches);
+            if (!text.isEmpty() && childMatches) item->setExpanded(true);
+            return matches || childMatches;
+        };
+        for (int i = 0; i < tree->topLevelItemCount(); ++i) apply(tree->topLevelItem(i));
+    };
+    connect(availableSearch, &QLineEdit::textChanged, this,
+            [this, filterTree](const QString &text) { filterTree(availableTree, text); });
+    connect(memberSearch, &QLineEdit::textChanged, this,
+            [this, filterTree](const QString &text) { filterTree(memberTree, text); });
     connect(table, &QTableWidget::currentCellChanged, this,
             [this](int row, int, int, int) {
         Q_UNUSED(row); showCurrentInfo();
@@ -669,6 +700,11 @@ void MibLibraryWidget::publishInitialChunk(quint64 generation)
     showCurrentInfo();
     updateSelectionUi();
     emit initialRefreshFinished(initialPreparationMs, initialPublicationTimer.elapsed());
+}
+
+void MibLibraryWidget::setEditorPage(QWidget *page)
+{
+    if (page && workspaceTabs->indexOf(page) < 0) workspaceTabs->addTab(page, tr("Editor"));
 }
 
 void MibLibraryWidget::showWorkspaceMode(int mode)
@@ -865,8 +901,8 @@ void MibLibraryWidget::publishPreparedProfile(const QString &id,
     deleteProfileButton->setEnabled(editable);
     addMemberButton->setEnabled(editable);
     removeMemberButton->setEnabled(editable);
-    profileSource->setText(tr("%n exact root file(s)", nullptr, profile->roots.size()));
-    profileGuidance->setText(tr("Profile roots are a saved snapshot of exact files. Dependencies are derived when the Profile is activated."));
+    profileSource->setText(profileSummaryText(*profile));
+    profileGuidance->setText(profileGuidanceText(*profile));
     refreshProfileLists(&plan);
     for (int row = 0; row < table->rowCount(); ++row) {
         const QString module = table->item(row, 1)->text();
@@ -1117,6 +1153,33 @@ void MibLibraryWidget::refreshProfiles(const QString &selectId)
     profileChanged();
 }
 
+QString MibLibraryWidget::profileSummaryText(const MibProfileRecord &profile) const
+{
+    if (profile.type == MibProfileType::Standards)
+        return tr("%n built-in module(s)", nullptr, profile.explicitModules.size());
+    if (profile.type == MibProfileType::Automatic)
+        return tr("%n MIB file(s) from its folder", nullptr, profile.roots.size());
+    return tr("%1 followed folder(s) · %2 single file(s)").arg(profile.folders.size()).arg(profile.roots.size());
+}
+
+QString MibLibraryWidget::profileGuidanceText(const MibProfileRecord &profile) const
+{
+    switch (profile.type) {
+    case MibProfileType::Automatic:
+        return tr("Automatic profile: built from the MIB files in the folder %1 (and shared files in %2). It follows "
+                  "the folder: add, remove or change a file there and refresh the Library. It cannot be edited member "
+                  "by member; to choose your own set, create a Custom profile.")
+            .arg(profile.orderedScopes.value(0).id.mid(7), profile.orderedScopes.value(1).id.mid(7));
+    case MibProfileType::Standards:
+        return tr("Built-in profile with the standard SNMP and MIB-II modules. It cannot be edited; to choose your "
+                  "own MIBs, create a Custom profile.");
+    default:
+        return tr("Custom profile. Select folders or MIB files on the left and press Add. A folder is followed: MIBs "
+                  "added to it or removed from it change the profile at the next Library refresh. Remove on a file "
+                  "inside a followed folder leaves just that file out. MIBs they import are found automatically.");
+    }
+}
+
 void MibLibraryWidget::selectProfile(const QString &id)
 {
     const int index = profileCombo->findData(id);
@@ -1135,13 +1198,8 @@ void MibLibraryWidget::profileChanged()
     renameProfileButton->setEnabled(editable); deleteProfileButton->setEnabled(editable);
     addMemberButton->setEnabled(editable); removeMemberButton->setEnabled(editable);
     includeStandards->hide();
-    profileSource->setText(tr("%n exact root file(s)", nullptr, selectedProfile.roots.size()));
-    profileGuidance->setText(selectedProfile.type == MibProfileType::Automatic
-        ? tr("Automatic profile: built from the MIB files in the folder %1 (and shared files in %2). It follows the folder: "
-             "add, remove or change a file there and refresh the Library. It cannot be edited member by member; "
-             "to choose your own set, create a Custom profile.")
-              .arg(selectedProfile.orderedScopes.value(0).id.mid(7), selectedProfile.orderedScopes.value(1).id.mid(7))
-        : tr("Profile roots are a saved snapshot of exact files. Dependencies are derived when the Profile is activated."));
+    profileSource->setText(profileSummaryText(selectedProfile));
+    profileGuidance->setText(profileGuidanceText(selectedProfile));
     openProfileFolderButton->hide();
     const MibEffectivePlan plan = planFor(selectedProfile);
     refreshProfileLists(&plan);
@@ -1243,72 +1301,11 @@ void MibLibraryWidget::refreshProfileLists(const MibEffectivePlan *providedPlan)
         }
         return QString();
     };
-    QStringList selectedAvailable, selectedMembers;
-    for (QListWidgetItem *item : availableList->selectedItems()) selectedAvailable.append(item->text());
-    for (QListWidgetItem *item : memberList->selectedItems()) selectedMembers.append(item->text());
-    const int availableScroll = availableList->verticalScrollBar()->value();
-    const int memberScroll = memberList->verticalScrollBar()->value();
     const QSignalBlocker blocker(includeStandards);
     includeStandards->setChecked(false);
-    memberList->clear();
-    if (!profile->roots.isEmpty()) {
-        for (const auto &member : profile->roots) {
-            MibProfileMemberState state = QFileInfo::exists(member.canonicalPath)
-                ? MibProfileMemberState::Changed : MibProfileMemberState::Missing;
-            for (const QString &identity : member.identities) {
-                const MibEffectivePlanMember *resolved = effective.member(identity);
-                if (resolved && resolved->provider.sha256 == member.sha256 &&
-                    QFileInfo(resolved->provider.canonicalPath).absoluteFilePath().compare(
-                        QFileInfo(member.canonicalPath).absoluteFilePath(), Qt::CaseInsensitive) == 0) {
-                    state = MibProfileMemberState::Current;
-                    break;
-                }
-            }
-            const QString stateText = state == MibProfileMemberState::Current ? tr("OK")
-                : state == MibProfileMemberState::Missing ? tr("Missing")
-                : state == MibProfileMemberState::Changed ? tr("Changed") : tr("Catalog stale");
-            const QString why = member.reason == MibProfileMemberReason::Dependency
-                ? tr("Dependency") : tr("Added");
-            auto *item = new QListWidgetItem(tr("%1 · %2 · %3 · %4").arg(
-                QFileInfo(member.canonicalPath).fileName(),
-                member.identities.join(QStringLiteral(", ")), why, stateText), memberList);
-            item->setData(Qt::UserRole, member.canonicalPath);
-            item->setToolTip(QDir::toNativeSeparators(member.canonicalPath));
-            if (state != MibProfileMemberState::Current)
-                item->setToolTip(item->toolTip() + (state == MibProfileMemberState::Missing
-                    ? tr("\nProfile file is missing") : tr("\nProfile file content changed")));
-        }
-    }
-    profileEmptyState->setVisible(memberList->count() == 0);
-    profileEmptyState->setText(tr("This Profile is empty. Add files or take a one-time folder snapshot."));
-    QStringList available = availableModuleNames();
-    for (const QString &member : profile->explicitModules) available.removeAll(member);
-    availableList->clear(); availableList->addItems(available);
-    for (int row = 0; row < availableList->count(); ++row) {
-        QListWidgetItem *item = availableList->item(row);
-        item->setHidden(!item->text().contains(availableSearch->text(), Qt::CaseInsensitive));
-        item->setSelected(selectedAvailable.contains(item->text()));
-    }
-    for (int row = 0; row < memberList->count(); ++row) {
-        QListWidgetItem *item = memberList->item(row);
-        item->setHidden(!item->text().contains(memberSearch->text(), Qt::CaseInsensitive));
-        item->setSelected(selectedMembers.contains(item->text()));
-        if (const MibEffectivePlanMember *member = effective.member(item->text())) {
-            QStringList providers;
-            for (const MibIndexedProvider &alternative : member->alternatives)
-                providers.append(tr("%1 [%2]").arg(alternative.canonicalPath,
-                    alternative.sha256.left(12)));
-            const QString selected = member->provider.canonicalPath.isEmpty()
-                ? tr("No provider selected")
-                : tr("Selected: %1 [%2]").arg(member->provider.canonicalPath,
-                    member->provider.sha256.left(12));
-            item->setToolTip(selected + tr("\nReason: %1").arg(providerReasonText(member->providerReason)) +
-                (providers.isEmpty() ? QString() :
-                tr("\nProviders:\n%1").arg(providers.join('\n'))));
-        }
-    }
-    availableList->verticalScrollBar()->setValue(availableScroll);
-    memberList->verticalScrollBar()->setValue(memberScroll);
+    const QList<MibDependencyFileRecord> files = libraryFileRecords();
+    fillAvailableTree(*profile, files);
+    fillMemberTree(*profile, files, effective);
     requiredList->clear();
     for (const MibEffectivePlanMember &requirement : effective.members) {
         if (requirement.membershipReason == MibPlanMembershipReason::Explicit) continue;
@@ -1338,7 +1335,7 @@ void MibLibraryWidget::refreshProfileLists(const MibEffectivePlan *providedPlan)
     if (!effective.missingModules.isEmpty())
         profileSummary += tr(" · %1 missing").arg(effective.missingModules.size());
     if (!effective.ambiguousModules.isEmpty())
-        profileSummary += tr(" · %1 conflicts").arg(effective.ambiguousModules.size());
+        profileSummary += tr(" · Conflicting definitions: %1").arg(effective.ambiguousModules.join(QStringLiteral(", ")));
     if (!effective.pinFailureModules.isEmpty())
         profileSummary += tr(" · %1 invalid pins").arg(effective.pinFailureModules.size());
     if (!effective.converged)
@@ -1388,67 +1385,336 @@ void MibLibraryWidget::saveCurrentProfile()
     emit profilesChanged(); profileChanged();
 }
 
+namespace {
+// What a row on the Profiles page stands for.
+enum ProfileItemRole { PathRole = Qt::UserRole, KindRole, ExcludedRole, IdentitiesRole };
+const QString kindFolder = QStringLiteral("folder");              // a Library folder (left)
+const QString kindFile = QStringLiteral("file");                  // a Library file (left)
+const QString kindFollowed = QStringLiteral("followed-folder");   // a folder the profile follows (right)
+const QString kindFolderFile = QStringLiteral("folder-file");     // a file inside a followed folder (right)
+const QString kindRoot = QStringLiteral("single-file");           // a file added on its own (right)
+const QString kindModule = QStringLiteral("module");              // a built-in profile's module (right)
+
+QString itemKey(const QTreeWidgetItem *item)
+{
+    return item->data(0, KindRole).toString() + QLatin1Char('|') + item->data(0, PathRole).toString();
+}
+
+// Remembers which rows were expanded and selected, so a rebuild keeps the user's place.
+struct TreeState {
+    QSet<QString> expanded, selected;
+    explicit TreeState(QTreeWidget *tree) {
+        std::function<void(QTreeWidgetItem *)> walk = [&](QTreeWidgetItem *item) {
+            if (item->isExpanded()) expanded.insert(itemKey(item));
+            if (item->isSelected()) selected.insert(itemKey(item));
+            for (int i = 0; i < item->childCount(); ++i) walk(item->child(i));
+        };
+        for (int i = 0; i < tree->topLevelItemCount(); ++i) walk(tree->topLevelItem(i));
+    }
+    void apply(QTreeWidget *tree, bool expandTopLevel) const {
+        std::function<void(QTreeWidgetItem *, bool)> walk = [&](QTreeWidgetItem *item, bool top) {
+            const QString key = itemKey(item);
+            item->setExpanded(expanded.contains(key) || (top && expandTopLevel && expanded.isEmpty()));
+            item->setSelected(selected.contains(key));
+            for (int i = 0; i < item->childCount(); ++i) walk(item->child(i), false);
+        };
+        for (int i = 0; i < tree->topLevelItemCount(); ++i) walk(tree->topLevelItem(i), true);
+    }
+};
+
+bool isHiddenBelow(const QString &path, const QString &root)
+{
+    const QString relative = QDir(root).relativeFilePath(path);
+    for (const QString &part : relative.split(QLatin1Char('/'), Qt::SkipEmptyParts))
+        if (part.startsWith(QLatin1Char('.'))) return true;
+    return false;
+}
+}
+
+QList<MibDependencyFileRecord> MibLibraryWidget::libraryFileRecords() const
+{
+    if (callbacks.libraryFiles) return callbacks.libraryFiles();
+    // Without the index (tests that only give a module inventory), the Library's own records.
+    QMap<QString, MibDependencyFileRecord> byPath;
+    for (const MibLibraryRecord &record : records) {
+        if (record.localPath.isEmpty()) continue;
+        const QString path = QFileInfo(record.localPath).canonicalFilePath();
+        if (path.isEmpty()) continue;
+        MibDependencyFileRecord &file = byPath[path];
+        file.canonicalPath = path;
+        file.filename = QFileInfo(path).fileName();
+        file.sha256 = QStringLiteral("local");
+        file.importsByModule.insert(record.moduleName, {});
+    }
+    return byPath.values();
+}
+
+void MibLibraryWidget::fillAvailableTree(const MibProfileRecord &profile,
+                                         const QList<MibDependencyFileRecord> &files)
+{
+    const TreeState state(availableTree);
+    const int scroll = availableTree->verticalScrollBar()->value();
+    availableTree->clear();
+    const QString libraryRoot = QFileInfo(library.rootPath()).canonicalFilePath();
+    const auto followedFolder = [&profile](const QString &path) -> const MibProfileFolder * {
+        for (const MibProfileFolder &folder : profile.folders)
+            if (MibPathIsInsideFolder(path, folder.canonicalPath)) return &folder;
+        return nullptr;
+    };
+    QHash<QString, QTreeWidgetItem *> folderItems;
+    QTreeWidgetItem *outside = nullptr;
+    std::function<QTreeWidgetItem *(const QString &)> folderItem = [&](const QString &path) -> QTreeWidgetItem * {
+        if (!libraryRoot.isEmpty() && path == libraryRoot) return nullptr;   // the Library itself: top level
+        if (QTreeWidgetItem *known = folderItems.value(path)) return known;
+        const bool inside = !libraryRoot.isEmpty() && MibPathIsInsideFolder(path, libraryRoot);
+        QTreeWidgetItem *parent = nullptr;
+        if (inside) {
+            parent = folderItem(QFileInfo(path).absolutePath());
+        } else {
+            if (!outside) {
+                outside = new QTreeWidgetItem(availableTree, {tr("Outside the MIB Library")});
+                outside->setToolTip(0, tr("MIB files the Library knows about that are not in its folder"));
+                outside->setFlags(outside->flags() & ~Qt::ItemIsSelectable);
+            }
+            parent = outside;
+        }
+        auto *item = parent ? new QTreeWidgetItem(parent) : new QTreeWidgetItem(availableTree);
+        item->setText(0, inside ? QFileInfo(path).fileName() : QDir::toNativeSeparators(path));
+        item->setIcon(0, style()->standardIcon(QStyle::SP_DirIcon));
+        item->setToolTip(0, QDir::toNativeSeparators(path));
+        item->setData(0, PathRole, path);
+        item->setData(0, KindRole, kindFolder);
+        const bool followed = std::any_of(profile.folders.cbegin(), profile.folders.cend(),
+            [&path](const MibProfileFolder &folder) {
+                return MibPathIsInsideFolder(path, folder.canonicalPath) &&
+                       MibPathIsInsideFolder(folder.canonicalPath, path);
+            });
+        item->setText(1, followed ? tr("Followed") : followedFolder(path) ? tr("Via folder") : QString());
+        folderItems.insert(path, item);
+        return item;
+    };
+    // Every Library folder appears, even an empty one (a folder can be followed before it has MIBs).
+    if (!libraryRoot.isEmpty()) {
+        QDirIterator folders(libraryRoot, QDir::Dirs | QDir::NoDotAndDotDot, QDirIterator::Subdirectories);
+        while (folders.hasNext()) {
+            const QString path = QFileInfo(folders.next()).canonicalFilePath();
+            if (!path.isEmpty() && !isHiddenBelow(path, libraryRoot)) folderItem(path);
+        }
+    }
+    for (const MibDependencyFileRecord &file : files) {
+        if (file.sha256.isEmpty() || file.importsByModule.isEmpty()) continue;   // not a usable MIB file
+        if (!libraryRoot.isEmpty() && MibPathIsInsideFolder(file.canonicalPath, libraryRoot) &&
+            isHiddenBelow(file.canonicalPath, libraryRoot)) continue;
+        QTreeWidgetItem *parent = folderItem(QFileInfo(file.canonicalPath).absolutePath());
+        auto *item = parent ? new QTreeWidgetItem(parent) : new QTreeWidgetItem(availableTree);
+        const QStringList modules = file.importsByModule.keys();
+        item->setText(0, tr("%1  (%2)").arg(QFileInfo(file.canonicalPath).fileName(),
+                                            modules.join(QStringLiteral(", "))));
+        item->setIcon(0, style()->standardIcon(QStyle::SP_FileIcon));
+        item->setToolTip(0, QDir::toNativeSeparators(file.canonicalPath));
+        item->setData(0, PathRole, file.canonicalPath);
+        item->setData(0, KindRole, kindFile);
+        item->setData(0, IdentitiesRole, modules);
+        QString membership;
+        if (std::any_of(profile.roots.cbegin(), profile.roots.cend(), [&file](const MibProfileMember &root) {
+                return MibPathIsInsideFolder(file.canonicalPath, root.canonicalPath); }))
+            membership = tr("Added");
+        else if (const MibProfileFolder *folder = followedFolder(file.canonicalPath))
+            membership = std::any_of(folder->excludedFiles.cbegin(), folder->excludedFiles.cend(),
+                [&file](const QString &excluded) { return MibPathIsInsideFolder(file.canonicalPath, excluded); })
+                ? tr("Excluded") : tr("Via folder");
+        item->setText(1, membership);
+    }
+    availableTree->sortItems(0, Qt::AscendingOrder);
+    if (outside) {   // keep the outside group last
+        availableTree->takeTopLevelItem(availableTree->indexOfTopLevelItem(outside));
+        availableTree->addTopLevelItem(outside);
+    }
+    state.apply(availableTree, true);   // the first time, vendors open to show their products
+    if (!availableSearch->text().isEmpty()) emit availableSearch->textChanged(availableSearch->text());
+    availableTree->verticalScrollBar()->setValue(scroll);
+}
+
+void MibLibraryWidget::fillMemberTree(const MibProfileRecord &profile,
+                                      const QList<MibDependencyFileRecord> &files,
+                                      const MibEffectivePlan &effective)
+{
+    const TreeState state(memberTree);
+    const int scroll = memberTree->verticalScrollBar()->value();
+    memberTree->clear();
+    const QString libraryRoot = QFileInfo(library.rootPath()).canonicalFilePath();
+    const auto shownPath = [&libraryRoot](const QString &path) {
+        return !libraryRoot.isEmpty() && MibPathIsInsideFolder(path, libraryRoot) && path != libraryRoot
+            ? QDir::toNativeSeparators(QDir(libraryRoot).relativeFilePath(path))
+            : QDir::toNativeSeparators(path);
+    };
+    const auto providerTip = [&effective](const QStringList &identities) {
+        QStringList lines;
+        for (const QString &identity : identities)
+            if (const MibEffectivePlanMember *member = effective.member(identity))
+                if (!member->provider.canonicalPath.isEmpty())
+                    lines << tr("%1 loads from %2").arg(identity, QDir::toNativeSeparators(member->provider.canonicalPath));
+        return lines.join(QLatin1Char('\n'));
+    };
+    for (const MibProfileFolder &folder : profile.folders) {
+        auto *item = new QTreeWidgetItem(memberTree);
+        item->setText(0, shownPath(folder.canonicalPath));
+        item->setIcon(0, style()->standardIcon(QStyle::SP_DirIcon));
+        item->setToolTip(0, QDir::toNativeSeparators(folder.canonicalPath));
+        item->setData(0, PathRole, folder.canonicalPath);
+        item->setData(0, KindRole, kindFollowed);
+        if (!QFileInfo(folder.canonicalPath).isDir()) {
+            item->setText(2, tr("Folder not found"));
+            item->setIcon(2, style()->standardIcon(QStyle::SP_MessageBoxWarning));
+            item->setToolTip(2, tr("The folder was renamed, moved or deleted. Restore it, or remove it from the profile."));
+            continue;
+        }
+        int included = 0, excluded = 0;
+        for (const MibProfileMember &member : MibProfileFolderMembers(folder, files, true)) {
+            const bool isExcluded = std::any_of(folder.excludedFiles.cbegin(), folder.excludedFiles.cend(),
+                [&member](const QString &path) { return MibPathIsInsideFolder(member.canonicalPath, path); });
+            auto *child = new QTreeWidgetItem(item);
+            child->setText(0, QDir::toNativeSeparators(QDir(folder.canonicalPath).relativeFilePath(member.canonicalPath)));
+            child->setText(1, member.identities.join(QStringLiteral(", ")));
+            child->setText(2, isExcluded ? tr("Excluded") : tr("Included"));
+            child->setToolTip(0, QDir::toNativeSeparators(member.canonicalPath));
+            child->setToolTip(1, providerTip(member.identities));
+            child->setData(0, PathRole, member.canonicalPath);
+            child->setData(0, KindRole, kindFolderFile);
+            child->setData(0, ExcludedRole, isExcluded);
+            child->setData(0, IdentitiesRole, member.identities);
+            if (isExcluded) {
+                for (int column = 0; column < 3; ++column) child->setData(column, AppearanceColors::MutedRole, true);
+                ++excluded;
+            } else {
+                ++included;
+            }
+        }
+        item->setText(2, excluded ? tr("Followed · %1 MIB file(s) · %2 excluded").arg(included).arg(excluded)
+                                  : tr("Followed · %1 MIB file(s)").arg(included));
+    }
+    for (const MibProfileMember &member : profile.roots) {
+        MibProfileMemberState memberState = QFileInfo::exists(member.canonicalPath)
+            ? MibProfileMemberState::Changed : MibProfileMemberState::Missing;
+        for (const QString &identity : member.identities) {
+            const MibEffectivePlanMember *resolved = effective.member(identity);
+            if (resolved && resolved->provider.sha256 == member.sha256 &&
+                QFileInfo(resolved->provider.canonicalPath).absoluteFilePath().compare(
+                    QFileInfo(member.canonicalPath).absoluteFilePath(), Qt::CaseInsensitive) == 0) {
+                memberState = MibProfileMemberState::Current;
+                break;
+            }
+        }
+        const QString stateText = memberState == MibProfileMemberState::Current ? tr("OK")
+            : memberState == MibProfileMemberState::Missing ? tr("Missing")
+            : memberState == MibProfileMemberState::Changed ? tr("Changed") : tr("Catalog stale");
+        auto *item = new QTreeWidgetItem(memberTree);
+        item->setText(0, shownPath(member.canonicalPath));
+        item->setIcon(0, style()->standardIcon(QStyle::SP_FileIcon));
+        item->setText(1, member.identities.join(QStringLiteral(", ")));
+        item->setText(2, member.reason == MibProfileMemberReason::Dependency
+            ? tr("%1 · added as a dependency").arg(stateText) : stateText);
+        item->setToolTip(0, QDir::toNativeSeparators(member.canonicalPath) +
+            (memberState == MibProfileMemberState::Missing ? tr("\nProfile file is missing")
+             : memberState == MibProfileMemberState::Current ? QString() : tr("\nProfile file content changed")));
+        item->setToolTip(1, providerTip(member.identities));
+        item->setData(0, PathRole, member.canonicalPath);
+        item->setData(0, KindRole, kindRoot);
+        item->setData(0, IdentitiesRole, member.identities);
+    }
+    if (profile.folders.isEmpty() && profile.roots.isEmpty()) {
+        // Built-in (and older, module-list) profiles name modules rather than files.
+        for (const QString &module : profile.explicitModules) {
+            auto *item = new QTreeWidgetItem(memberTree, {module, module,
+                profile.type == MibProfileType::Standards ? tr("Built in") : tr("Listed module")});
+            item->setData(0, PathRole, module);
+            item->setData(0, KindRole, kindModule);
+            item->setToolTip(1, providerTip({module}));
+        }
+    }
+    state.apply(memberTree, false);
+    if (!memberSearch->text().isEmpty()) emit memberSearch->textChanged(memberSearch->text());
+    memberTree->verticalScrollBar()->setValue(scroll);
+    profileEmptyState->setVisible(memberTree->topLevelItemCount() == 0);
+    profileEmptyState->setText(tr("This profile is empty. Select folders or MIB files on the left and press Add."));
+}
+
 void MibLibraryWidget::addProfileMembers()
 {
     const MibProfileRecord *current = profiles.find(profileCombo->currentData().toString());
-    if (!current || current->type != MibProfileType::Custom) return;
-    QStringList files;
-    for (QListWidgetItem *item : availableList->selectedItems()) {
-        const auto record = std::find_if(records.cbegin(), records.cend(), [item](const auto &candidate) {
-            return candidate.moduleName == item->text() && !candidate.localPath.isEmpty();
-        });
-        if (record != records.cend()) files.append(record->localPath);
+    if (!current || current->type != MibProfileType::Custom) {
+        status->setText(tr("This profile cannot be edited. Create a Custom profile (New Profile or Duplicate) to choose your own MIBs."));
+        return;
+    }
+    const MibProfileRecord profile = *current;
+    QStringList folders, singleFiles, takeBack;
+    for (QTreeWidgetItem *item : availableTree->selectedItems()) {
+        const QString path = item->data(0, PathRole).toString();
+        const QString kind = item->data(0, KindRole).toString();
+        if (kind == kindFolder) folders << path;
+        else if (kind == kindFile) {
+            const auto folder = std::find_if(profile.folders.cbegin(), profile.folders.cend(),
+                [&path](const MibProfileFolder &followed) { return MibPathIsInsideFolder(path, followed.canonicalPath); });
+            if (folder == profile.folders.cend()) singleFiles << path;
+            else if (item->text(1) == tr("Excluded")) takeBack << path;   // back in from its followed folder
+        }
+    }
+    // A file inside a folder that is being followed in the same step comes in with the folder.
+    singleFiles.erase(std::remove_if(singleFiles.begin(), singleFiles.end(), [&folders](const QString &path) {
+        return std::any_of(folders.cbegin(), folders.cend(),
+                           [&path](const QString &folder) { return MibPathIsInsideFolder(path, folder); });
+    }), singleFiles.end());
+    if (folders.isEmpty() && singleFiles.isEmpty() && takeBack.isEmpty()) {
+        status->setText(tr("Select folders or MIB files in the MIB Library folders list first. Files already in "
+                           "the profile through a followed folder are not added again."));
+        return;
     }
     QString error;
-    if (!profiles.addFiles(current->id, files, MibProfileMemberReason::Added, &error))
-        status->setText(error.isEmpty() ? tr("Select Catalog entries with local files") : error);
-    emit profilesChanged(); profileChanged();
-}
-
-void MibLibraryWidget::addProfileFiles()
-{
-    const MibProfileRecord *current = profiles.find(profileCombo->currentData().toString());
-    if (!current || current->type != MibProfileType::Custom) return;
-    const QStringList files = QFileDialog::getOpenFileNames(this, tr("Add MIB Files to Profile"),
-        library.rootPath(), tr("MIB files (*.mib *.my *.smiv1 *.smiv2 *.txt *-MIB);;All files (*)"));
-    if (files.isEmpty()) return;
-    QString error;
-    if (!profiles.addFiles(current->id, files, MibProfileMemberReason::Added, &error))
-        status->setText(error);
-    emit profilesChanged(); profileChanged();
-}
-
-void MibLibraryWidget::addProfileFolder()
-{
-    const MibProfileRecord *current = profiles.find(profileCombo->currentData().toString());
-    if (!current || current->type != MibProfileType::Custom) return;
-    const QString folder = QFileDialog::getExistingDirectory(this,
-        tr("Add Folder Snapshot to Profile"), library.rootPath());
-    if (folder.isEmpty()) return;
-    QString error;
-    if (!profiles.addFolder(current->id, folder, &error)) status->setText(error);
-    else status->setText(tr("Added a recursive snapshot of eligible files. Later folder changes will not alter this Profile."));
+    const bool done = (folders.isEmpty() || profiles.followFolders(profile.id, folders, &error)) &&
+        (takeBack.isEmpty() || profiles.setFilesExcluded(profile.id, takeBack, false, &error)) &&
+        (singleFiles.isEmpty() || profiles.addFiles(profile.id, singleFiles, MibProfileMemberReason::Added, &error));
+    status->setText(done ? tr("Profile updated: %1 folder(s) followed, %2 file(s) added, %3 file(s) taken back in.")
+                               .arg(folders.size()).arg(singleFiles.size()).arg(takeBack.size())
+                         : error);
     emit profilesChanged(); profileChanged();
 }
 
 void MibLibraryWidget::removeProfileMembers()
 {
     const MibProfileRecord *current = profiles.find(profileCombo->currentData().toString());
-    if (!current || current->type != MibProfileType::Custom) return;
-    MibProfileRecord changed = *current;
-    for (QListWidgetItem *item : memberList->selectedItems()) {
-        const QString path = item->data(Qt::UserRole).toString();
-        if (!path.isEmpty()) changed.roots.erase(std::remove_if(changed.roots.begin(), changed.roots.end(),
-            [&path](const auto &member) {
-#ifdef Q_OS_WIN
-                return member.canonicalPath.compare(path, Qt::CaseInsensitive) == 0;
-#else
-                return member.canonicalPath == path;
-#endif
-            }), changed.roots.end());
-        else changed.explicitModules.removeAll(item->text());
+    if (!current || current->type != MibProfileType::Custom) {
+        status->setText(tr("This profile cannot be edited. Create a Custom profile (New Profile or Duplicate) to choose your own MIBs."));
+        return;
     }
-    changed.explicitModules = MibProfileMemberIdentities(changed.roots);
-    QString error; if (!profiles.update(changed, &error)) status->setText(error);
+    const QString id = current->id;
+    QStringList folders, exclude, roots;
+    for (QTreeWidgetItem *item : memberTree->selectedItems()) {
+        const QString path = item->data(0, PathRole).toString();
+        const QString kind = item->data(0, KindRole).toString();
+        if (kind == kindFollowed) folders << path;
+        else if (kind == kindFolderFile && !item->data(0, ExcludedRole).toBool()) exclude << path;
+        else if (kind == kindRoot) roots << path;
+    }
+    if (folders.isEmpty() && exclude.isEmpty() && roots.isEmpty()) {
+        status->setText(tr("Select followed folders or files in the profile first."));
+        return;
+    }
+    QString error;
+    bool done = true;
+    if (!roots.isEmpty()) {
+        MibProfileRecord changed = *current;
+        changed.roots.erase(std::remove_if(changed.roots.begin(), changed.roots.end(), [&roots](const auto &member) {
+            return std::any_of(roots.cbegin(), roots.cend(), [&member](const QString &path) {
+                return MibPathIsInsideFolder(member.canonicalPath, path) && MibPathIsInsideFolder(path, member.canonicalPath);
+            });
+        }), changed.roots.end());
+        changed.explicitModules = MibProfileMemberIdentities(changed.roots);
+        done = profiles.update(changed, &error);
+    }
+    done = done && (exclude.isEmpty() || profiles.setFilesExcluded(id, exclude, true, &error)) &&
+        (folders.isEmpty() || profiles.unfollowFolders(id, folders, &error));
+    status->setText(done ? tr("Profile updated: %1 folder(s) no longer followed, %2 file(s) excluded, %3 file(s) removed.")
+                               .arg(folders.size()).arg(exclude.size()).arg(roots.size())
+                         : error);
     emit profilesChanged(); profileChanged();
 }

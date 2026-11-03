@@ -551,7 +551,7 @@ int receive_snmp_notification(SnmpSocket sock, Snmp &snmp_session,
     // though.
     if (pdu.get_type() == sNMP_PDU_REPORT ||
         pdu.get_type() == sNMP_PDU_RESPONSE) {
-        v3MP::I->add_to_engine_id_table(engine_id,
+        snmp_session.get_v3mp()->add_to_engine_id_table(engine_id,
                              (char*)(fromaddress.IpAddress::get_printable()),
                              fromaddress.get_port());
     }
@@ -622,6 +622,13 @@ void Snmp::map_action( unsigned short action, unsigned short & pdu_action)
 }
 
 //------[ Snmp Class Constructor ]--------------------------------------
+
+#ifdef _SNMPv3
+v3MP *Snmp::get_v3mp() const
+{
+  return session_v3mp ? session_v3mp : v3MP::I;
+}
+#endif
 
 Snmp::Snmp(int &status, const unsigned short port, const bool bind_ipv6)
     : SnmpSynchronized(),
@@ -1340,7 +1347,7 @@ int Snmp::trap(Pdu &pdu,                        // pdu to send
 #ifdef _SNMPv3
   if ( version == version3) {
 
-    OctetStr engine_id = v3MP::I->get_local_engine_id();
+    OctetStr engine_id = get_v3mp()->get_local_engine_id();
     if (!utarget) {
       debugprintf(0, "-- SNMP++, dont know how to handle SNMPv3 without UTarget!");
       return SNMP_CLASS_INVALID_TARGET;
@@ -1360,6 +1367,7 @@ int Snmp::trap(Pdu &pdu,                        // pdu to send
                 security_model, pdu.get_security_level());
     debugprintf(4," Addr/Port (%s)",udp_address.get_printable());
 
+    snmpmsg.set_v3mp(get_v3mp());
     status = snmpmsg.loadv3( pdu, engine_id, security_name,
                              security_model, (snmp_version)version);
   }
@@ -1777,7 +1785,7 @@ int Snmp::snmp_engine( Pdu &pdu,              // pdu to use
       utarget->get_engine_id(engine_id);
       if (engine_id.len() == 0)
       {
-        if (v3MP::I->get_from_engine_id_table(engine_id,
+        if (get_v3mp()->get_from_engine_id_table(engine_id,
                                               udp_address.get_printable())
             == SNMPv3_MP_OK )
         {
@@ -1787,7 +1795,7 @@ int Snmp::snmp_engine( Pdu &pdu,              // pdu to use
 	else
 	{
           // check if engine id discovery is enabled
-          if ((!v3MP::I->get_usm()->is_discovery_enabled()) &&
+          if ((!get_v3mp()->get_usm()->is_discovery_enabled()) &&
               ((pdu_action == sNMP_PDU_GET) ||
                (pdu_action == sNMP_PDU_SET) ||
                (pdu_action == sNMP_PDU_GETNEXT) ||
@@ -1817,6 +1825,7 @@ int Snmp::snmp_engine( Pdu &pdu,              // pdu to use
                   security_model, pdu.get_security_level());
       debugprintf(4," Addr/Port (%s)",udp_address.get_printable());
 
+      snmpmsg.set_v3mp(get_v3mp());
       status = snmpmsg.loadv3( pdu, engine_id, security_name,
                                security_model, (snmp_version)version);
     }

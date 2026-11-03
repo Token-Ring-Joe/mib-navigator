@@ -62,6 +62,12 @@ int main(int argc, char **argv)
                 !contents.contains("alpha") && !contents.contains("beta"),
                 "secret leaked to diagnostic log");
 
+    app.setProperty("snmpb.isolatedStateRoot", temporary.filePath("isolated"));
+    ok &= check(DiagnosticLogger::initialize("isolated", app.arguments()) &&
+                DiagnosticLogger::logFilePath().startsWith(temporary.filePath("isolated/logs/")),
+                "isolated logger stays inside the isolated state directory without an override");
+    DiagnosticLogger::shutdown();
+
     UdpPortOwner owner;
     owner.found = true; owner.processId = 78472;
     owner.processName = "mib-navigator.exe";

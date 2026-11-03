@@ -2,17 +2,26 @@
 #include "startupcoordinator.h"
 #include "mainwindowlayout.h"
 
+#include <QAction>
 #include <QApplication>
 #include <QDockWidget>
 #include <QGridLayout>
 #include <QMainWindow>
+#include <QLabel>
+#include <QLineEdit>
+#include <QToolButton>
+#include <QMenu>
+#include <QMenuBar>
+#include <QPointer>
 #include <QSettings>
-#include <utility>
-#include <QStackedWidget>
 #include <QSplitter>
+#include <QStyle>
 #include <QTabBar>
 #include <QTabWidget>
 #include <QTemporaryDir>
+#include <QToolBar>
+#include <QTreeView>
+#include <QVBoxLayout>
 #include <QWidget>
 #include <algorithm>
 #include <cstdio>
@@ -63,89 +72,256 @@ int main(int argc, char **argv)
           std::any_of(screens.cbegin(), screens.cend(), [&tiny](const QRect &screen) {
               return screen.contains(tiny.topLeft());
           }), "tiny/off-screen geometry was not repaired");
+
+
+    QMenu *fileMenu = window.menuBar()->addMenu("&File");
+    QMenu *helpMenu = window.menuBar()->addMenu("&Help");
     auto *root = new QWidget(&window);
     auto *layout = new QGridLayout(root);
-    auto *context = new QWidget(root);
+    auto *header = new QWidget(root);
     auto *documents = new QTabWidget(root);
-    WorkbenchShell::Pages pages;
-    pages.tree = new QWidget(documents); documents->addTab(pages.tree, "Tree");
+    auto *oldTreeTab = new QWidget(documents); documents->addTab(oldTreeTab, "Tree");
+    WorkbenchShell::Documents pages;
     pages.library = new QWidget(documents); documents->addTab(pages.library, "Library");
     pages.editor = new QWidget(documents); documents->addTab(pages.editor, "Editor");
-    pages.events = new QWidget(documents); documents->addTab(pages.events, "Traps");
-    layout->addWidget(context, 0, 0);
+    pages.traps = new QWidget(documents); documents->addTab(pages.traps, "Traps");
+    pages.watch = new QWidget;
+    auto *editorContent = new QLineEdit(pages.editor);
+    auto *mibTabs = new QTabWidget(pages.library);
+    (new QVBoxLayout(pages.library))->addWidget(mibTabs);
+    mibTabs->addTab(new QWidget, "Library");
+    mibTabs->addTab(new QWidget, "Profiles");
+    mibTabs->addTab(pages.editor, "Editor");
+    pages.results = new QWidget;
+    pages.search = new QWidget(&window);
+    auto *treePane = new QWidget(oldTreeTab);
+    auto *tree = new QTreeView(treePane);
+    (new QVBoxLayout(treePane))->addWidget(tree);
+    layout->addWidget(header, 0, 0);
     layout->addWidget(documents, 1, 0);
     window.setCentralWidget(root);
-
-    auto *inspector = new QWidget;
-    auto *watch = new QWidget;
-    auto *search = new QWidget;
-    auto *requestLog = new QWidget;
-    auto *problems = new QWidget;
-    auto *diagnostics = new QWidget;
-    auto *raw = new QWidget;
-    WorkbenchShell shell(&window, root, layout, context, documents, pages,
-                         inspector, watch, search, requestLog, problems, diagnostics, raw, &window);
-
-    check(documents->tabBar()->isHidden(), "old primary tab navigation remains visible");
-    QTabBar *durableTabs = window.findChild<QTabBar *>("WorkbenchOpenDocuments");
-    check(durableTabs && durableTabs->isHidden(), "empty document strip should not consume space");
-    check(shell.sidebarStack()->count() == 3, "three contextual sidebars (MIBs, Queries, Events) not created");
-    check(window.findChild<QSplitter *>("WorkbenchContentSplitter") != nullptr,
-          "resizable sidebar/document boundary not created");
-    for (WorkbenchActivity offered : {WorkbenchActivity::Mibs, WorkbenchActivity::Queries,
-                                      WorkbenchActivity::Events})
-        check(shell.activityAction(offered) != nullptr, "activity action missing");
-
-    shell.setActivity(WorkbenchActivity::Queries);
-    check(shell.activity() == WorkbenchActivity::Queries && shell.sidebarStack()->currentIndex() == 1,
-          "Queries activity did not route its sidebar");
-    check(documents->currentWidget() == pages.tree,
-          "Queries activity did not preserve ad-hoc Tree operation workflow");
-    shell.setActivity(WorkbenchActivity::Events);
-    check(documents->currentWidget() == pages.events,
-          "Events activity did not route to capture workspace");
-
-    int requestedMode = -1;
+    WorkbenchShell::BottomPages bottom;
+    bottom.output = new QWidget;
+    bottom.log = new QWidget;
+    bottom.problems = new QWidget;
+    WorkbenchShell shell(&window, root, layout, header, treePane, documents, pages,
+                         new QWidget, bottom, &window);
     QObject::connect(&shell, &WorkbenchShell::mibLibraryModeRequested,
-                     [&requestedMode](int mode) { requestedMode = mode; });
-    shell.setActivity(WorkbenchActivity::Mibs);
-    shell.showMibLibrary(1);
-    check(documents->currentWidget() == pages.library && requestedMode == 1,
-          "Profiles mode did not route through MIB Library");
-    shell.showMibTree();
-    check(documents->currentWidget() == pages.tree,
-          "MIB Tree mode did not restore expert workflow");
-    shell.openDocument(pages.editor);
-    check(documents->currentWidget() == pages.editor && durableTabs &&
-          durableTabs->count() == 1 && !durableTabs->isHidden(),
-          "Editor did not open as a durable central document");
-    shell.openDocument(pages.editor);
-    check(durableTabs->count() == 1, "Editor document was duplicated");
-
-    shell.bottomDock()->hide();
-    shell.inspectorDock()->show();
-    shell.savePresentationState();
-    shell.bottomDock()->show();
-    shell.inspectorDock()->hide();
-    shell.setActivity(WorkbenchActivity::Queries);
+                     mibTabs, &QTabWidget::setCurrentIndex);
     shell.restorePresentationState();
-    check(shell.activity() == WorkbenchActivity::Mibs,
-          "selected activity presentation state did not restore");
-    check(shell.bottomDock()->isHidden() && !shell.inspectorDock()->isHidden(),
-          "panel visibility presentation state did not restore");
-    check(!QSettings().value("workbench/content-splitter").toByteArray().isEmpty(),
-          "sidebar splitter presentation state was not persisted");
-
-    // Settings saved by older builds: 1 was the retired Devices activity; 2 and 3 keep their meaning.
-    for (const auto &[stored, expected] : {std::pair{1, WorkbenchActivity::Mibs},
-                                           std::pair{2, WorkbenchActivity::Queries},
-                                           std::pair{3, WorkbenchActivity::Events},
-                                           std::pair{99, WorkbenchActivity::Mibs}}) {
-        QSettings().setValue("workbench/activity", stored);
-        shell.setActivity(WorkbenchActivity::Mibs);
-        shell.restorePresentationState();
-        check(shell.activity() == expected, "an activity saved by an older build did not restore correctly");
+    window.resize(1200, 850);
+    window.show();
+    QCoreApplication::processEvents();
+    auto *query = window.findChild<QTabWidget *>("WorkbenchQueryDocuments");
+    auto *bottomTabs = window.findChild<QTabWidget *>("WorkbenchBottomTabs");
+    auto *button = window.findChild<QToolButton *>("WorkbenchPanelToggle");
+    auto *status = window.findChild<QLabel *>("WorkbenchActivityStatus");
+    check(documents->count() == 3 && documents->tabText(0) == "Query" &&
+          documents->tabText(1) == "MIBs" && documents->tabText(2) == "Traps" && !documents->tabsClosable() &&
+          !documents->tabBar()->isHidden(), "permanent top-level workspace tabs");
+    check(query && query->count() == 2 && query->widget(0) == pages.results &&
+          query->widget(1) == pages.watch && !query->tabBar()->isHidden(), "Query contains Results and Watch");
+    check(shell.treeSplitter()->count() == 2 && shell.treeSplitter()->widget(0) == treePane &&
+          shell.treeSplitter()->widget(1) == query, "tree and Results belong to Query");
+    check(bottomTabs && bottomTabs->count() == 3 && bottomTabs->widget(0) == bottom.output &&
+          bottomTabs->widget(1) == bottom.log && bottomTabs->widget(2) == bottom.problems &&
+          !bottomTabs->isTabVisible(2), "shared panel pages and conditional Problems");
+    check(shell.bottomDock()->isHidden() && button && !button->isChecked() &&
+          button->text() == "Show panel", "panel starts collapsed with a visible toggle");
+    check(shell.header()->isAncestorOf(header) && !shell.header()->isMovable() &&
+          !shell.header()->isFloatable() && !shell.header()->toggleViewAction()->isVisible() &&
+          window.corner(Qt::BottomRightCorner) == Qt::BottomDockWidgetArea,
+          "fixed header and full-width bottom panel");
+    QPointer<QWidget> keptEditor(pages.editor), keptWatch(pages.watch), keptTraps(pages.traps);
+    auto *queryRow = new QWidget(header);
+    shell.setFullPageHiddenWidgets({queryRow});
+    shell.inspectorDock()->show();
+    for (int repeat = 0; repeat < 10; ++repeat) {
+        shell.openDocument(pages.editor);
+        check(documents->currentWidget() == pages.library && mibTabs->currentWidget() == pages.editor &&
+              shell.isFullPage() && !treePane->isVisibleTo(&window) &&
+              shell.inspectorDock()->isHidden() && queryRow->isHidden(), "Editor is nested under MIBs");
+        shell.openDocument(pages.traps);
+        shell.openDocument(pages.watch);
+        check(documents->currentIndex() == 0 && query->currentWidget() == pages.watch && documents->count() == 3 &&
+              shell.bottomDock()->isHidden() && header->isVisibleTo(&window),
+              "workspace navigation keeps header and collapsed panel state");
+        shell.showResults();
+        check(!shell.inspectorDock()->isHidden() && !queryRow->isHidden() &&
+              treePane->isVisibleTo(&window), "Query restores its Inspector and tools");
     }
-
+    check(keptEditor && keptWatch && keptTraps && editorContent->parentWidget() == pages.editor,
+          "workspace navigation preserves feature widgets and their state");
+    shell.inspectorDock()->hide();
+    shell.openDocument(pages.library);
+    shell.showResults();
+    check(shell.inspectorDock()->isHidden(), "explicit Inspector preference survives navigation");
+    shell.openDocument(pages.search);
+    check(documents->currentIndex() == 0 && query->currentWidget() == pages.search &&
+          query->count() == 3 && !query->tabBar()->isHidden(), "Search opens locally in Query");
+    QPointer<QWidget> keptSearch(pages.search);
+    emit query->tabCloseRequested(query->indexOf(pages.search));
+    check(keptSearch && query->count() == 2 && !query->tabBar()->isHidden(),
+          "closing Search preserves Results and Watch");
+    shell.closeDocument(pages.results);
+    shell.closeDocument(pages.library);
+    shell.closeDocument(pages.watch);
+    check(query->count() == 2 && documents->count() == 3, "permanent pages cannot close");
+    shell.openDocument(pages.search);
+    check(query->currentWidget() == pages.search, "Search reopens");
+    shell.showMibLibrary(1);
+    check(documents->currentWidget() == pages.library && mibTabs->currentIndex() == 1,
+          "Profiles is a peer of Library and Editor");
+    shell.setBottomPageVisible(bottom.problems, true);
+    shell.setBottomPageNote(bottom.problems, "2");
+    shell.openDocument(pages.editor);
+    editorContent->setFocus();
+    QCoreApplication::processEvents();
+    QWidget *focused = QApplication::focusWidget();
+    shell.setActivityCounts(1, 2);
+    check(status && status->text().contains("1 running") && status->text().contains("2 problems") &&
+          shell.bottomDock()->isHidden() && documents->currentWidget() == pages.library &&
+          bottomTabs->currentWidget() == bottom.output && QApplication::focusWidget() == focused,
+          "background counts neither expand panel nor change workspace or selection");
+    if (auto *viewProblems = window.findChild<QAction *>("ViewBottomProblems")) viewProblems->trigger();
+    QCoreApplication::processEvents();
+    check(documents->currentWidget() == pages.library && bottomTabs->currentWidget() == bottom.problems &&
+          !shell.bottomDock()->isHidden() && button->isChecked() && button->text() == "Hide panel",
+          "explicit Problems opens within MIBs");
+    const int expandedHeight = shell.bottomDock()->height();
+    for (QWidget *page : {pages.traps, pages.watch, pages.results, pages.editor}) {
+        shell.openDocument(page);
+        const bool inMibs = documents->currentWidget() == pages.library;
+        check(!shell.bottomDock()->isHidden() && bottomTabs->isTabVisible(2) == inMibs &&
+              bottomTabs->currentWidget() == (inMibs ? bottom.problems : bottom.output),
+              "Problems is MIB-only and each workspace restores its own panel selection");
+    }
+    button->click();
+    shell.setActivityCounts(0, 3);
+    shell.setResultsNote("1 warning");
+    check(query->tabText(0) == "Results (1 warning)", "warnings annotate the main Results tab");
+    check(shell.bottomDock()->isHidden() && bottomTabs->currentWidget() == bottom.problems,
+          "new results and errors leave a collapsed panel collapsed");
+    shell.showResults();
+    shell.showBottomPage(bottom.log);
+    shell.setPanelExpanded(false);
+    shell.savePresentationState();
+    check(QSettings().value("workbench/panel-tab").toString() == "log" &&
+          !QSettings().value("workbench/panel-visible").toBool() &&
+          QSettings().value("workbench/panel-height").toInt() >= 130 && expandedHeight >= 130,
+          "panel selection, collapsed state and useful height persist");
+    shell.showBottomPage(bottom.output);
+    shell.restorePresentationState();
+    check(documents->currentIndex() == 0 && shell.bottomDock()->isHidden() &&
+          bottomTabs->currentWidget() == bottom.log, "restore uses stable panel ID and starts on Query");
+    shell.showBottomPage(bottom.output);
+    shell.savePresentationState();
+    check(QSettings().value("workbench/panel-tab").toString() == "output",
+          "Output has its own stable panel ID");
+    shell.setPanelExpanded(false);
+    shell.openDocument(pages.watch);
+    shell.restorePresentationState();
+    check(!shell.bottomDock()->isHidden() && bottomTabs->currentWidget() == bottom.output &&
+          documents->currentIndex() == 0, "expanded panel round trip");
+    {
+        QSettings settings;
+        settings.remove("workbench/panel-visible");
+        settings.setValue("workbench/bottom-visible", true);
+        settings.setValue("workbench/bottom-tab-name", "Watch");
+        settings.setValue("workbench/panel-tab", "retired");
+        settings.setValue("workbench/panel-height", -100);
+    }
+    shell.restorePresentationState();
+    check(shell.bottomDock()->isHidden() && QSettings().value("workbench/bottom-visible").toBool() &&
+          QSettings().value("workbench/bottom-tab-name").toString() == "Watch",
+          "old settings remain untouched and cannot override collapsed-first-use behavior");
+    shell.showBottomPage(bottom.output);
+    QCoreApplication::processEvents();
+    check(shell.bottomDock()->height() >= 130, "invalid persisted height is bounded");
+    shell.setBottomPageVisible(bottom.problems, false);
+    shell.showBottomPage(bottom.problems);
+    check(bottomTabs->isTabVisible(2), "explicit View Problems works even with no current problems");
+    shell.setBottomPageVisible(bottom.problems, false);
+    check(bottomTabs->currentWidget() != bottom.problems, "hidden Problems releases selection");
+    {
+        QSettings settings;
+        settings.remove("workbench/mib-panel-tab");
+        settings.setValue("workbench/panel-tab", "problems");
+    }
+    shell.restorePresentationState();
+    check(QSettings().value("workbench/panel-tab").toString() == "problems",
+          "restoration alone does not overwrite legacy Problems settings");
+    shell.savePresentationState();
+    check(QSettings().value("workbench/panel-tab").toString() == "output" &&
+          QSettings().value("workbench/mib-panel-tab").toString() == "problems",
+          "normal save migrates a pending Problems preference to the MIB-specific key");
+    shell.setBottomPageVisible(bottom.problems, true);
+    check(documents->currentIndex() == 0 && !bottomTabs->isTabVisible(2) &&
+          bottomTabs->currentWidget() == bottom.output && shell.bottomDock()->isHidden(),
+          "initial report cannot expose Problems in Query or expand the panel");
+    shell.openDocument(pages.editor);
+    check(bottomTabs->currentWidget() == bottom.problems && bottomTabs->isTabVisible(2) &&
+          shell.bottomDock()->isHidden(), "entering MIBs restores its saved Problems selection");
+    shell.showResults();
+    shell.showBottomPage(bottom.log);
+    shell.savePresentationState();
+    shell.restorePresentationState();
+    check(bottomTabs->currentWidget() == bottom.log && !bottomTabs->isTabVisible(2),
+          "restart restores Query Log without exposing MIB Problems");
+    shell.openDocument(pages.library);
+    check(bottomTabs->currentWidget() == bottom.problems,
+          "MIB Problems selection survives saving and restarting from Query Log");
+    shell.setBottomPageVisible(bottom.problems, false);
+    shell.restorePresentationState();
+    shell.showBottomPage(bottom.log);
+    shell.setBottomPageVisible(bottom.problems, true);
+    shell.openDocument(pages.library);
+    check(bottomTabs->currentWidget() != bottom.problems,
+          "explicit panel navigation cancels deferred Problems restoration");
+    shell.setBottomPageVisible(bottom.problems, false);
+    shell.restorePresentationState();
+    shell.setBottomPageVisible(bottom.problems, false); // initial report has no problems
+    shell.setBottomPageVisible(bottom.problems, true);  // later background report
+    shell.openDocument(pages.library);
+    check(bottomTabs->currentWidget() != bottom.problems,
+          "a later report cannot revive a consumed Problems preference");
+    shell.openDocument(pages.traps);
+    shell.setPanelExpanded(false);
+    shell.setBottomPageVisible(bottom.problems, true);
+    check(documents->currentWidget() == pages.traps && !bottomTabs->isTabVisible(2) &&
+          shell.bottomDock()->isHidden(), "background reports cannot expose Problems in Traps");
+    shell.showBottomPage(bottom.problems);
+    check(documents->currentWidget() == pages.library && mibTabs->currentWidget() == pages.editor &&
+          bottomTabs->currentWidget() == bottom.problems && !shell.bottomDock()->isHidden(),
+          "explicit Problems from Traps selects MIBs without changing its local Editor tab");
+    shell.setPanelExpanded(true);
+    const auto top = window.menuBar()->actions();
+    check(top.size() == 3 && top[0] == fileMenu->menuAction() && top[1] == shell.viewMenu()->menuAction() &&
+          top[2] == helpMenu->menuAction(), "View menu follows File");
+    auto *toggle = window.findChild<QAction *>("WorkbenchToggleBottom");
+    check(toggle && toggle->shortcut() == QKeySequence("Ctrl+J"), "panel toggle shortcut");
+    if (toggle) toggle->trigger();
+    check(shell.bottomDock()->isHidden(), "View toggle collapses panel");
+    window.setCorner(Qt::BottomRightCorner, Qt::RightDockWidgetArea);
+    shell.restorePresentationState();
+    check(window.corner(Qt::BottomRightCorner) == Qt::BottomDockWidgetArea && !shell.header()->isHidden(),
+          "restore repairs old dock corner state");
+    QSettings().setValue("workbench/panel-tab", "results");
+    shell.showBottomPage(bottom.log);
+    shell.restorePresentationState();
+    check(query->currentWidget() == pages.results && bottomTabs->currentWidget() == bottom.output &&
+          QSettings().value("workbench/panel-tab").toString() == "results",
+          "old Results preference restores to Output without rewriting stored settings");
+    shell.openDocument(pages.watch);
+    shell.setPanelExpanded(false);
+    shell.showResults();
+    check(query->currentWidget() == pages.results && shell.bottomDock()->isHidden(),
+          "starting a query selects Results without expanding the bottom panel");
+    if (auto *viewOutput = window.findChild<QAction *>("ViewBottomOutput")) viewOutput->trigger();
+    check(bottomTabs->currentWidget() == bottom.output && !shell.bottomDock()->isHidden() &&
+          query->currentWidget() == pages.results, "Output opens below Results");
+    shell.setResultsNote({});
+    check(query->tabText(0) == "Results", "clearing warnings restores Results title");
+    shell.setFullPageHiddenWidgets({});
     return failures ? 1 : 0;
 }

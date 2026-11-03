@@ -1,6 +1,7 @@
 #ifndef MIBPROBLEMREPORT_H
 #define MIBPROBLEMREPORT_H
 
+#include <QDir>
 #include <QFileInfo>
 #include <QMap>
 #include <QPair>
@@ -100,6 +101,18 @@ inline QList<MibProblem> MibBuildProblemReport(const MibProblemInput &input)
                                              "from the profile.").arg(finding.identity);
             reportedIdentities.insert(finding.identity);
             break;
+        case MibPlanResolutionTier::FolderNotFound:
+            problem.severity = MibProblemSeverity::Warning;
+            problem.category = QObject::tr("Followed folder not found");
+            problem.module = QFileInfo(finding.identity).fileName();
+            problem.file = finding.identity;
+            problem.why = QObject::tr("The profile follows the folder %1, which does not exist. It may "
+                                      "have been renamed, moved or deleted.")
+                              .arg(QDir::toNativeSeparators(finding.identity));
+            problem.effect = QObject::tr("No MIBs from that folder are loaded.");
+            problem.suggestion = QObject::tr("Restore the folder, or remove it from the profile on "
+                                             "MIB Library > Profiles.");
+            break;
         case MibPlanResolutionTier::Unresolved:
         case MibPlanResolutionTier::OutOfScope: {
             problem.severity = MibProblemSeverity::Warning;
@@ -131,16 +144,11 @@ inline QList<MibProblem> MibBuildProblemReport(const MibProblemInput &input)
         }
         case MibPlanResolutionTier::Ambiguous: {
             problem.severity = MibProblemSeverity::Warning;
-            problem.category = QObject::tr("Duplicate providers");
+            problem.category = QObject::tr("Conflicting definitions");
             problem.module = finding.identity;
             problem.file = providerPath(plan, finding.identity);
-            QStringList others;
-            for (const auto &candidate : finding.candidates)
-                if (candidate.canonicalPath != problem.file) others.append(candidate.canonicalPath);
             problem.why = finding.reason;
-            if (!others.isEmpty())
-                problem.why += QObject::tr(". Also found: %1.").arg(others.join(QStringLiteral("; ")));
-            problem.effect = QObject::tr("Only the file shown was loaded. If it is not the one you meant, "
+            problem.effect = QObject::tr("The selected file supplies this module. If it is not the one you meant, "
                                          "definitions can differ.");
             problem.suggestion = QObject::tr("Remove or rename the copy you do not want, or pin the one you do.");
             break;

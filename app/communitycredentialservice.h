@@ -19,6 +19,9 @@ public:
     bool update(const CommunityCredentialRecord &record);
     QString duplicate(const QString &credentialId);
     bool remove(const QString &credentialId);
+    bool saveWorkingCopy(const QList<CommunityCredentialRecord> &records) const;
+    void applyCommitted(const QList<CommunityCredentialRecord> &records);
+    QString storageError() const { return loadError; }
 
 signals:
     void credentialCreated(const QString &credentialId);
@@ -31,6 +34,7 @@ private:
     static QString newId();
     bool saveCredentials();
     CommunityCredentialRepository credentialRepository;
+    QString loadError;
     QList<CommunityCredentialRecord> credentials;
 };
 

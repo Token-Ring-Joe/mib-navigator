@@ -1,3 +1,4 @@
+#include "appearancecolors.h"
 #include "requestlogpanel.h"
 
 #include "requestlog.h"
@@ -35,6 +36,7 @@ RequestLogPanel::RequestLogPanel(RequestLog *requestLog, QWidget *parent)
 
     table = new QTableWidget(0, ColumnCount, this);
     table->setObjectName(QStringLiteral("RequestLogTable"));
+    table->setItemDelegate(new AppearanceColors::ItemDelegate(table));
     table->setHorizontalHeaderLabels({tr("Time"), tr("Operation"), tr("Target"), tr("Identity"), tr("Object"),
                                       tr("Result"), tr("Objects"), tr("Took"), tr("Detail")});
     table->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -82,14 +84,14 @@ void RequestLogPanel::fill(int row, quint64 id)
     const QStringList cells{e->started.toString(QStringLiteral("HH:mm:ss.zzz")), e->operation, e->target, e->identity,
                             e->oid, RequestOutcomeText(e->outcome), running ? QString() : QString::number(e->objects),
                             running ? QString() : tr("%1 ms").arg(e->durationMs), e->detail};
-    QBrush background;
+    auto tone = AppearanceColors::None;
     if (e->outcome == RequestOutcome::Failed || e->outcome == RequestOutcome::TimedOut ||
-        e->outcome == RequestOutcome::Refused) background = QBrush(QColor(0xf8, 0xd7, 0xda));
-    else if (e->outcome == RequestOutcome::Stopped) background = QBrush(QColor(0xff, 0xf0, 0xbd));
+        e->outcome == RequestOutcome::Refused) tone = AppearanceColors::Error;
+    else if (e->outcome == RequestOutcome::Stopped) tone = AppearanceColors::Warning;
     for (int column = 0; column < ColumnCount; ++column) {
         QTableWidgetItem *item = table->item(row, column);
         item->setText(cells.at(column));
-        item->setBackground(background);
+        item->setData(AppearanceColors::ToneRole, tone);
         if (column == Object || column == Time) item->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
         if (column == Detail) item->setToolTip(cells.at(column));
     }

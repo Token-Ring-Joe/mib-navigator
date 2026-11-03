@@ -1,3 +1,5 @@
+#include "appearancecolors.h"
+#include "queryresultspanel.h"
 /*
     Copyright (C) 2004-2011 Martin Jolicoeur (snmpb1@gmail.com) 
 
@@ -43,6 +45,9 @@
 #include "snmpb.h"
 #include "mibmodule.h"
 #include "agent.h"
+#include "csvformat.h"
+#include <QClipboard>
+#include <QGuiApplication>
 #include "connectionbar.h"
 #include "credentialsdialog.h"
 #include "mibenvironmentregistry.h"
@@ -58,12 +63,16 @@
 #include "mibcollectionservice.h"
 #include <QSet>
 #include <QMenu>
+#include <QTimer>
+#include <QDialog>
 #include <memory>
 #include "trap.h"
 #include "logsnmpb.h"
 #include "mibeditor.h"
 #include "mainwindowlayout.h"
 #include "workbenchshell.h"
+#include <QInputDialog>
+#include <QRegularExpression>
 #include "startupcoordinator.h"
 #include "productidentity.h"
 #include "diagnosticlogger.h"
@@ -137,6 +146,25 @@ EnvironmentPresentation PresentEnvironment(const MibEnvironmentPtr &environment)
     }
     return result;
 }
+
+// Runs an action when a widget is clicked: the environment badge opens Problems.
+class ClickToRun final : public QObject
+{
+public:
+    ClickToRun(std::function<void()> run, QObject *parent) : QObject(parent), action(std::move(run)) {}
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override
+    {
+        if (event->type() == QEvent::MouseButtonRelease &&
+            static_cast<QMouseEvent *>(event)->button() == Qt::LeftButton) {
+            action();
+            return true;
+        }
+        return QObject::eventFilter(watched, event);
+    }
+private:
+    std::function<void()> action;
+};
 }
 
 Snmpb::Snmpb(bool offline)
@@ -327,6 +355,7 @@ void Snmpb::BindToGUI(QMainWindow* mw)
         return MibBuildAutomaticProfiles(modules->DependencyIndex()->libraryRoot(),
                                          modules->DependencyIndex()->files());
     };
+    mibLibraryCallbacks.libraryFiles = [this]() { return modules->DependencyIndex()->files(); };
     mibLibraryCallbacks.effectivePlan = [this](const MibProfileRecord &profile) {
         return modules->BuildEffectivePlan(profile);
     };
@@ -334,56 +363,8 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     mibLibrary = new MibLibraryWidget(prefs->DefaultMibPaths(), w.TabW, nullptr,
                                       mibLibraryCallbacks);
     DiagnosticLogger::log("Startup", QStringLiteral("Inventory construction complete elapsed_ms=%1").arg(phaseTimer.elapsed()));
-    const int legacyModulesTab = w.TabW->indexOf(w.ModulesTab);
-    if (legacyModulesTab >= 0) w.TabW->removeTab(legacyModulesTab);
-    const int mibsTab = w.TabW->insertTab(1, mibLibrary, tr("MIBs"));
-    w.TabW->setTabToolTip(mibsTab,
-        tr("Browse the MIB library and choose an exact-file Profile."));
-    const auto refreshLibraryDependencyStatus = [this, libraryDependencySummary]() {
-        const MibLibraryWidget::DependencySummary summary = libraryDependencySummary();
-        if (summary.stale) w.MibLibraryDependencyState->setText(tr("Dependencies need checking"));
-        else if (summary.unresolved > 0 || summary.ambiguous > 0)
-            w.MibLibraryDependencyState->setText(tr("Dependencies: Has unresolved dependencies"));
-        else w.MibLibraryDependencyState->setText(tr("Dependencies: Up to date"));
-        QString text = tr("%1 modules · %2 relationships · %3 unresolved · %4 ambiguous")
-            .arg(summary.knownModules).arg(summary.relationships)
-            .arg(summary.unresolved).arg(summary.ambiguous);
-        if (summary.lastCheckedUtc.isValid()) text += tr(" · Last checked: %1")
-            .arg(summary.lastCheckedUtc.toLocalTime().toString(Qt::ISODate));
-        w.MibLibraryDependencySummary->setText(text);
-    };
-    refreshLibraryDependencyStatus();
-    connect(w.MibLibraryCheckDependencies, &QPushButton::clicked, this,
-            [this, refreshLibraryDependencyStatus]() {
-        QElapsedTimer dependencyTimer;
-        dependencyTimer.start();
-        w.MibLibraryCheckDependencies->setEnabled(false);
-        w.MibLibraryDependencyState->setText(tr("Dependencies: Checking…"));
-        QString error;
-        const MibProfileDependencyCheck before = modules->CachedProfileDependencies(
-            QStringLiteral("mib-library"), MibDependencyIndex::profileSignature(
-                modules->DependencyIndex()->moduleNames(), false));
-        MibProfileDependencyCheck after;
-        if (error.isEmpty()) after = modules->CheckProfileDependencies(QStringLiteral("mib-library"),
-            modules->DependencyIndex()->moduleNames(), false, &error);
-        const bool semanticVerificationRan = before.checkedUtc != after.checkedUtc;
-        QElapsedTimer restoreTimer;
-        restoreTimer.start();
-        if (semanticVerificationRan) modules->Refresh();
-        const qint64 restoreMs = semanticVerificationRan ? restoreTimer.elapsed() : 0;
-        w.MibLibraryCheckDependencies->setEnabled(true);
-        if (!error.isEmpty()) {
-            w.MibLibraryDependencyState->setText(error);
-            return;
-        }
-        mibLibrary->refresh();
-        refreshLibraryDependencyStatus();
-        DiagnosticLogger::log("MIB", tr("Check Dependencies UI total-ms=%1 runtime-restore-ms=%2 semantic-ran=%3")
-            .arg(dependencyTimer.elapsed()).arg(restoreMs)
-            .arg(semanticVerificationRan ? QStringLiteral("yes") : QStringLiteral("no")));
-    });
+    // MIBs is a permanent workspace with Library, Profiles and Editor pages.
     connect(modules, &MibModule::inventoryChanged, mibLibrary, &MibLibraryWidget::refresh);
-    connect(modules, &MibModule::inventoryChanged, this, refreshLibraryDependencyStatus);
     connect(editor, &MibEditor::FileSaved, mw, [this](const QString &path) {
         const QString saved = QFileInfo(path).canonicalFilePath();
         if (saved.isEmpty()) return;
@@ -429,21 +410,30 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     queryToolsLayout->setContentsMargins(0, 3, 0, 3);
     queryToolsLayout->setSpacing(4);
     const auto addQueryButton = [queryTools, queryToolsLayout](const QString &text,
-                                                               QStyle::StandardPixmap icon) {
+                                                               const QString &icon) {
         auto *button = new QToolButton(queryTools);
         button->setText(text);
         button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-        button->setIcon(button->style()->standardIcon(icon));
+        button->setProperty("appearanceIcon", icon);
         queryToolsLayout->addWidget(button);
         return button;
     };
-    auto *getButton = addQueryButton(tr("Get"), QStyle::SP_ArrowRight);
-    auto *getNextButton = addQueryButton(tr("Get Next"), QStyle::SP_ArrowForward);
-    auto *getBulkButton = addQueryButton(tr("Get Bulk"), QStyle::SP_FileDialogListView);
-    auto *walkButton = addQueryButton(tr("Walk"), QStyle::SP_ArrowDown);
-    auto *tableButton = addQueryButton(tr("Table"), QStyle::SP_FileDialogDetailedView);
-    auto *setButton = addQueryButton(tr("Set"), QStyle::SP_DialogApplyButton);
-    auto *stopButton = addQueryButton(tr("Stop"), QStyle::SP_BrowserStop);
+    auto *getButton = addQueryButton(tr("Get"), QStringLiteral("get"));
+    auto *getNextButton = addQueryButton(tr("Get Next"), QStringLiteral("get-next"));
+    auto *getBulkButton = addQueryButton(tr("Get Bulk"), QStringLiteral("get-bulk"));
+    auto *walkButton = addQueryButton(tr("Walk"), QStringLiteral("walk"));
+    auto *tableButton = addQueryButton(tr("Table"), QStringLiteral("table"));
+    auto *setButton = addQueryButton(tr("Set"), QStringLiteral("set"));
+    auto *stopButton = addQueryButton(tr("Stop"), QStringLiteral("stop"));
+    queryToolsLayout->addSpacing(12);
+    queryToolsLayout->addWidget(new QLabel(tr("Object / OID:"), queryTools));
+    auto *objectAddress = new QLineEdit(queryTools);
+    objectAddress->setObjectName(QStringLiteral("QueryObjectAddress"));
+    objectAddress->setPlaceholderText(tr("Numeric OID or current Tree object"));
+    objectAddress->setClearButtonEnabled(true);
+    objectAddress->setMinimumWidth(200);
+    queryToolsLayout->addWidget(objectAddress, 2);
+    queryToolsLayout->addSpacing(12);
     // Search every MIB file in the collection, not only the active profile's tree.
     auto *collectionSearch = new QLineEdit(queryTools);
     collectionSearch->setObjectName(QStringLiteral("CollectionSearch"));
@@ -452,8 +442,7 @@ void Snmpb::BindToGUI(QMainWindow* mw)
                                     "Results show which module and which profiles contain it."));
     collectionSearch->setClearButtonEnabled(true);
     collectionSearch->setMinimumWidth(220);
-    queryToolsLayout->addStretch();
-    queryToolsLayout->addWidget(collectionSearch);
+    queryToolsLayout->addWidget(collectionSearch, 1);
     const QList<QToolButton *> mibDependentActions{getButton, getNextButton, getBulkButton,
                                                    walkButton, tableButton, setButton};
     for (QToolButton *button : mibDependentActions) {
@@ -475,62 +464,24 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     });
     connect(w.actionStop, &QAction::changed, stopButton,
             [stopButton, action=w.actionStop]() { stopButton->setEnabled(action->isEnabled()); });
-    qobject_cast<QVBoxLayout *>(w.MIBTreeLayout->layout())->insertWidget(2, queryTools);
+    // queryTools joins the header under the connection bar (below).
 
-    auto *objectRow = new QWidget(w.MIBTreeLayout);
-    auto *objectLayout = new QHBoxLayout(objectRow);
-    objectLayout->setContentsMargins(0, 0, 0, 4);
-    objectLayout->setSpacing(6);
-    objectLayout->addWidget(new QLabel(tr("Object / OID:"), objectRow));
-    auto *objectAddress = new QLineEdit(objectRow);
-    objectAddress->setObjectName(QStringLiteral("QueryObjectAddress"));
-    objectAddress->setPlaceholderText(tr("Numeric OID or current Tree object"));
-    objectAddress->setClearButtonEnabled(true);
-    objectLayout->addWidget(objectAddress, 2);
-    objectLayout->addWidget(new QLabel(tr("Filter Tree:"), objectRow));
-    auto *treeFilter = new QLineEdit(objectRow);
+    // The tree filter sits at the top of the tree pane, under its heading.
+    auto *treeFilter = new QLineEdit(w.MIBTreeLayout);
     treeFilter->setObjectName(QStringLiteral("MibTreeFilter"));
-    treeFilter->setPlaceholderText(tr("Name, module, or OID prefix"));
+    treeFilter->setPlaceholderText(tr("Filter tree: name, module, or OID prefix"));
     treeFilter->setClearButtonEnabled(true);
-    objectLayout->addWidget(treeFilter, 1);
     connect(objectAddress, &QLineEdit::returnPressed, w.MIBTree,
             [this, objectAddress]() { w.MIBTree->SelectFromOid(objectAddress->text().trimmed()); });
     connect(w.MIBTree, &MibModelView::CurrentObjectChanged, objectAddress, &QLineEdit::setText);
     connect(treeFilter, &QLineEdit::textChanged, w.MIBTree, &MibModelView::SetFilterText);
-    qobject_cast<QVBoxLayout *>(w.MIBTreeLayout->layout())->insertWidget(3, objectRow);
+    if (auto *treeLayout = qobject_cast<QVBoxLayout *>(w.MIBTreeLayout->layout())) {
+        treeLayout->insertWidget(treeLayout->indexOf(w.MIBTree), treeFilter);
+        treeLayout->setContentsMargins(6, 6, 0, 0);
+        treeLayout->setSpacing(4);
+    }
 
-    auto *resultTable = new QTableWidget(w.QueryLayout);
-    resultTable->setObjectName(QStringLiteral("StructuredQueryResults"));
-    resultTable->setColumnCount(8);
-    resultTable->setHorizontalHeaderLabels({tr("Object"), tr("Instance"), tr("OID"),
-                                            tr("Syntax"), tr("Value"), tr("Received"),
-                                            tr("Warnings"), tr("Time")});
-    resultTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    resultTable->setSelectionBehavior(QAbstractItemView::SelectRows);
-    resultTable->setSortingEnabled(true);
-    resultTable->setAlternatingRowColors(true);
-    resultTable->verticalHeader()->setVisible(false);
-    resultTable->horizontalHeader()->setStretchLastSection(true);
-    resultTable->setWordWrap(false);
-    resultTable->setTextElideMode(Qt::ElideRight);
-    for (int column : {0, 1, 2, 3, 7})
-        resultTable->horizontalHeader()->setSectionResizeMode(column, QHeaderView::ResizeToContents);
-    for (int column : {4, 5})
-        resultTable->horizontalHeader()->setSectionResizeMode(column, QHeaderView::Interactive);
-    resultTable->horizontalHeader()->resizeSection(4, 300);
-    resultTable->horizontalHeader()->resizeSection(5, 280);
-    resultTable->horizontalHeaderItem(5)->setToolTip(tr("The type and value exactly as the device sent them, before the MIB interprets them"));
-    resultTable->horizontalHeader()->setSectionResizeMode(6, QHeaderView::Stretch);
-    resultTable->horizontalHeader()->setStretchLastSection(false);
-    qobject_cast<QVBoxLayout *>(w.QueryLayout->layout())->insertWidget(1, resultTable, 2);
-    auto *requestStatus = new QLabel(w.QueryLayout);
-    requestStatus->setObjectName(QStringLiteral("StructuredQueryStatus"));
-    requestStatus->setWordWrap(true);
-    requestStatus->setStyleSheet(QStringLiteral(
-        "QLabel#StructuredQueryStatus { padding: 3px 6px; color: #237a3b; }"
-        "QLabel#StructuredQueryStatus[failed=\"true\"] { color: #9b2525; background: #f8d7da; font-weight: 600; }"));
-    requestStatus->hide();
-    qobject_cast<QVBoxLayout *>(w.QueryLayout->layout())->insertWidget(1, requestStatus);
+    resultsPanel = new QueryResultsPanel(mw);
     w.Query->setToolTip(tr("Raw protocol and diagnostic output"));
     const auto refreshMibProfiles = [this, browserProfile]() {
         const QString selected = QSettings().value("mib-library/current-profile",
@@ -559,20 +510,13 @@ void Snmpb::BindToGUI(QMainWindow* mw)
             return;
         }
     });
-    connect(modules,&MibModule::profileRuntimeBuildStarted,mw,[this,mw](const QString &name){
-        mw->statusBar()->showMessage(tr("Building MIB environment… %1").arg(name));
-    });
     connect(modules,&MibModule::profileRuntimeReady,mw,
-        [this,mw,mibDependentActions](const QString &id,const MibEffectivePlan &plan,MibEnvironmentPtr environment,
-               const QStringList &,bool cacheHit,bool){
+        [this,mibDependentActions](const QString &id,const MibEffectivePlan &plan,MibEnvironmentPtr environment,
+               const QStringList &,bool,bool){
             Q_UNUSED(id)
             const EnvironmentPresentation presentation = PresentEnvironment(environment);
             w.MIBTree->setVisibleModules(plan.effectiveModules);
             w.MIBTree->Populate();
-            mw->statusBar()->showMessage(cacheHit?tr("MIB environment ready (cached)"):
-                presentation.needsAttention
-                    ? tr("MIB environment loaded with %n problem(s); see the Problems tab", nullptr, presentation.problems)
-                    : tr("MIB environment ready"),5000);
             for (QToolButton *button : mibDependentActions) {
                 button->setEnabled(true);
                 button->setToolTip({});
@@ -582,8 +526,7 @@ void Snmpb::BindToGUI(QMainWindow* mw)
                 environment ? tr("Environment: %1 modules · %2").arg(environment->loadedCount())
                                   .arg(presentation.state) : tr("Environment: Empty"));
         });
-    connect(modules,&MibModule::profileRuntimeFailed,mw,[this,mw](const QString &,const QString &error){
-        mw->statusBar()->showMessage(tr("MIB environment build failed; previous environment remains active"),7000);
+    connect(modules,&MibModule::profileRuntimeFailed,mw,[this](const QString &,const QString &error){
         DiagnosticLogger::log("MIB",tr("Unable to apply MIB profile: %1").arg(error));
         if (startup) startup->advance(startup->generation(), StartupState::NeedsAttention,
                                       tr("Environment: Needs attention"));
@@ -593,25 +536,29 @@ void Snmpb::BindToGUI(QMainWindow* mw)
 
     auto *contextWidget = new QWidget(w.widget);
     contextWidget->setObjectName(QStringLiteral("CurrentDeviceContext"));
+    // The header: the connection bar with the environment badge at its right end, and the query
+    // toolbar (operations, Object / OID, Search all MIBs) underneath, both spanning the window.
     auto *contextLayout = new QVBoxLayout(contextWidget);
-    contextLayout->setContentsMargins(10, 6, 10, 6);
-    contextLayout->setSpacing(1);
-    auto *contextState = new QWidget(contextWidget);
-    auto *contextStateLayout = new QHBoxLayout(contextState);
-    contextStateLayout->setContentsMargins(0, 2, 0, 0);
-    contextStateLayout->setSpacing(12);
-    auto *environmentContext = new QLabel(tr("Environment: Building"), contextState);
+    contextLayout->setContentsMargins(0, 0, 0, 0);
+    contextLayout->setSpacing(0);
+    auto *connectionRow = new QHBoxLayout;
+    connectionRow->setContentsMargins(0, 0, 10, 0);
+    connectionRow->setSpacing(6);
+    auto *environmentContext = new AppearanceColors::SemanticLabel(tr("Environment: Building"),
+        AppearanceColors::SemanticLabel::EnvironmentBadge, contextWidget);
     environmentContext->setObjectName(QStringLiteral("CurrentEnvironmentStatus"));
     environmentContext->setProperty("status", QStringLiteral("building"));
-    contextStateLayout->addWidget(environmentContext);
-    contextStateLayout->addStretch();
     // The connection bar replaces the saved-device header: Target, Credential and the
     // MIB Profile selector (moved here from the Tree page, so there is only one).
     auto *connectionBar = new ConnectionBar(communityCredentialService, UsmCredentials(),
                                             browserProfile, contextWidget);
     browserProfileRow->hide();
-    contextLayout->addWidget(connectionBar);
-    contextLayout->addWidget(contextState);
+    connectionRow->addWidget(connectionBar, 1);
+    connectionRow->addWidget(environmentContext);
+    contextLayout->addLayout(connectionRow);
+    queryTools->setParent(contextWidget);
+    queryToolsLayout->setContentsMargins(10, 2, 10, 5);
+    contextLayout->addWidget(queryTools);
     agent->SetConnectionBar(connectionBar);
     if (auto *centralLayout = qobject_cast<QGridLayout *>(w.widget->layout())) {
         centralLayout->removeWidget(w.TabW);
@@ -635,6 +582,8 @@ void Snmpb::BindToGUI(QMainWindow* mw)
         const EnvironmentPresentation presentation = PresentEnvironment(environment);
         environmentContext->setText(QObject::tr("Environment: %1").arg(presentation.state));
         environmentContext->setProperty("status", presentation.badge);
+        environmentContext->setToolTip(QObject::tr("%1 modules loaded; %2. Click to show MIB Problems.")
+            .arg(environment ? environment->loadedCount() : 0).arg(presentation.state));
         environmentContext->style()->unpolish(environmentContext);
         environmentContext->style()->polish(environmentContext);
     });
@@ -648,11 +597,6 @@ void Snmpb::BindToGUI(QMainWindow* mw)
 
     mw->setStyleSheet(mw->styleSheet() + QStringLiteral(R"(
         QWidget#CurrentDeviceContext { background: palette(alternate-base); border-bottom: 1px solid palette(mid); }
-        QLabel#CurrentEnvironmentStatus { border-radius: 3px; padding: 2px 7px; font-weight: 600; }
-        QLabel#CurrentEnvironmentStatus[status="ready"] { color: #237a3b; background: #dff2e4; }
-        QLabel#CurrentEnvironmentStatus[status="building"] { color: #765600; background: #fff0bd; }
-        QLabel#CurrentEnvironmentStatus[status="warning"] { color: #8a4b00; background: #ffe4c2; }
-        QLabel#CurrentEnvironmentStatus[status="error"] { color: #9b2525; background: #f8d7da; }
         QWidget#QueryToolBar { border-bottom: 1px solid palette(mid); }
         QToolButton { padding: 3px 7px; }
         QHeaderView::section { padding: 4px 6px; font-weight: 600; }
@@ -661,33 +605,25 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     // Rehost the established feature widgets in a workbench shell. This only
     // changes presentation ownership: request, Profile, Environment, parser,
     // trap, editor, and graph services continue to own their existing state.
-    auto *resultsPage = new QWidget(mw);
-    resultsPage->setObjectName(QStringLiteral("WorkbenchResultsPage"));
-    auto *resultsLayout = new QVBoxLayout(resultsPage);
-    resultsLayout->setContentsMargins(4, 4, 4, 4);
-    auto *resultsHeader = new QHBoxLayout;
-    resultsHeader->addWidget(new QLabel(tr("Current operation results"), resultsPage));
-    resultsHeader->addStretch();
-    w.QueryTable->setParent(resultsPage);
-    resultsHeader->addWidget(w.QueryTable);
-    resultsLayout->addLayout(resultsHeader);
-    // The status line (how the last request ended) sits directly above the table, and the whole
-    // page replaces the old query-output slot under the Tree.
-    requestStatus->setParent(resultsPage);
-    resultsLayout->addWidget(requestStatus);
-    resultTable->setParent(resultsPage);
-    resultsLayout->addWidget(resultTable, 1);
-    w.QuerySplitter->insertWidget(1, resultsPage);
-    w.QuerySplitter->setStretchFactor(0, 2);
-    w.QuerySplitter->setStretchFactor(1, 3);
+    auto *resultsPage = resultsPanel;
+    resultsPanel->addControl(w.QueryTable);
 
-    auto *rawPage = new QWidget(mw);
-    rawPage->setObjectName(QStringLiteral("WorkbenchRawPage"));
-    auto *rawLayout = new QVBoxLayout(rawPage);
-    rawLayout->setContentsMargins(4, 4, 4, 4);
-    rawLayout->addWidget(new QLabel(tr("Raw SNMP and protocol output"), rawPage));
-    w.Query->setParent(rawPage);
-    rawLayout->addWidget(w.Query, 1);
+    // Output: the SnmpB-style text of every request (names, interpreted values, errors), the
+    // bottom panel history. It is interpreted text, not raw packets.
+    auto *outputPage = new QWidget(mw);
+    outputPage->setObjectName(QStringLiteral("WorkbenchOutputPage"));
+    auto *outputLayout = new QVBoxLayout(outputPage);
+    outputLayout->setContentsMargins(4, 4, 4, 4);
+    auto *outputHeader = new QHBoxLayout;
+    outputHeader->addStretch();
+    auto *clearOutput = new QPushButton(tr("Clear"), outputPage);
+    clearOutput->setObjectName(QStringLiteral("OutputClear"));
+    clearOutput->setToolTip(tr("Clear the text output. Results, Watch and the Log are not affected."));
+    connect(clearOutput, &QPushButton::clicked, w.Query, &QTextEdit::clear);
+    outputHeader->addWidget(clearOutput);
+    outputLayout->addLayout(outputHeader);
+    w.Query->setParent(outputPage);
+    outputLayout->addWidget(w.Query, 1);
     w.QueryLayout->hide();
 
     // Watch: repeat a GET on one object. Each row keeps the target and credential it was created
@@ -712,33 +648,54 @@ void Snmpb::BindToGUI(QMainWindow* mw)
                 if (choice.key == key) return choice.label;
             return tr("(deleted credential)");
         }, mw);
-    resultTable->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(resultTable, &QWidget::customContextMenuRequested, resultTable,
-            [this, mw, resultTable, watchService, watchPanel](const QPoint &position) {
-        QTableWidgetItem *item = resultTable->itemAt(position);
+    // Both entry points capture the same target/credential and create rows in one Watch service.
+    const auto startWatch = [this, mw, watchService, watchPanel](QString oid, bool column, bool fromTree) {
         auto *bar = mw->findChild<ConnectionBar *>(QStringLiteral("ConnectionBar"));
-        if (!item || !bar) return;
-        const QString oid = resultTable->item(item->row(), 2) ? resultTable->item(item->row(), 2)->text() : QString();
-        QMenu menu(resultTable);
-        QAction *watch = menu.addAction(tr("Watch this value"));
-        watch->setEnabled(!oid.isEmpty());
-        if (menu.exec(resultTable->viewport()->mapToGlobal(position)) != watch) return;
-        // Check now, so a missing target or credential is explained while the user is looking.
+        if (!bar || oid.isEmpty()) return;
+        WatchSpec spec;
+        spec.target = bar->target(); spec.credentialKey = bar->credentialKey();
+        spec.intervalSeconds = watchPanel->intervalSeconds();
         QSettings settings;
         AgentRequestSelection probe;
         const ConnectionError problem = ConnectionModel::build(
-            bar->target(), bar->credentialKey(), communityCredentialService, UsmCredentials(),
+            spec.target, spec.credentialKey, communityCredentialService, UsmCredentials(),
             PreferencesSettings::load(settings), &probe);
         if (problem != ConnectionError::None) {
             QMessageBox::warning(mw, tr("MIB Navigator"), ConnectionModel::errorText(problem));
             return;
         }
-        WatchSpec spec;
-        spec.target = bar->target(); spec.credentialKey = bar->credentialKey();
-        spec.oid = oid; spec.intervalSeconds = watchPanel->intervalSeconds();
+        if (column) {
+            bool accepted = false;
+            const QString instance = QInputDialog::getText(mw, tr("Watch table value"),
+                tr("Instance suffix (for example 1 or 4.101.116.104.49):"), QLineEdit::Normal,
+                QString(), &accepted).trimmed();
+            if (!accepted) return;
+            static const QRegularExpression suffix(QStringLiteral(R"(^[0-9]+(?:\.[0-9]+)*$)"));
+            bool validInstance = suffix.match(instance).hasMatch();
+            for (const QString &part : instance.split('.')) {
+                bool number = false;
+                const auto value = part.toULongLong(&number);
+                validInstance = validInstance && number && value <= 0xffffffffULL;
+            }
+            if (!validInstance) {
+                QMessageBox::warning(mw, tr("Watch table value"),
+                    tr("Enter a numeric instance suffix separated by dots. Each number must be between 0 and 4294967295."));
+                return;
+            }
+            oid += QStringLiteral(".") + instance;
+        } else if (fromTree) oid += QStringLiteral(".0");
+        if (!Oid(oid.toLatin1().constData()).valid()) {
+            QMessageBox::warning(mw, tr("Watch value"), tr("The object and instance do not form a valid OID."));
+            return;
+        }
+        spec.oid = oid;
         watchService->add(spec);
-        if (workbench) workbench->showBottomPage(watchPanel);
-    });
+        if (workbench) workbench->openDocument(watchPanel);
+    };
+    connect(w.MIBTree, &MibModelView::WatchFromOid, watchPanel,
+            [startWatch](const QString &oid, bool column) { startWatch(oid, column, true); });
+    connect(resultsPanel, &QueryResultsPanel::watchRequested, watchPanel,
+            [startWatch](const QString &oid) { startWatch(oid, false, false); });
 
     // Collection-wide search: an index of every definition in every MIB file, rebuilt in the
     // background when the collection changes.
@@ -780,8 +737,9 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     };
     auto *searchPanel = new CollectionSearchPanel(collectionService, searchLookups, mw);
     connect(searchPanel, &CollectionSearchPanel::showInTreeRequested, this, [this](const QString &oid) {
-        if (workbench) { workbench->setActivity(WorkbenchActivity::Mibs); workbench->showMibTree(); }
+        // The tree is always on screen; select the object and give the tree the keyboard.
         w.MIBTree->SelectFromOid(oid);
+        w.MIBTree->setFocus(Qt::OtherFocusReason);
     });
     connect(searchPanel, &CollectionSearchPanel::openInEditorRequested, this, [this](const QString &file, int line) {
         editor->MibFileOpen(file);
@@ -791,7 +749,7 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     connect(collectionSearch, &QLineEdit::returnPressed, this, [this, collectionService, searchPanel, collectionSearch]() {
         if (!collectionService->hasIndex() && !collectionService->isBuilding()) collectionService->rebuildNow();
         searchPanel->search(collectionSearch->text());
-        if (workbench) workbench->showBottomPage(searchPanel);
+        if (workbench) workbench->openDocument(searchPanel);
     });
 
     // Log: every request and how it ended.
@@ -906,6 +864,7 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     problemToolbar->addWidget(showNotes, 0, Qt::AlignTop);
     auto *problemTable = new QTableWidget(0, 6, problemsPage);
     problemTable->setObjectName(QStringLiteral("WorkbenchProblemTable"));
+    problemTable->setItemDelegate(new AppearanceColors::ItemDelegate(problemTable));
     problemTable->setHorizontalHeaderLabels({tr("Severity"), tr("Module"), tr("Problem"),
                                              tr("Why"), tr("What it affects"), tr("File")});
     problemTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -993,8 +952,8 @@ void Snmpb::BindToGUI(QMainWindow* mw)
                 item->setToolTip(tip);
                 if (column == 0) {
                     item->setData(Qt::UserRole, index);
-                    if (problem.severity == MibProblemSeverity::Error) item->setForeground(QColor(0x9b, 0x25, 0x25));
-                    else if (problem.severity == MibProblemSeverity::Warning) item->setForeground(QColor(0x8a, 0x4b, 0x00));
+                    if (problem.severity == MibProblemSeverity::Error) item->setData(AppearanceColors::ForegroundToneRole, AppearanceColors::Error);
+                    else if (problem.severity == MibProblemSeverity::Warning) item->setData(AppearanceColors::ForegroundToneRole, AppearanceColors::Warning);
                 }
                 problemTable->setItem(row, column, item);
             }
@@ -1042,7 +1001,7 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     connect(modules, &MibModule::profileRuntimeBuildStarted, problemState,
             [problemState](const QString &) { problemState->setText(QObject::tr("Building the MIB environment…")); });
     connect(modules, &MibModule::profileRuntimeReady, problemState,
-            [problemList, problemLoadedCount, describeProblems, repopulateProblems](
+            [this, problemsPage, problemList, problemLoadedCount, describeProblems, repopulateProblems](
                 const QString &, const MibEffectivePlan &, MibEnvironmentPtr environment,
                 const QStringList &, bool, bool) {
         *problemList = environment ? environment->problems() : QList<MibProblem>{};
@@ -1053,9 +1012,14 @@ void Snmpb::BindToGUI(QMainWindow* mw)
             .arg(*problemLoadedCount).arg(reported.errors).arg(reported.warnings).arg(reported.notes));
         describeProblems();
         repopulateProblems();
+        if (workbench) {
+            const int count = reported.errors + reported.warnings;
+            workbench->setBottomPageNote(problemsPage, count ? QString::number(count) : QString());
+            workbench->setBottomPageVisible(problemsPage, count > 0);
+        }
     });
     connect(modules, &MibModule::profileRuntimeFailed, problemState,
-            [problemState, problemList, repopulateProblems](const QString &, const QString &error) {
+            [this, problemsPage, problemState, problemList, repopulateProblems](const QString &, const QString &error) {
         problemList->clear();
         MibProblem problem;
         problem.severity = MibProblemSeverity::Error;
@@ -1066,26 +1030,113 @@ void Snmpb::BindToGUI(QMainWindow* mw)
         problemState->setText(QObject::tr("Nothing could be loaded for this profile. "
                                           "The previous MIB environment remains active."));
         repopulateProblems();
+        if (workbench) {
+            workbench->setBottomPageNote(problemsPage, QStringLiteral("1"));
+            workbench->setBottomPageVisible(problemsPage, true);
+        }
     });
 
-    auto *diagnosticsPage = new QWidget(mw);
-    diagnosticsPage->setObjectName(QStringLiteral("WorkbenchDiagnosticsPage"));
-    auto *diagnosticsLayout = new QVBoxLayout(diagnosticsPage);
-    diagnosticsLayout->setContentsMargins(0, 0, 0, 0);
-    w.LogTab->setParent(diagnosticsPage);
+    // The SNMP library's own log is a troubleshooting tool, so it lives in Help > Diagnostics
+    // (a separate, non-modal window) rather than in the bottom panel.
+    auto *diagnosticsWindow = new QDialog(mw);
+    diagnosticsWindow->setObjectName(QStringLiteral("DiagnosticsWindow"));
+    diagnosticsWindow->setWindowTitle(tr("Diagnostics - SNMP library log"));
+    diagnosticsWindow->setModal(false);
+    auto *diagnosticsLayout = new QVBoxLayout(diagnosticsWindow);
+    w.LogTab->setParent(diagnosticsWindow);
     diagnosticsLayout->addWidget(w.LogTab);
+    diagnosticsWindow->resize(800, 500);
+    auto *showDiagnostics = new QAction(tr("&Diagnostics…"), mw);
+    showDiagnostics->setObjectName(QStringLiteral("HelpDiagnostics"));
+    connect(showDiagnostics, &QAction::triggered, diagnosticsWindow, [diagnosticsWindow]() {
+        diagnosticsWindow->show();
+        diagnosticsWindow->raise();
+        diagnosticsWindow->activateWindow();
+    });
+    w.helpMenu->insertAction(w.helpMenu->actions().value(0, nullptr), showDiagnostics);
 
+    // Problems describes the active MIB environment. Its bottom tab is conditional; the badge
+    // and View menu can also open it when the report contains only notes.
+    auto *problemHeading = new QLabel(tr("Problems loading the active MIB profile"), problemsPage);
+    problemHeading->setObjectName(QStringLiteral("WorkbenchProblemHeading"));
+    {
+        QFont font = problemHeading->font(); font.setBold(true); problemHeading->setFont(font);
+    }
+    problemsLayout->insertWidget(0, problemHeading);
+    const auto nameProblemsFor = [problemHeading](const QString &profileName) {
+        problemHeading->setText(profileName.isEmpty() ? tr("Problems loading the active MIB profile")
+                                                      : tr("Problems loading %1").arg(profileName));
+    };
+    connect(modules, &MibModule::profileRuntimeBuildStarted, problemHeading, nameProblemsFor);
+    connect(modules, &MibModule::profileRuntimeReady, problemHeading,
+            [nameProblemsFor](const QString &, const MibEffectivePlan &plan, MibEnvironmentPtr,
+                              const QStringList &, bool, bool) { nameProblemsFor(plan.profileName); });
+    if (auto *badge = mw->findChild<QLabel *>(QStringLiteral("CurrentEnvironmentStatus"))) {
+        badge->setCursor(Qt::PointingHandCursor);
+        badge->setToolTip(tr("Show what happened loading this MIB profile (Problems)"));
+        badge->installEventFilter(new ClickToRun([this, problemsPage]() {
+            if (workbench) workbench->showBottomPage(problemsPage);
+        }, badge));
+    }
+
+    // The trap page sits in the short, wide bottom panel: the trap list on the left, its
+    // content and details on the right.
+    w.TrapLogSplitter->setOrientation(Qt::Horizontal);
     w.NodeInfoLayout->setObjectName(QStringLiteral("WorkbenchMibInspector"));
-    w.NodeInfoL->setText(tr("MIB Object Inspector"));
-    WorkbenchShell::Pages workbenchPages;
-    workbenchPages.tree = w.TreeTab;
-    workbenchPages.library = mibLibrary;
-    workbenchPages.editor = w.EditorTab;
-    workbenchPages.events = w.TrapsTab;
+    w.NodeInfoL->hide(); // the Inspector dock already supplies the heading
+    mibLibrary->setEditorPage(w.EditorTab);
+    WorkbenchShell::Documents documents;
+    documents.results = resultsPage;
+    documents.library = mibLibrary;
+    documents.editor = w.EditorTab;
+    documents.search = searchPanel;
+    WorkbenchShell::BottomPages bottomPages;
+    bottomPages.output = outputPage;
+    documents.watch = watchPanel;
+    documents.traps = w.TrapsTab;
+    bottomPages.log = requestLogPanel;
+    bottomPages.problems = problemsPage;
+    // The tree pane (heading, filter, tree) becomes the permanent left pane; the Tree tab that
+    // used to hold it is left empty and is no longer shown.
     workbench = new WorkbenchShell(mw, w.widget,
-        qobject_cast<QGridLayout *>(w.widget->layout()), contextWidget, w.TabW,
-        workbenchPages, w.NodeInfoLayout, watchPanel, searchPanel, requestLogPanel, problemsPage,
-            diagnosticsPage, rawPage, this);
+        qobject_cast<QGridLayout *>(w.widget->layout()), contextWidget, w.MIBTreeLayout, w.TabW,
+        documents, w.NodeInfoLayout, bottomPages, this, connectionRow);
+    // The query toolbar and Inspector belong to Query; the shared panel spans all workspaces.
+    workbench->setFullPageHiddenWidgets({queryTools});
+    connect(resultsPanel, &QueryResultsPanel::queryStarted, workbench, &WorkbenchShell::showResults);
+    // Activity is derived from existing operation owners; visibility never controls their lifetimes.
+    const auto mibBuilding = std::make_shared<bool>(false);
+    const auto updateActivity = [this, requestLog, problemList, mibBuilding]() {
+        int running = *mibBuilding ? 1 : 0;
+        const auto summary = MibSummarizeProblems(*problemList);
+        int problems = summary.errors + summary.warnings;
+        for (const auto &entry : requestLog->entries()) {
+            running += entry.outcome == RequestOutcome::Running;
+            problems += entry.outcome == RequestOutcome::Failed ||
+                        entry.outcome == RequestOutcome::TimedOut || entry.outcome == RequestOutcome::Refused;
+        }
+        workbench->setActivityCounts(running, problems);
+    };
+    connect(requestLog, &RequestLog::entryAdded, workbench, updateActivity);
+    connect(requestLog, &RequestLog::entryChanged, workbench, updateActivity);
+    connect(requestLog, &RequestLog::cleared, workbench, updateActivity);
+    connect(modules, &MibModule::profileRuntimeBuildStarted, workbench,
+            [mibBuilding, updateActivity]() { *mibBuilding = true; updateActivity(); });
+    connect(modules, &MibModule::profileRuntimeReady, workbench,
+            [mibBuilding, updateActivity]() { *mibBuilding = false; updateActivity(); });
+    connect(modules, &MibModule::profileRuntimeFailed, workbench,
+            [mibBuilding, updateActivity]() { *mibBuilding = false; updateActivity(); });
+    updateActivity();
+    // Coalesce streamed warning changes without scanning every cell of a growing Walk.
+    auto *warningCount = new QTimer(resultsPanel);
+    warningCount->setSingleShot(true);
+    connect(warningCount, &QTimer::timeout, resultsPanel, [this]() {
+        const int count = resultsPanel->warningCount();
+        if (workbench) workbench->setResultsNote(count == 0 ? QString()
+            : count == 1 ? tr("1 warning") : tr("%1 warnings").arg(count));
+    });
+    connect(resultsPanel, &QueryResultsPanel::warningsChanged, warningCount,
+            [warningCount]() { warningCount->start(0); });
     startup->advance(startupGeneration, StartupState::ShellReady,
                      tr("Loading MIB Catalog…"));
     connect(workbench, &WorkbenchShell::mibLibraryModeRequested,
@@ -1095,51 +1146,35 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     connect(w.fileOpenAction, &QAction::triggered, mw,
             [this]() { ShowEditorDocument(); });
 
-    auto *statusEnvironment = new QLabel(tr("Environment: Building"), mw->statusBar());
-    statusEnvironment->setObjectName(QStringLiteral("WorkbenchStatusEnvironment"));
     auto *statusEvents = new QLabel(
         prefs->GetEnableIPv4() || prefs->GetEnableIPv6()
-            ? tr("Events: Capture enabled") : tr("Events: Stopped"), mw->statusBar());
+            ? tr("Traps: Listening") : tr("Traps: Stopped"), mw->statusBar());
     statusEvents->setObjectName(QStringLiteral("WorkbenchStatusEvents"));
     if (!start_msg.isEmpty()) {
-        statusEvents->setText(tr("Events: Needs attention (hover for details)"));
+        statusEvents->setText(tr("Traps: Needs attention (hover for details)"));
         statusEvents->setToolTip(start_msg);
         w.LogOutput->append(start_msg.section(QStringLiteral("\n\n"), 0, 1)
                             .replace(QStringLiteral("\n\n"), QStringLiteral(" ")));
     }
-    mw->statusBar()->addPermanentWidget(statusEnvironment);
     mw->statusBar()->addPermanentWidget(statusEvents);
-    connect(modules, &MibModule::profileRuntimeBuildStarted, statusEnvironment,
-            [statusEnvironment](const QString &) { statusEnvironment->setText(QObject::tr("Environment: Building")); });
-    connect(modules, &MibModule::profileRuntimeReady, statusEnvironment,
-            [statusEnvironment](const QString &, const MibEffectivePlan &, MibEnvironmentPtr environment,
-                                const QStringList &, bool, bool) {
-        const EnvironmentPresentation presentation = PresentEnvironment(environment);
-        statusEnvironment->setText(!environment ? QObject::tr("Environment: Empty")
-            : presentation.needsAttention
-                ? QObject::tr("Environment: %1 modules · %2").arg(environment->loadedCount()).arg(presentation.state)
-                : QObject::tr("Environment: %1 modules").arg(environment->loadedCount()));
-    });
-    connect(modules, &MibModule::profileRuntimeFailed, statusEnvironment,
-            [statusEnvironment](const QString &, const QString &) {
-        statusEnvironment->setText(QObject::tr("Environment: Error"));
-    });
-    connect(startup, &StartupCoordinator::stateChanged, statusEnvironment,
-            [statusEnvironment](StartupState state, const QString &detail) {
-        QString text = detail;
-        if (text.isEmpty()) {
-            if (state == StartupState::ShellReady || state == StartupState::CatalogLoading)
-                text = QObject::tr("Catalog: Loading…");
-            else if (state == StartupState::ProfilePreparing)
-                text = QObject::tr("Profile: Preparing…");
-            else if (state == StartupState::EnvironmentBuilding)
-                text = QObject::tr("Environment: Building…");
-            else if (state == StartupState::Ready)
-                text = QObject::tr("Environment: Ready");
-            else if (state == StartupState::NeedsAttention || state == StartupState::Failed)
-                text = QObject::tr("Environment: Needs attention");
+    // A single header indicator also describes startup progress/failures. The
+    // state machine and diagnostics retain their detail without duplicate status text.
+    connect(startup, &StartupCoordinator::stateChanged, environmentContext,
+            [environmentContext](StartupState state, const QString &detail) {
+        if (state == StartupState::Ready) return; // the environment report supplies the final label
+        QString text;
+        QString status = QStringLiteral("building");
+        if (state == StartupState::CatalogLoading) text = QObject::tr("Catalog: Loading…");
+        else if (state == StartupState::ProfilePreparing) text = QObject::tr("Profile: Preparing…");
+        else if (state == StartupState::EnvironmentBuilding) text = QObject::tr("Environment: Building…");
+        else if (state == StartupState::NeedsAttention || state == StartupState::Failed) {
+            text = QObject::tr("Environment: Needs attention"); status = QStringLiteral("error");
         }
-        statusEnvironment->setText(text);
+        if (text.isEmpty()) return;
+        environmentContext->setText(text); environmentContext->setProperty("status", status);
+        environmentContext->setToolTip(detail + QObject::tr("\nClick to show MIB Problems."));
+        environmentContext->style()->unpolish(environmentContext);
+        environmentContext->style()->polish(environmentContext);
     });
 
     QSettings windowSettings;
@@ -1157,7 +1192,8 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     // Connect some signals
     connect( w.TabW, SIGNAL( currentChanged(int) ),
              this, SLOT( TabSelected() ) );
-    credentialsDialog = new CredentialsDialog(communityCredentialService, upm, mw);
+    connect(mibLibrary, &MibLibraryWidget::workspaceModeChanged, this, &Snmpb::TabSelected);
+    credentialsDialog = new CredentialsDialog(communityCredentialService, upm->Credentials(), mw);
     connect( w.actionCredentials, &QAction::triggered, this, [this](bool) {
         credentialsDialog->execute(CredentialsDialog::Communities);
     });
@@ -1255,20 +1291,8 @@ void Snmpb::StartDeferredInitialization()
                                       QObject::tr("Profile: Preparing…"));
             QThreadPool::globalInstance()->start(
                 [context, generation, profile, dependencySnapshot]() mutable {
-                MibEffectivePlan plan;
-                if (!MibProfileIsManifest(profile)) {
-                    plan.profileId = profile.id;
-                    plan.profileName = profile.name;
-                    plan.authorityError = QObject::tr(
-                        "Profile still uses legacy authority and must be migrated before activation");
-                } else {
-                    const MibEffectivePlanResolverInput input =
-                        MibResolverInputForProfile(profile, dependencySnapshot.libraryRoot());
-                    plan = MibEffectiveRuntimePlanResolver().resolve(input, dependencySnapshot);
-                    plan.profileName = profile.name;
-                    plan.profileType = profile.type;
-                    MibEffectivePlanAddListedNotFound(&plan, profile.unresolvedLegacyModules);
-                }
+                // The same planning as every later activation (see MibPlanForProfile).
+                const MibEffectivePlan plan = MibPlanForProfile(profile, dependencySnapshot);
                 QMetaObject::invokeMethod(context, [context, generation, profile, plan]() {
                     if (!context || !context->startup ||
                         !context->startup->accepts(generation)) return;
@@ -1319,7 +1343,6 @@ MibEditor* Snmpb::MibEditorObj(void)
 void Snmpb::ShowEditorDocument()
 {
     if (workbench) {
-        workbench->setActivity(WorkbenchActivity::Mibs);
         workbench->openDocument(w.EditorTab);
     } else {
         w.TabW->setCurrentWidget(w.EditorTab);
@@ -1403,8 +1426,9 @@ void Snmpb::ManagePreferences(bool)
 
 void Snmpb::SetEditorMenus(bool value)
 {
-    MainUI()->fileNewAction->setEnabled(value);
-    MainUI()->fileOpenAction->setEnabled(value);
+    // New and Open stay available everywhere: they bring the MIB Editor tab forward.
+    MainUI()->fileNewAction->setEnabled(true);
+    MainUI()->fileOpenAction->setEnabled(true);
     MainUI()->fileSaveAction->setEnabled(value);
     MainUI()->fileSaveAsAction->setEnabled(value);
     MainUI()->actionVerifyMIB->setEnabled(value);
@@ -1415,50 +1439,39 @@ void Snmpb::SetEditorMenus(bool value)
     MainUI()->actionFindNext->setEnabled(value);
 }
 
-/* 
- * This is where anything related to a tab being selected happens:
- * graying-out GUI parts, refreshing MIB trees, ...
+/*
+ * Runs when the middle-area tab changes. The MIB tree is always on screen, so Find works on the
+ * tree unless the MIB Editor is in front. The tree is not repopulated here: it is populated when a
+ * profile's environment is ready, and repopulating would collapse what the user expanded.
  */
 void Snmpb::TabSelected(void)
 {
     QWidget *currentTab = w.TabW->currentWidget();
-    if (currentTab == w.TreeTab) {
-        SetEditorMenus(false);
-        // Set find func to MIB tree
-        MainUI()->actionFind->setEnabled(true);
-        MainUI()->actionFindNext->setEnabled(true);
-        disconnect(MainUI()->actionFind, SIGNAL( triggered() ), 0, 0);
-        disconnect(MainUI()->actionFindNext, SIGNAL( triggered() ), 0, 0);
-        connect( MainUI()->actionFind, SIGNAL( triggered() ),
-                w.MIBTree, SLOT( FindFromNode() ) );
-        connect( MainUI()->actionFindNext, SIGNAL( triggered() ),
-                w.MIBTree, SLOT( ExecuteFindNext() ) );
-        MainUI()->actionMultipleVarbinds->setEnabled(true);
-        // Refresh MIB tree if needed
-        w.MIBTree->Populate();
-    } else if (currentTab == mibLibrary) {
-        QElapsedTimer activationTimer; activationTimer.start();
-        SetEditorMenus(false);
-        MainUI()->actionMultipleVarbinds->setEnabled(false);
-        mibLibrary->activate();
-        DiagnosticLogger::log("UI", tr("MIBs workspace activation total-ms=%1")
-            .arg(activationTimer.elapsed()));
-    } else if (currentTab == w.EditorTab) {
-        SetEditorMenus(true);
-        // Set find func to MIB editor 
-        disconnect(MainUI()->actionFind, SIGNAL( triggered() ), 0, 0);
-        disconnect(MainUI()->actionFindNext, SIGNAL( triggered() ), 0, 0);
+    const auto *mibTabs = mibLibrary->findChild<QTabWidget *>("MibLibraryTabs");
+    const bool editing = currentTab == mibLibrary && mibTabs && mibTabs->currentWidget() == w.EditorTab;
+    SetEditorMenus(editing);
+    disconnect(MainUI()->actionFind, SIGNAL( triggered() ), 0, 0);
+    disconnect(MainUI()->actionFindNext, SIGNAL( triggered() ), 0, 0);
+    if (editing) {
         connect( MainUI()->actionFind, SIGNAL( triggered() ),
                 editor, SLOT( Find() ) );
         connect( MainUI()->actionFindNext, SIGNAL( triggered() ),
                 editor, SLOT( ExecuteFindNext() ) );
-        MainUI()->actionMultipleVarbinds->setEnabled(false);
-    } else if (currentTab == w.TrapsTab) {
-        SetEditorMenus(false);
-        MainUI()->actionMultipleVarbinds->setEnabled(false);
-    } else if (currentTab == w.LogTab) {
-        SetEditorMenus(false);
-        MainUI()->actionMultipleVarbinds->setEnabled(false);
+    } else {
+        const bool query = workbench && !workbench->isFullPage();
+        MainUI()->actionFind->setEnabled(query);
+        MainUI()->actionFindNext->setEnabled(query);
+        connect( MainUI()->actionFind, SIGNAL( triggered() ),
+                w.MIBTree, SLOT( FindFromNode() ) );
+        connect( MainUI()->actionFindNext, SIGNAL( triggered() ),
+                w.MIBTree, SLOT( ExecuteFindNext() ) );
+    }
+    MainUI()->actionMultipleVarbinds->setEnabled(true);
+    if (currentTab == mibLibrary) {
+        QElapsedTimer activationTimer; activationTimer.start();
+        mibLibrary->activate();
+        DiagnosticLogger::log("UI", tr("MIBs workspace activation total-ms=%1")
+            .arg(activationTimer.elapsed()));
     }
 }
 
@@ -1489,3 +1502,18 @@ QString Snmpb::GetCommunityCredentialsConfigFile(void)
     return cfgdir.filePath(COMMUNITY_CREDENTIALS_CONFIG_FILE);
 }
 
+
+bool Snmpb::CopyTableAsCsv()
+{
+    if (!resultsPanel || !resultsPanel->isTableResult()) return false;
+    return CopyResultsAsCsv();
+}
+
+bool Snmpb::CopyResultsAsCsv()
+{
+    if (!resultsPanel) return false;
+    const auto records = resultsPanel->csvRecords();
+    if (records.size() < 2) return false;
+    QGuiApplication::clipboard()->setText(FormatCsv(records));
+    return true;
+}

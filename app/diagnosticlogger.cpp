@@ -66,9 +66,12 @@ bool DiagnosticLogger::initialize(const QString &version,
 {
     QMutexLocker lock(&mutex);
     if (file) return true;
-    const QString directory = directoryOverride.isEmpty() ?
-        QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) +
-            QStringLiteral("/logs") : directoryOverride;
+    // An isolated run (the automated launch tests) keeps its logs with the rest of its state.
+    const QString isolated = QCoreApplication::instance()
+        ? QCoreApplication::instance()->property("snmpb.isolatedStateRoot").toString() : QString();
+    const QString directory = !directoryOverride.isEmpty() ? directoryOverride
+        : !isolated.isEmpty() ? QDir(isolated).filePath(QStringLiteral("logs"))
+        : QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + QStringLiteral("/logs");
     if (!QDir().mkpath(directory)) return false;
     QDir logDir(directory);
     const QFileInfoList oldLogs = logDir.entryInfoList(

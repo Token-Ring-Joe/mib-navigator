@@ -44,5 +44,50 @@ int main(int argc, char **argv)
                 "an ordinary response is not touched");
     Pdu empty; empty.set_type(sNMP_PDU_RESPONSE);
     ok &= check(ExplainSnmpReport(empty, user).isEmpty(), "an empty response is not a report");
+
+    // ---- failures on this side of the wire (SNMP++ return codes) -----------------------------
+    const QString decrypt = ExplainSnmpTransportFailure(SNMPv3_USM_DECRYPTION_ERROR, user);
+    ok &= check(decrypt.contains("privacy passphrase or algorithm") && decrypt.contains("'synoptics'") &&
+                !decrypt.contains("SNMP error"), "decryption error points at the privacy settings");
+    const QString unknownUser = ExplainSnmpTransportFailure(SNMPv3_USM_UNKNOWN_SECURITY_NAME, user);
+    ok &= check(unknownUser.contains("not set up in this application's credentials") && unknownUser.contains("'synoptics'"),
+                "unknown security name says the user is not in the application's credentials");
+    for (const int code : {SNMPv3_USM_AUTHENTICATION_FAILURE, SNMPv3_USM_AUTHENTICATION_ERROR})
+        ok &= check(ExplainSnmpTransportFailure(code, user).contains("authentication passphrase or algorithm"),
+                    "authentication failure and error point at the authentication settings");
+    const QString other = ExplainSnmpTransportFailure(SNMPv3_USM_NOT_IN_TIME_WINDOW, {});
+    ok &= check(other.contains(QString::fromLatin1(Snmp::error_msg(SNMPv3_USM_NOT_IN_TIME_WINDOW))) &&
+                other.contains("1411") && other.contains("the user") == false,
+                "any other code gets SNMP++'s own text and the code");
+    ok &= check(!ExplainSnmpTransportFailure(0, {}).contains("SNMP error 0"), "never says 'SNMP error 0'");
+    ok &= check(IsSnmpErrorStatusCode(1) && IsSnmpErrorStatusCode(2) && IsSnmpErrorStatusCode(18) &&
+                !IsSnmpErrorStatusCode(0) && !IsSnmpErrorStatusCode(19) && !IsSnmpErrorStatusCode(-1) &&
+                !IsSnmpErrorStatusCode(SNMPv3_USM_DECRYPTION_ERROR), "the SNMP error-status range is 1-18");
+    // ---- the device's SNMP error-status in plain English -------------------------------------
+    struct Status { int code; const char *name; const char *meaning; };
+    for (const Status &st : {Status{SNMP_ERROR_TOO_BIG, "tooBig", "would not fit"},
+                             Status{SNMP_ERROR_NO_SUCH_NAME, "noSuchName", "does not have this object"},
+                             Status{SNMP_ERROR_BAD_VALUE, "badValue", "does not accept this value"},
+                             Status{SNMP_ERROR_READ_ONLY, "readOnly", "cannot be changed"},
+                             Status{SNMP_ERROR_GENERAL_VB_ERR, "genErr", "failed to carry out"},
+                             Status{SNMP_ERROR_NO_ACCESS, "noAccess", "not allowed to change"},
+                             Status{SNMP_ERROR_WRONG_TYPE, "wrongType", "wrong data type"},
+                             Status{SNMP_ERROR_WRONG_LENGTH, "wrongLength", "wrong length"},
+                             Status{SNMP_ERROR_WRONG_ENCODING, "wrongEncoding", "encoded incorrectly"},
+                             Status{SNMP_ERROR_WRONG_VALUE, "wrongValue", "does not accept this value"},
+                             Status{SNMP_ERROR_NO_CREATION, "noCreation", "cannot create"},
+                             Status{SNMP_ERROR_INCONSIST_VAL, "inconsistentValue", "conflicts with"},
+                             Status{SNMP_ERROR_RESOURCE_UNAVAIL, "resourceUnavailable", "no resources"},
+                             Status{SNMP_ERROR_COMITFAIL, "commitFailed", "could not apply"},
+                             Status{SNMP_ERROR_UNDO_FAIL, "undoFailed", "could not undo"},
+                             Status{SNMP_ERROR_AUTH_ERR, "authorizationError", "not authorised"},
+                             Status{SNMP_ERROR_NOT_WRITEABLE, "notWritable", "cannot be changed"},
+                             Status{SNMP_ERROR_INCONSIS_NAME, "inconsistentName", "current state"}}) {
+        const QString text = ExplainSnmpErrorStatus(st.code);
+        ok &= check(text.startsWith(st.name) && text.contains(st.meaning) &&
+                    text.endsWith(QString("(SNMP error %1)").arg(st.code)), "every error-status is explained");
+    }
+    ok &= check(ExplainSnmpErrorStatus(99).contains("99") && !ExplainSnmpErrorStatus(0).isEmpty(),
+                "an unknown error-status still gives text");
     return ok ? 0 : 1;
 }

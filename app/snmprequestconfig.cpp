@@ -42,6 +42,7 @@ bool SnmpRequestConfig::FromProfile(const SnmpRequestSettings &profile,
     config->writeCommunity = credentials.writeCommunity;
     config->securityName = credentials.securityName;
     config->securityLevel = credentials.securityLevel;
+    config->usmCredential = credentials.usmCredential;
     config->contextName = profile.contextname;
     config->contextEngineId = profile.contextengineid;
     config->maxRepetitions = profile.maxrepetitions;

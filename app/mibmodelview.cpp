@@ -233,6 +233,12 @@ QString MibModelView::detailsFor(const QModelIndex &index) const
 
 void MibModelView::contextMenuEvent(QContextMenuEvent *event)
 {
+    if (event->reason() == QContextMenuEvent::Mouse) {
+        const QModelIndex clicked = indexAt(event->pos());
+        if (!clicked.isValid()) return;
+        setCurrentIndex(clicked);
+    }
+    const QString oid = currentOid();
     QMenu menu(tr("Operations"), this);
     QAction *expandAction = menu.addAction(tr("Expand Branch"));
     QAction *collapseAction = menu.addAction(tr("Collapse Branch"));
@@ -264,9 +270,15 @@ void MibModelView::contextMenuEvent(QContextMenuEvent *event)
         getNextAction = menu.addAction(tr("Get Next"));
         getBulkAction = menu.addAction(tr("Get Bulk"));
     }
+    QAction *watchAction = menu.addAction(tr("Watch this value..."));
+    watchAction->setObjectName("QueryTreeWatch");
     QAction *setAction = menu.addAction(tr("Set..."));
     menu.addSeparator();
-    QAction *tableAction = menu.addAction(tr("Query Table"));
+    QMenu *tableMenu = menu.addMenu(tr("Query Table"));
+    tableMenu->setObjectName("QueryTableMenu");
+    QAction *tableAction = tableMenu->addAction(tr("All Instances"));
+    QAction *tableRowAction = tableMenu->addAction(tr("Select Instance..."));
+    tableRowAction->setObjectName("QueryTableSelectInstance");
     QAction *varbindAction = menu.addAction(tr("Multiple Varbinds..."));
     menu.addSeparator();
     QAction *findAction = menu.addAction(tr("Find..."));
@@ -274,12 +286,12 @@ void MibModelView::contextMenuEvent(QContextMenuEvent *event)
     const bool leaf = kind == NodeScalar || kind == NodeColumn;
     if (getAction) getAction->setEnabled(kind == NodeScalar);
     if (getBulkAction) getBulkAction->setEnabled(!agentIsV1);
+    watchAction->setEnabled(leaf && queryPrerequisitesAvailable);
     setAction->setEnabled(leaf);
-    tableAction->setEnabled(queryTableAvailable());
+    tableMenu->setEnabled(queryTableAvailable() && !walkInProgress);
     varbindAction->setEnabled(leaf);
 
     QAction *chosen = menu.exec(event->globalPos());
-    const QString oid = currentOid();
     if (!chosen) return;
     if (chosen == expandAction) expandRecursively(currentIndex());
     else if (chosen == collapseAction) collapse(currentIndex());
@@ -294,8 +306,10 @@ void MibModelView::contextMenuEvent(QContextMenuEvent *event)
     else if (chosen == getBulkAction) emit GetFromOid(oid + QStringLiteral(".0"), 2);
     else if (chosen == getBulkSelectAction) emit GetFromOidSelectInstance(oid, 2);
     else if (chosen == getBulkPromptAction) emit GetFromOidPromptInstance(oid, 2);
+    else if (chosen == watchAction) emit WatchFromOid(oid, kind == NodeColumn);
     else if (chosen == setAction) emit SetFromOid(oid);
     else if (chosen == tableAction) emit TableViewFromOid(oid);
+    else if (chosen == tableRowAction) emit TableRowSelectFromOid(oid);
     else if (chosen == varbindAction) emit VarbindsFromOid(oid);
     else if (chosen == findAction) {
         FindFromNode();

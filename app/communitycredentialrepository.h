@@ -9,7 +9,7 @@ class CommunityCredentialRepository
 public:
     static constexpr int CurrentVersion = 1;
     explicit CommunityCredentialRepository(const QString &fileName);
-    QList<CommunityCredentialRecord> load() const;
+    QList<CommunityCredentialRecord> load(QString *error = nullptr) const;
     bool save(const QList<CommunityCredentialRecord> &records) const;
 private:
     QString fileName;

@@ -1,3 +1,4 @@
+#include "appearancecolors.h"
 #include "connectionbar.h"
 
 #include "communitycredentialservice.h"
@@ -63,9 +64,8 @@ ConnectionBar::ConnectionBar(CommunityCredentialService *communityService,
     connect(detectButton, &QToolButton::clicked, this, &ConnectionBar::detectRequested);
     layout->addWidget(detectButton);
 
-    hint = new QLabel(this);
+    hint = new AppearanceColors::SemanticLabel({}, AppearanceColors::SemanticLabel::ConnectionWarning, this);
     hint->setObjectName(QStringLiteral("ConnectionHint"));
-    hint->setStyleSheet(QStringLiteral("color: #8a4b00;"));
     hint->hide();
     layout->addWidget(hint);
 

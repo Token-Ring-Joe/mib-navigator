@@ -32,6 +32,7 @@ class LogSnmpb;
 class USMProfileManager;
 class UsmCredentialService;
 class CommunityCredentialService;
+class QueryResultsPanel;
 class Preferences;
 class QDockWidget;
 class MibLibraryWidget;
@@ -49,6 +50,10 @@ public:
     void StartDeferredInitialization();
     Ui_MainW* MainUI(void);
     Agent* AgentObj(void);
+    // Right-click actions on the Results table; false when there is nothing to copy.
+    QueryResultsPanel *Results() const { return resultsPanel; }
+    bool CopyTableAsCsv();
+    bool CopyResultsAsCsv();
     Trap* TrapObj(void);
     MibViewLoader* MibLoaderObj(void);
     MibModule* MibModuleObj(void);
@@ -91,6 +96,7 @@ private:
     MibEditor *editor;
     LogSnmpb *logsnmpb;
     MibLibraryWidget *mibLibrary;
+    QueryResultsPanel *resultsPanel = nullptr;
     WorkbenchShell *workbench = nullptr;
     StartupCoordinator *startup = nullptr;
     QMainWindow *mainWindow = nullptr;

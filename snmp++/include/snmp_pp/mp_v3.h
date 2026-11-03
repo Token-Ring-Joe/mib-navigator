@@ -126,7 +126,7 @@ class DLLOPT v3MP
    *
    */
   v3MP(const OctetStr& engine_id,
-       unsigned int engine_boots, int &construct_status);
+       unsigned int engine_boots, int &construct_status, bool make_default = true);
 
   /**
    * Get the engine id of this SNMP entity.
@@ -535,6 +535,7 @@ class DLLOPT v3MP
    public:
     Cache();
     ~Cache();
+    void clear(); // release security references before the owning USM is destroyed
 
     struct Entry_T
     {

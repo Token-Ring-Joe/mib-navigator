@@ -71,6 +71,9 @@ void Preferences::Init(void)
     p = new Ui_Preferences();
     pw = new QDialog(s->MainUI()->TabW);
     p->setupUi(pw);
+    // The MIB tree is a permanent left pane now, so "results below or beside the tree" no longer
+    // applies. The saved value is kept as it is.
+    p->WindowPrefs->hide();
 
     // Set some properties for the Preferences TreeView
     p->PreferencesTree->header()->hide();

@@ -1,3 +1,4 @@
+#include "fakesnmpagent.h"
 #include "snmpinstanceasyncrunner.h"
 #include "snmptableasyncrunner.h"
 #include "snmpinstanceoperation.h"
@@ -113,6 +114,8 @@ bool transportCoverage()
     return ok;
 }
 
+// Walk correctness (sparse rows, SNMPv1, GETBULK, bad agents) is covered against a fake agent
+// in snmptable_test.cpp; here only the request context capture matters.
 bool tableCoverage()
 {
     SnmpRequestConfig mutableSelection = config();
@@ -120,69 +123,154 @@ bool tableCoverage()
     const SnmpRequestConfig transportConfig = mutableSelection;
     mutableSelection.readCommunity = "changed-after-capture";
     mutableSelection.maxRepetitions = 1;
-    ScriptedSnmpTransport fake(transportConfig);
-    fake.append(response("1.3.6.1.4.1.999.1.1.10"));
-    fake.append(response("1.3.6.1.4.1.999.1.1.10"));
-    fake.append(response("1.3.6.1.4.1.999.1.2.10"));
-    fake.append(response("1.3.6.1.4.1.999.1.1.11"));
-    fake.append(response("1.3.6.1.4.1.999.1.1.11"));
-    fake.append(SnmpTransportResult{}); // short cell response
-    fake.append(response("1.3.6.1.4.1.999.2.1.0")); // subtree exit
+    FakeSnmpAgent agent(transportConfig);
+    agent.addInteger("1.3.6.1.4.1.999.1.1.10", 1);
+    agent.addInteger("1.3.6.1.4.1.999.1.2.10", 2);
+    agent.addInteger("1.3.6.1.4.1.999.1.1.11", 3);
     SnmpCancellationToken cancellation;
     const SnmpTableResult result = SnmpTableOperation(context, plan(true)).execute(
-        fake, cancellation);
-    bool ok = check(result.status == SnmpOperationStatus::Complete &&
-                    result.rows.size() == 2 && result.rows[0].cells.size() == 2,
-                    "normal multi-column traversal") &&
-              check(result.rows[0].instance == "10" &&
-                    result.rows[1].instance == "11",
-                    "instance extraction/order") &&
-              check(result.rows[0].cells[0].available &&
-                    !result.rows[1].cells[1].available,
-                    "available and short-response cells") &&
-              check(fake.requests().size() == 7 &&
-                    fake.requests().first().operation ==
-                        SnmpTransportOperation::GetNext &&
-                    fake.requests()[1].operation == SnmpTransportOperation::Get,
-                    "request ordering") &&
-              check(fake.requests().first().maxRepetitions == 19 &&
-                    fake.requests().first().nonRepeaters == 2 &&
-                    fake.config().readCommunity == "captured-read",
-                    "captured bulk/config values");
+        agent, cancellation);
+    return check(result.status == SnmpOperationStatus::Complete && result.rows.size() == 2 &&
+                     result.rows[0].instance == "10" && result.rows[1].instance == "11",
+                 "table walk uses the captured request context") &&
+           check(agent.config().readCommunity == "captured-read",
+                 "transport keeps the captured configuration") &&
+           check(agent.countOf(SnmpTransportOperation::GetBulk) > 0,
+                 "captured GETBULK repetitions are used");
+}
 
-    ScriptedSnmpTransport malformed(config());
-    malformed.append(response("1.3.6.1.4.1.998.1.1.10"));
-    ok &= check(SnmpTableOperation(context, plan()).execute(
-                    malformed, cancellation).status == SnmpOperationStatus::Complete,
-                "malformed/out-of-subtree lexical completion");
+bool instanceReport()
+{
+    SnmpRequestConfig v3 = config();
+    v3.version = SnmpRequestVersion::V3;
+    v3.securityName = "operator";
+    FakeSnmpAgent agent(v3);
+    agent.setFailure([](int, SnmpTransportResult *response) {
+        response->status = SnmpOperationStatus::Success;
+        response->transportStatus = SNMP_CLASS_SUCCESS;
+        Vb report{Oid("1.3.6.1.6.3.15.1.1.3.0")};   // usmStatsUnknownUserNames
+        report.set_value(1UL);
+        response->pdu += report;
+        return true;
+    });
+    SnmpCancellationToken token;
+    const SnmpInstanceResult result = SnmpInstanceOperation(
+        SnmpRequestContext(v3, SnmpRequestOperation::Walk), Oid("1.3.6.1.4.1.999.1.1")).execute(agent, token);
+    return check(result.status == SnmpOperationStatus::SnmpError && result.instances.isEmpty() &&
+                     result.problem.contains("operator"),
+                 "instance listing reports an SNMPv3 REPORT as a refusal");
+}
 
-    ScriptedSnmpTransport unavailableCell(config());
-    unavailableCell.append(response("1.3.6.1.4.1.999.1.1.10"));
-    unavailableCell.append(response("1.3.6.1.4.1.999.1.1.10",
-                                    sNMP_SYNTAX_NOSUCHINSTANCE));
-    unavailableCell.append(response("1.3.6.1.4.1.999.2.1.0"));
-    const SnmpTableResult unavailableResult = SnmpTableOperation(
-        context, plan()).execute(unavailableCell, cancellation);
-    ok &= check(unavailableResult.rows.size() == 1 &&
-                !unavailableResult.rows.first().cells.first().available,
-                "per-column unavailable exception");
+bool classification()
+{
+    // A real device error: the code and the PDU agree.
+    Pdu noSuchName; noSuchName.set_error_status(SNMP_ERROR_NO_SUCH_NAME); noSuchName.set_error_index(1);
+    Pdu tooBig; tooBig.set_error_status(SNMP_ERROR_TOO_BIG);
+    Pdu clean;
+    bool ok = check(ClassifySnmpTransportStatus(SNMP_ERROR_NO_SUCH_NAME, noSuchName) == SnmpOperationStatus::SnmpError &&
+                        ClassifySnmpTransportStatus(SNMP_ERROR_TOO_BIG, tooBig) == SnmpOperationStatus::SnmpError &&
+                        ClassifySnmpTransportStatus(SNMP_ERROR_INCONSIS_NAME, [] { Pdu p; p.set_error_status(SNMP_ERROR_INCONSIS_NAME); return p; }()) ==
+                            SnmpOperationStatus::SnmpError,
+                    "device errors are still SNMP errors");
+    ok &= check(ClassifySnmpTransportStatus(SNMP_CLASS_SUCCESS, clean) == SnmpOperationStatus::Success &&
+                    ClassifySnmpTransportStatus(SNMP_CLASS_SUCCESS, noSuchName) == SnmpOperationStatus::SnmpError &&
+                    ClassifySnmpTransportStatus(SNMP_CLASS_TIMEOUT, clean) == SnmpOperationStatus::Timeout,
+                "success, error-status in the PDU, and timeout are unchanged");
+    ok &= check(ClassifySnmpTransportStatus(SNMP_CLASS_TL_FAILED, clean) == SnmpOperationStatus::TransportFailure &&
+                    ClassifySnmpTransportStatus(SNMPv3_MP_ERROR, clean) == SnmpOperationStatus::TransportFailure,
+                "negative codes (transport, SNMPv3 MP) are failures");
+    // SNMPv3 USM codes are positive but are not the device's error-status.
+    for (const int code : {SNMPv3_USM_DECRYPTION_ERROR, SNMPv3_USM_UNKNOWN_SECURITY_NAME,
+                           SNMPv3_USM_AUTHENTICATION_FAILURE, SNMPv3_USM_AUTHENTICATION_ERROR,
+                           SNMPv3_USM_NOT_IN_TIME_WINDOW, SNMPv3_USM_FILEREAD_ERROR})
+        ok &= check(ClassifySnmpTransportStatus(code, clean) == SnmpOperationStatus::TransportFailure,
+                    "an SNMPv3 USM code is a failure on this side, not a device error");
+    ok &= check(ClassifySnmpTransportStatus(SNMP_ERROR_NO_SUCH_NAME, clean) == SnmpOperationStatus::TransportFailure &&
+                    ClassifySnmpTransportStatus(19, clean) == SnmpOperationStatus::TransportFailure,
+                "a positive code the PDU does not back up is not reported as the device's error");
+    return ok;
+}
 
-    ScriptedSnmpTransport empty(transportConfig);
-    SnmpTransportResult zero; zero.status = SnmpOperationStatus::Success;
-    zero.transportStatus = SNMP_CLASS_SUCCESS; empty.append(zero);
-    ok &= check(SnmpTableOperation(context, plan()).execute(empty, cancellation).status ==
-                    SnmpOperationStatus::Complete,
-                "zero-varbind completion");
-    ScriptedSnmpTransport timed(transportConfig);
-    timed.append(status(SnmpOperationStatus::Timeout, SNMP_CLASS_TIMEOUT));
-    ok &= check(SnmpTableOperation(context, plan()).execute(timed, cancellation).status ==
-                    SnmpOperationStatus::Timeout,
-                "table timeout");
-    ScriptedSnmpTransport errored(transportConfig);
-    errored.append(status(SnmpOperationStatus::SnmpError));
-    ok &= check(SnmpTableOperation(context, plan()).execute(errored, cancellation).status ==
-                    SnmpOperationStatus::SnmpError,
-                "table SNMP error");
+bool instanceLocalFailures()
+{
+    struct Case { int code; const char *cause; };
+    const Case cases[] = {
+        {SNMPv3_USM_DECRYPTION_ERROR, "privacy"},
+        {SNMPv3_USM_UNKNOWN_SECURITY_NAME, "credentials"},
+        {SNMPv3_USM_AUTHENTICATION_FAILURE, "authentication"},
+    };
+    bool ok = true;
+    for (const Case &c : cases)
+    {
+        SnmpRequestConfig v3 = config();
+        v3.version = SnmpRequestVersion::V3;
+        v3.securityName = "operator";
+        ScriptedSnmpTransport fake(v3);
+        fake.append(status(SnmpOperationStatus::TransportFailure, c.code));
+        SnmpCancellationToken token;
+        const SnmpInstanceResult result = SnmpInstanceOperation(
+            SnmpRequestContext(v3, SnmpRequestOperation::Walk), Oid("1.3.6.1.4.1.999.1.1")).execute(fake, token);
+        ok &= check(result.status == SnmpOperationStatus::TransportFailure &&
+                        result.transportStatus == c.code && result.problem.contains(c.cause) &&
+                        !result.problem.contains("error 0"),
+                    "a local SNMPv3 failure in the instance listing names its cause");
+    }
+    return ok;
+}
+
+bool tableInstanceBatching()
+{
+    bool ok = true;
+    for (auto version : {SnmpRequestVersion::V1, SnmpRequestVersion::V2c, SnmpRequestVersion::V3}) {
+        auto c = config(); c.version = version; c.maxRepetitions = 25;
+        FakeSnmpAgent agent(c);
+        QVector<Oid> roots;
+        for (int column = 1; column <= 24; ++column) {
+            const QString root = QString("1.3.6.1.4.1.999.1.1.%1").arg(column);
+            roots.append(Oid(root.toLatin1().constData()));
+            for (int row = 1; row <= 240; ++row)
+                if (column != 1 || row % 2 == 0)
+                    agent.addInteger((root + "." + QString::number(row)).toLatin1().constData(), row);
+        }
+        SnmpCancellationToken token;
+        const auto result = SnmpInstanceOperation(SnmpRequestContext(c,SnmpRequestOperation::Walk),roots).execute(agent,token);
+        std::cout << "DISCOVERY version=" << int(version) << " requests=" << agent.requestCount()
+                  << " instances=" << result.instances.size() << '\n';
+        ok &= check(result.status == SnmpOperationStatus::Complete && result.instances.size()==240 &&
+                    result.instances.first()=="1" && result.instances.last()=="240",
+                    "large discovery: all sparse instances in numeric order");
+        ok &= check(agent.requestCount() <= (version == SnmpRequestVersion::V1 ? 800 : 100),
+                    "large discovery: batched requests avoid one network round trip per cell");
+        ok &= check(version == SnmpRequestVersion::V1
+                        ? agent.countOf(SnmpTransportOperation::GetBulk)==0
+                        : agent.countOf(SnmpTransportOperation::GetBulk)>0,
+                    "large discovery: GETBULK for v2c/v3 only");
+    }
+    return ok;
+}
+
+bool tableInstanceUnion()
+{
+    bool ok = true;
+    for (auto version : {SnmpRequestVersion::V1, SnmpRequestVersion::V2c, SnmpRequestVersion::V3}) {
+        auto c = config(); c.version = version;
+        FakeSnmpAgent agent(c);
+        agent.addInteger("1.3.6.1.4.1.999.1.1.1.10",10);
+        agent.addInteger("1.3.6.1.4.1.999.1.1.2.2",2);
+        agent.addInteger("1.3.6.1.4.1.999.1.1.2.10",10);
+        const QVector<Oid> roots{Oid("1.3.6.1.4.1.999.1.1.1"),Oid("1.3.6.1.4.1.999.1.1.2")};
+        const SnmpRequestContext context(c, SnmpRequestOperation::Walk);
+        SnmpCancellationToken token;
+        const auto found = SnmpInstanceOperation(context,roots).execute(agent, token);
+        ok &= check(found.status == SnmpOperationStatus::Complete && found.instances == QStringList({"2","10"}),
+                    "table instances: sparse-column union, numeric order and deduplication across v1/v2c/v3");
+        FakeSnmpAgent stuck(c); stuck.addInteger("1.3.6.1.4.1.999.1.1.1.10",10); stuck.setStuck(true);
+        const auto invalid = SnmpInstanceOperation(context,roots).execute(stuck,token);
+        // v1 retries the batch after noSuchName for its absent second column;
+        // that adds one request before the repeated first-column OID is detected.
+        ok &= check(invalid.status == SnmpOperationStatus::TransportFailure && stuck.requestCount()>0 && stuck.requestCount()<=(version == SnmpRequestVersion::V1 ? 3 : 2) && !invalid.problem.isEmpty(),
+                    "table instances: out-of-order device cannot loop indefinitely");
+    }
     return ok;
 }
 
@@ -241,10 +329,8 @@ bool blockedOwnerCoverage()
     bool ok = true;
     const SnmpRequestContext context(config(), SnmpRequestOperation::Walk);
     const auto scriptedTable = [] {
-        auto fake = std::make_unique<ScriptedSnmpTransport>(config());
-        fake->append(response("1.3.6.1.4.1.999.1.1.10"));
-        fake->append(response("1.3.6.1.4.1.999.1.1.10"));
-        fake->append(response("1.3.6.1.4.1.999.2.1.0"));
+        auto fake = std::make_unique<FakeSnmpAgent>(config());
+        fake->addInteger("1.3.6.1.4.1.999.1.1.10", 7);
         return fake;
     };
     const auto scriptedInstance = [] {
@@ -259,6 +345,8 @@ bool blockedOwnerCoverage()
             ok &= check(runner.start(context, plan(), scriptedTable()), "blocked-owner table start");
             ok &= check(runner.wait(5000),
                         "table wait() returns although this thread never runs an event loop");
+            ok &= check(!runner.start(context, plan(), scriptedTable()),
+                        "table cannot replace a thread before queued cleanup");
         }
         {
             SnmpInstanceAsyncRunner runner;
@@ -266,6 +354,8 @@ bool blockedOwnerCoverage()
                         "blocked-owner instance start");
             ok &= check(runner.wait(5000),
                         "instance wait() returns although this thread never runs an event loop");
+            ok &= check(!runner.start(context, Oid("1.3.6.1.4.1.999.1.1"), scriptedInstance()),
+                        "instance discovery cannot replace a thread before queued cleanup");
         }
         { SnmpTableAsyncRunner runner; runner.start(context, plan(), scriptedTable()); }
         { SnmpInstanceAsyncRunner runner;
@@ -281,10 +371,8 @@ bool asyncCoverage(QCoreApplication &application)
     for (int iteration = 0; iteration < 2; ++iteration)
     {
         SnmpTableAsyncRunner runner;
-        auto fake = std::make_unique<ScriptedSnmpTransport>(config());
-        fake->append(response("1.3.6.1.4.1.999.1.1.10"));
-        fake->append(response("1.3.6.1.4.1.999.1.1.10"));
-        fake->append(response("1.3.6.1.4.1.999.2.1.0"));
+        auto fake = std::make_unique<FakeSnmpAgent>(config());
+        fake->addInteger("1.3.6.1.4.1.999.1.1.10", 7);
         QEventLoop loop;
         SnmpTableResult delivered;
         QObject::connect(&runner, &SnmpTableAsyncRunner::completed, &loop,
@@ -338,7 +426,7 @@ bool asyncCoverage(QCoreApplication &application)
 int main(int argc, char **argv)
 {
     QCoreApplication application(argc, argv);
-    return transportCoverage() && tableCoverage() && instanceCoverage() &&
+    return tableInstanceBatching() && tableInstanceUnion() && transportCoverage() && tableCoverage() && instanceCoverage() && instanceReport() && instanceLocalFailures() && classification() &&
                    asyncCoverage(application)
                ? 0 : 1;
 }

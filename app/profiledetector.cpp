@@ -26,8 +26,9 @@ DeviceIdentity ProfileDetector::read(ISnmpTransport &transport, const SnmpReques
             .arg(QString::fromLatin1(Snmp::error_msg(answer.snmpErrorStatus)));
         return identity;
     default:
-        identity.error = QObject::tr("The request could not be sent (%1)")
-            .arg(QString::fromLatin1(Snmp::error_msg(answer.transportStatus)));
+        identity.error = answer.transportStatus != 0
+            ? ExplainSnmpTransportFailure(answer.transportStatus, config.securityName)
+            : QObject::tr("The request could not be sent");
         return identity;
     }
     const QString report = ExplainSnmpReport(answer.pdu, config.securityName);

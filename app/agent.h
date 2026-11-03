@@ -32,6 +32,8 @@
 #include "snmprequestcontext.h"
 #include "snmptableasyncrunner.h"
 #include "snmpinstanceasyncrunner.h"
+#include "snmpwalkasyncrunner.h"
+#include "snmpsingleasyncrunner.h"
 #include "ui_varbinds.h"
 #include "snmp_pp/snmp_pp.h"
 
@@ -42,15 +44,14 @@ class Agent: public QObject
     Q_OBJECT
     
 public:
+    // The last Query Table as header + one record per row; empty when the last request was not a table.
+    const QList<QStringList> &LastTableRecords() const { return lastTable; }
     Agent(Snmpb *snmpb, bool offline = false);
     ~Agent() override;
     bool GetStartupResult(QString &Err);
     void StartTrapTimer(void);
     void Init(void);
-    void AsyncCallback(int reason, Pdu &pdu, 
-                       SnmpTarget &target, int iswalk);
     void AsyncCallbackTrap(int reason, Pdu &pdu, SnmpTarget &target);
-    void AsyncCallbackSet(int reason, Pdu &pdu, SnmpTarget &target);
     
     void ConfigTargetFromSettings(const SnmpRequestConfig& config,
                                   SnmpTarget *target);
@@ -89,11 +90,23 @@ private:
     class RequestLog *requestLog = nullptr;
     quint64 activeLogId = 0;
     void finishLog(const QString &resultHtml, int objectCount);
+    quint64 startLog(const QString &name, const SnmpRequestConfig &config, const QString &oid);
     mutable ConnectionError lastConnectionError = ConnectionError::None;
     QString GetValueString(MibSelection &ms, Vb* vb);
     void VarbindsBuildList(void);
+    void QueryTableFrom(const QString &oid, bool selectInstance);
+    void StartTableQuery(const SnmpRequestContext &context, const SnmpTablePlan &plan, const QString &oid);
     void PresentTableResult(const SnmpTableResult &result);
     void PresentInstanceResult(const SnmpInstanceResult &result);
+    void RunSingleRequest(const QString& oid, bool usevblist, SnmpRequestOperation operation);
+    void PresentSingleResult(const SnmpSingleResult &result);
+    void FinishQuery(const struct SnmpQueryText &text, bool restoreControls = true);
+    void HoldResultSorting();
+    void ReleaseResultSorting();
+    bool resultSortingHeld = false;
+    bool resultSortingWasOn = false;
+    void PresentWalkBatch(const QVector<Vb> &batch);
+    void PresentWalkResult(const SnmpWalkResult &result);
 
 public slots:
     void WalkFrom(const QString& oid);
@@ -104,9 +117,11 @@ public slots:
     void GetFromPromptInstance(const QString& oid, int op);
     void GetFromSelectInstance(const QString& oid, int op);
     void Set(const QString& oid, bool usevblist = false);
+    void SetVarbinds(const QVector<Vb> &varbinds, const QString& oid = QString());
     void SetFrom(const QString& oid);
     void Stop(void);
     void TableViewFrom(const QString& oid);
+    void TableRowSelectFrom(const QString& oid);
     void Varbinds(void);
     void VarbindsFrom(const QString& oid);
     void GetTypedTableInstance(void);
@@ -156,7 +171,13 @@ private:
 
     std::unique_ptr<SnmpRequestContext> activeRequestContext;
     SnmpTableAsyncRunner *tableRunner = nullptr;
+    QList<QStringList> lastTable;
+    bool tableQueryPending = false;
     SnmpInstanceAsyncRunner *instanceRunner = nullptr;
+    SnmpWalkAsyncRunner *walkRunner = nullptr;
+    SnmpSingleAsyncRunner *singleRunner = nullptr;
+    std::unique_ptr<SnmpRequestContext> pendingTableRowContext;
+    SnmpTablePlan pendingTableRowPlan;
     QString pendingInstanceOid;
     int pendingInstanceOperation = 0;
 

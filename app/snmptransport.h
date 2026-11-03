@@ -35,6 +35,11 @@ struct SnmpTransportResult
     int snmpErrorIndex = 0;
 };
 
+// Maps SNMP++'s return code and the response PDU to an operation status. A positive code is the
+// device's SNMP error-status only when it is in the error-status range (1-18) and the PDU says
+// the same; the other positive codes (SNMPv3_USM_*, 1400 and up) are failures on this side.
+SnmpOperationStatus ClassifySnmpTransportStatus(int transportStatus, const Pdu &pdu);
+
 class ISnmpTransport
 {
 public:
@@ -50,8 +55,11 @@ public:
     SnmpTransportResult execute(const SnmpTransportRequest &request) override;
     const SnmpRequestConfig &config() const override;
 
+    v3MP *messageProcessingModel() const { return securityContext.get(); }
+
 private:
     SnmpRequestConfig requestConfig;
+    std::shared_ptr<v3MP> securityContext;
     std::unique_ptr<Snmp> session;
     int sessionStatus = SNMP_CLASS_ERROR;
 };

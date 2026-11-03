@@ -1,3 +1,15 @@
+== MIB Navigator: deferred work ==
+- Credentials (owner feedback, 2026-11-02): consider separate Display name
+  and SNMP version columns in the unified list, replacing the long dash
+  separator for cleaner alignment. Deferred; current credentials workflow
+  was manually validated and works correctly.
+
+- Watch expansion (owner feedback, 2026-11-02): discuss Watch all instances
+  for a column (for example ifInOctets across all interfaces), and Watch
+  table (for example ifTable / 1.3.6.1.2.1.2.2). Deferred for further
+  discussion; discovery, polling, presentation, and membership changes
+  are not settled. Do not implement as part of the current work.
+
 == 0.9 milestones ==
 - Translation infrastructure (publish TS template)
 - OSX: Fix editFinished signal not working in mibselection.cpp

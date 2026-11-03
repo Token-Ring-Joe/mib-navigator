@@ -42,6 +42,17 @@ struct MibProfileMember {
     }
 };
 
+// A folder a Custom profile follows: every MIB file in it, at any depth, is a member except the
+// files the user excluded. Membership is worked out from the Library index whenever the profile
+// is planned, so MIBs later added to or removed from the folder change the profile.
+struct MibProfileFolder {
+    QString canonicalPath;
+    QStringList excludedFiles;   // canonical paths of files inside the folder that are left out
+    bool operator==(const MibProfileFolder &other) const {
+        return canonicalPath == other.canonicalPath && excludedFiles == other.excludedFiles;
+    }
+};
+
 struct MibProfileRecord {
     QString id;
     QString name;
@@ -55,6 +66,7 @@ struct MibProfileRecord {
     int manifestVersion = 0;
     QList<MibProfileMember> roots;
     QList<MibProfileScope> orderedScopes;
+    QList<MibProfileFolder> folders;   // Custom profiles only; see MibProfileFolder
 };
 
 MibProfileMemberState MibProfileMemberCurrentState(const MibProfileMember &member);
@@ -64,7 +76,21 @@ QList<MibProfileMember> MibProfileMembersFromFiles(
 QStringList MibProfileMemberIdentities(const QList<MibProfileMember> &members);
 bool MibProfileRequiresExactMigration(const MibProfileRecord &profile);
 bool MibProfileIsManifest(const MibProfileRecord &profile);
+// Where imports are looked up first: the followed folders (in the order they were added), then
+// the profile's other scopes.
 QStringList MibProfileScopePaths(const MibProfileRecord &profile);
+// True when `path` is the folder itself or lies anywhere below it.
+bool MibPathIsInsideFolder(const QString &path, const QString &folder);
+// The Library files a followed folder contributes (MIB files only: unreadable files and files
+// that declare no module are skipped). Excluded files are left out unless `includeExcluded`.
+QList<MibProfileMember> MibProfileFolderMembers(const MibProfileFolder &folder,
+                                                const QList<MibDependencyFileRecord> &files,
+                                                bool includeExcluded = false);
+// The profile with each followed folder's files added to its roots (exact roots keep their own
+// recorded hash). Followed folders that no longer exist are listed in `missingFolders`.
+MibProfileRecord MibProfileWithFolderFiles(const MibProfileRecord &profile,
+                                           const QList<MibDependencyFileRecord> &files,
+                                           QStringList *missingFolders = nullptr);
 
 class MibProfileDefinitions
 {
@@ -84,6 +110,9 @@ public:
     bool save(const QList<MibProfileRecord> &profiles, QString *error = nullptr) const;
     bool ordinaryProfileMigrationComplete() const;
     QString path() const { return filePath; }
+    // Followed folders are kept in a companion file next to the profile file, so a build that
+    // predates folder members can read and rewrite the profile file without losing them.
+    QString foldersPath() const;
 private:
     QString filePath;
 };
@@ -113,6 +142,13 @@ public:
                   MibProfileMemberReason reason = MibProfileMemberReason::Added,
                   QString *error = nullptr);
     bool addFolder(const QString &id, const QString &folder, QString *error = nullptr);
+    // Followed folders (Custom profiles only). Adding a folder that is already followed changes
+    // nothing; removing one also forgets its exclusions.
+    bool followFolders(const QString &id, const QStringList &folders, QString *error = nullptr);
+    bool unfollowFolders(const QString &id, const QStringList &folders, QString *error = nullptr);
+    // Leaves files inside followed folders out of the profile, or takes them back in.
+    bool setFilesExcluded(const QString &id, const QStringList &files, bool excluded,
+                          QString *error = nullptr);
     // After the user saves a MIB from the editor, every profile root at that path
     // records the new content hash so the root is not later reported as modified.
     // Returns how many roots were updated.

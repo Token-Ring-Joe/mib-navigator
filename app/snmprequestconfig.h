@@ -24,6 +24,7 @@ struct SnmpRequestConfig
     QString writeCommunity;
     QString securityName;
     int securityLevel = 0;
+    std::optional<UsmCredentialRecord> usmCredential;
     QString contextName;
     QString contextEngineId;
     int maxRepetitions = 0;

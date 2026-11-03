@@ -14,6 +14,8 @@ public:
     ~SnmpInstanceAsyncRunner() override;
     bool start(const SnmpRequestContext &context, const Oid &root,
                std::unique_ptr<ISnmpTransport> transport);
+    bool start(const SnmpRequestContext &context, const QVector<Oid> &roots,
+               std::unique_ptr<ISnmpTransport> transport);
     void cancel();
     bool isRunning() const;
     bool wait(unsigned long milliseconds = ULONG_MAX);

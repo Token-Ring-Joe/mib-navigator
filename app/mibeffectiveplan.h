@@ -126,7 +126,9 @@ enum class MibPlanResolutionTier { Root, ExplicitPin, RequesterDirectory, Reques
                                   // when it was added; the current file is used.
                                   ModifiedRoot,
                                   // A module the profile lists that the Library cannot supply.
-                                  ListedNotFound };
+                                  ListedNotFound,
+                                  // A folder the profile follows that does not exist.
+                                  FolderNotFound };
 
 struct MibPlanResolutionDiagnostic {
     QString identity;
@@ -170,7 +172,7 @@ struct MibEffectivePlan {
     static constexpr int PolicyVersion = 2;
     static constexpr int RuntimeAuthoritySchemaVersion = 1;
     static constexpr int RuntimeStageSchemaVersion = 1;
-    static constexpr int DependencyResolverPolicyVersion = 1;
+    static constexpr int DependencyResolverPolicyVersion = 2;
     static constexpr int MaximumConvergencePasses = 8;
 
     QString profileId;
@@ -224,6 +226,19 @@ inline void MibEffectivePlanAddListedNotFound(MibEffectivePlan *plan, const QStr
     plan->missingModules.sort(Qt::CaseSensitive);
 }
 
+// A followed folder that does not exist is reported; the rest of the profile still loads.
+inline void MibEffectivePlanAddMissingFolders(MibEffectivePlan *plan, const QStringList &folders)
+{
+    for (const QString &folder : folders) {
+        MibPlanResolutionDiagnostic finding;
+        finding.identity = folder;
+        finding.scope = folder;
+        finding.dependencyKind = QStringLiteral("PROFILE");
+        finding.tier = MibPlanResolutionTier::FolderNotFound;
+        plan->resolutionDiagnostics.append(finding);
+    }
+}
+
 class MibEffectivePlanResolver
 {
 public:
@@ -240,5 +255,10 @@ public:
     MibEffectivePlan resolve(const MibEffectivePlanResolverInput &input,
                              const MibDependencyIndex &library) const;
 };
+
+// The one way a saved profile becomes a plan, used for activation, start-up and Detect: followed
+// folders contribute their current MIB files, listed modules the Library cannot supply and
+// followed folders that no longer exist are reported, and nothing else is guessed.
+MibEffectivePlan MibPlanForProfile(const MibProfileRecord &profile, const MibDependencyIndex &library);
 
 #endif

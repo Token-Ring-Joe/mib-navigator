@@ -335,6 +335,94 @@ int main(int argc, char **argv)
                             }),
                 "a missing root is reported and skipped without blocking the other roots");
 
+    // Newest LAST-UPDATED wins within the winning scope, for roots and imports alike.
+    // Filenames deliberately put the newest revision last.
+    const auto dated = [](const QByteArray &date) {
+        return QByteArray("REV-MIB DEFINITIONS ::= BEGIN\nrev MODULE-IDENTITY\nLAST-UPDATED \"") + date +
+            "\"\nDESCRIPTION \"LAST-UPDATED \"\"209901010000Z\"\"\"\n::= { 1 3 }\nEND\n";
+    };
+    const QString oldRevision = write(sibling, "a-old.mib", dated("9901010000Z"));
+    const QString newRevision = write(sibling, "z-new.mib", dated("200205090000Z"));
+    const QString revisionRoot = write(roots, "revision-root.mib", mib("REV-ROOT", {"REV-MIB"}));
+    index.update({batch, standards, outside});
+    for (bool selected : {false, true}) {
+        const auto revised = resolve("revision", selected ? QStringList{oldRevision, newRevision}
+            : QStringList{revisionRoot}, {batch, standards});
+        const auto *chosen = fileProviding(revised, "REV-MIB");
+        const auto *finding = diagnostic(revised, "REV-MIB");
+        ok &= check(chosen && chosen->canonicalPath == newRevision && finding &&
+                    finding->reason.contains("2002-05-09") && finding->reason.contains("1999-01-01") &&
+                    finding->reason.contains("newest LAST-UPDATED"),
+                    "newest revision wins for selected files and imported dependencies, with dated report");
+    }
+    MibEffectivePlanResolverInput editedConflictInput;
+    editedConflictInput.id = "edited-conflict";
+    editedConflictInput.roots = MibProfileMembersFromFiles({oldRevision, newRevision});
+    editedConflictInput.roots.last().sha256 = QString(64, 'f');
+    editedConflictInput.orderedScopes = {batch, standards};
+    const auto editedConflict = resolver.resolve(editedConflictInput, index);
+    bool conflictReported = false, modifiedReported = false;
+    for (const auto &finding : editedConflict.resolutionDiagnostics) {
+        conflictReported |= finding.tier == MibPlanResolutionTier::Ambiguous;
+        modifiedReported |= finding.tier == MibPlanResolutionTier::ModifiedRoot;
+    }
+    ok &= check(conflictReported && modifiedReported && editedConflict.ambiguousModules.contains("REV-MIB"),
+                "a Modified note cannot hide the same module's conflict warning");
+    editedConflictInput.roots = MibProfileMembersFromFiles({oldRevision, newRevision});
+    editedConflictInput.roots.first().sha256 = QString(64, 'f');
+    const auto modifiedLoser = resolver.resolve(editedConflictInput, index);
+    bool shadowedClaimedLoaded = false;
+    for (const auto &finding : modifiedLoser.resolutionDiagnostics)
+        shadowedClaimedLoaded |= finding.tier == MibPlanResolutionTier::ModifiedRoot;
+    ok &= check(!shadowedClaimedLoaded && modifiedLoser.ambiguousModules.contains("REV-MIB"),
+                "a shadowed modified duplicate is explained as a conflict, never claimed to be loaded");
+    MibEffectivePlanResolverInput staleConflictInput;
+    staleConflictInput.id = "stale-pin-conflict";
+    staleConflictInput.roots = MibProfileMembersFromFiles({revisionRoot});
+    staleConflictInput.orderedScopes = {batch, standards};
+    staleConflictInput.pins.insert("REV-MIB", {oldRevision, QString(64, 'f')});
+    const auto staleConflict = resolver.resolve(staleConflictInput, index);
+    bool staleReported = false; conflictReported = false;
+    for (const auto &finding : staleConflict.resolutionDiagnostics) {
+        staleReported |= finding.tier == MibPlanResolutionTier::StalePin;
+        conflictReported |= finding.tier == MibPlanResolutionTier::Ambiguous;
+    }
+    ok &= check(staleReported && conflictReported && fileProviding(staleConflict, "REV-MIB") &&
+                fileProviding(staleConflict, "REV-MIB")->canonicalPath == newRevision,
+                "a stale pin and the fallback provider conflict are both reported");
+    // Equal dates, invalid dates and absent dates all have a deterministic path fallback.
+    for (const QByteArray &date : {QByteArray("9901010000Z"), QByteArray("200299990000Z"), QByteArray()}) {
+        write(sibling, "z-new.mib", dated(date));
+        index.update({batch, standards, outside});
+        const auto fallback = resolve("revision-fallback", {oldRevision, newRevision}, {batch, standards});
+        const auto *chosen = fileProviding(fallback, "REV-MIB");
+        ok &= check(chosen && chosen->canonicalPath == oldRevision,
+                    "equal or missing revisions fall back to path");
+    }
+
+    // Each declaration has its own date; fake clauses in comments/descriptions do not count.
+    write(sibling, "a-old.mib", dated("200501010000Z"));
+    QByteArray other = dated("209901010000Z"); other.replace("REV-MIB", "OTHER-REV-MIB");
+    write(sibling, "z-new.mib", other + "-- LAST-UPDATED \"209912310000Z\"\n" + dated("200205090000Z"));
+    index.update({batch, standards, outside});
+    const auto separateDates = resolve("per-module-revisions", {revisionRoot}, {batch, standards});
+    const auto *perModule = fileProviding(separateDates, "REV-MIB");
+    ok &= check(perModule && perModule->canonicalPath == oldRevision,
+                "another module and quoted descriptions cannot supply the revision for this module");
+
+    write(sibling, "z-new.mib", other + dated("200205090000Z") + "-- changed losing provider\n");
+    index.update({batch, standards, outside});
+    const auto changedAlternative = resolve("per-module-revisions", {revisionRoot}, {batch, standards});
+    ok &= check(fileProviding(changedAlternative, "REV-MIB") &&
+                fileProviding(changedAlternative, "REV-MIB")->canonicalPath == oldRevision &&
+                changedAlternative.sha256 != separateDates.sha256,
+                "a changed losing provider invalidates the cached conflict report");
+    QFile::remove(newRevision);
+    index.update({batch, standards, outside});
+    const auto noConflict = resolve("per-module-revisions", {revisionRoot}, {batch, standards});
+    ok &= check(!diagnostic(noConflict, "REV-MIB") && noConflict.sha256 != changedAlternative.sha256,
+                "removing a losing provider invalidates the cached conflict warning");
+
     QTemporaryDir stageCache;
     const auto stage = MibRuntimeStage::prepare(transitive, stageCache.path());
     ok &= check(stage.success && QDir(stage.paths.orderedPaths().first())

@@ -43,7 +43,10 @@ Obsolete design documents (historical record only): `device-manager.md`,
   Credential used with it. It does **not** remember the MIB Profile, because a
   lab IP may be a different vendor's device next time. Entries can be deleted.
 - **Credential**: dropdown of saved credentials (SNMP version plus community, or
-  SNMPv3 user). Managed on a separate Credentials screen. Continue the existing
+  SNMPv3 credential display name). Managed in one Credentials list with New, Duplicate
+  and Delete above the list. New chooses SNMPv1, SNMPv2c or SNMPv3, and the right
+  side shows the matching fields. Display name and USM wire username are independent;
+  several v3 entries may share a username with different secrets or protocols. Continue the existing
   reusable credential architecture (`credential-architecture-v1.md`,
   `reusable-community-credentials-v1.md`, `usm-credential-management-v2.md`).
 - **MIB Profile**: dropdown of Automatic and Custom profiles, plus the built-in
@@ -92,17 +95,37 @@ vendor names or enterprise numbers. Mapping comes from the MIB collection.
 ### Target layout
 
 ```text
-+----------------------------------------------------------------------+
-| Target [10.1.1.20 v] Credential [Lab v] MIB Profile [Fabric Engine v] [Detect] |
-| [Get] [Next] [Walk] [Bulk] [Set] [Table]           Search all MIBs... |
-+---------------+------------------------------------------------------+
-| MIB tree      | Results (raw | interpreted | warnings)               |
-|               +------------------------------------------------------+
-|               | Object details (syntax, range, description, source)  |
-+---------------+------------------------------------------------------+
-| [Watch] [Traps] [Log / PDU] [MIB Problems]          (bottom tabs)    |
-+----------------------------------------------------------------------+
+File  Edit  View  MIB  SNMP  Tools  Help
+Target [...]  Credential [...]  MIB Profile [...] [Detect]   (activity) [Show panel]
+[Query] [MIBs] [Traps]
+Query: query toolbar, MIB tree | [Results] [Watch] [Search when open] | Inspector
+MIBs:  [Library] [Profiles] [Editor]
+Traps: trap list and selected trap details
+[Output] [Log]                                (shared panel; collapsed initially)
+MIBs additionally: [Problems (when present)]
 ```
+
+Revised 2026-11-02 (owner decision). Main workspaces are permanent tabs. Library
+owns collection-wide inventory, providers, validation and dependencies; Profiles
+select applicability; Editor edits and verifies source. These are peer tabs inside
+MIBs. Query retains the tree, Results and Inspector. Collection Search
+opens a closable local Query tab beside Results and Watch. The Editor includes visible
+New/Open/Save/Save As/Verify actions. The Query tree offers Watch for scalars and
+columns; scalars use .0 and columns prompt for their numeric instance suffix.
+
+A header button toggles the shared bottom panel across all workspaces. It contains
+Output and Log, with conditional Problems available only in MIBs; Traps remains a
+full workspace. Watch lives in Query beside Results (owner correction, 2026-11-02). Starting a query selects
+Results; background results and Watch polls never navigate. Output retains its
+existing text history in the panel. Problems describes MIB environment reports only.
+Query failures remain in Results and Log. Explicit Problems navigation (including
+the profile indicator) selects MIBs and opens its Problems page. Background reports
+never navigate. MIBs remembers its panel selection independently of Query/Traps.
+The panel remembers visibility, height and selected page. Running and problem
+counts stay visible in the header while collapsed. Background updates never open
+the panel or change workspace. Explicit View commands and the environment badge
+open the requested panel page; Problems navigation also selects MIBs. Log is in
+this panel for now; a future move to a top-level workspace remains open. SNMP has no connection session.
 
 ## Build order
 
@@ -214,9 +237,10 @@ into smaller steps, each with its own working build.
     change since the previous poll, rate per second, the raw received type, any MIB warnings,
     and its status. Rates use the device's own sysUpTime when it answers (so polling jitter does
     not distort them) and fall back to the local clock; "octets" objects show bits per second.
-    A Counter32 wrap is told from a device restart by sysUpTime (no sysUpTime: a fall from the
-    top quarter of the range is a wrap, anything else a reset), so neither shows a false spike
-    and a restart resets the baseline. A row captures the target text and a credential
+    A falling sysUpTime is a device restart and resets the baseline. A falling Counter32 is a
+    wrap only when the previous value was in the top quarter of the range, with or without
+    sysUpTime (a counter cleared on a running device is a reset, not a wrap), so none of these
+    shows a false spike. A row captures the target text and a credential
     reference; the credential is re-resolved at every poll, and the connection bar never
     retargets a row (`snmpb.watch-service`, `snmpb.watch-calculator`, and the loopback
     scenario, which points the bar elsewhere while a watch keeps polling). Not done yet:
@@ -285,13 +309,451 @@ into smaller steps, each with its own working build.
     is built in. **Limit:** Automatic Profiles generated from `Vendor/Product` folders do not
     exist in the code yet (folder snapshots become Custom profiles), so Detect considers every
     saved profile except the built-in Standards profile, which would match every device.
+    (Superseded by step 15a: Automatic Profiles now exist and Detect prefers them.)
 17. **Table verification** (#3) against real vendor tables (sparse rows,
-    string/IP indexes, IMPLIED, AUGMENTS), plus Copy as CSV.
+    string/IP indexes, IMPLIED, AUGMENTS), plus Copy as CSV. *Done (2026-10-31):* Query Table
+    reads every column in step (`SnmpTableOperation`): the smallest next instance across the
+    columns is the next row, so a row missing its first column (a sparse table) is no longer
+    lost, and a dense table costs one request per row instead of one per cell (up to 8 columns
+    per request; GETBULK on SNMPv2c/v3 reads many rows per request, GETNEXT with noSuchName
+    handling on SNMPv1; a "tooBig" answer makes it ask for less). Instances sort numerically.
+    A device that returns an OID that is not after the previous one ends the walk with a plain
+    reason instead of looping; row and request caps stop a runaway table. An SNMPv3 REPORT
+    (wrong passphrase and so on) is now reported as a refusal rather than as an empty table
+    (the same fix applies to the instance list). Not-accessible columns (usually the INDEX) are
+    not requested; the **Index** column shows the INDEX values decoded from the instance
+    (`tableindex.*`: integers, strings with or without a length prefix, fixed-size strings such
+    as MAC addresses, IpAddress, object identifiers, IMPLIED, and AUGMENTS/SPARSE/EXPAND rows
+    following the row that declares the index; an instance that does not fit shows the raw
+    instance only). Right-click in Results: **Copy table as CSV** (the last Query Table, empty
+    cells where a row has no value) and **Copy results as CSV** (what is on screen, in the order
+    shown); both are RFC 4180 text. Table and instance-list requests now appear in the Log, and
+    a failed instance list says why instead of doing nothing. Also fixed: SNMP++ returns a
+    device's SNMP error status (noSuchName, tooBig, ...) as a positive code, which the transport
+    classified as "no response". Tests: `snmpb.snmp-table` (fake in-memory agent: dense, sparse,
+    SNMPv1 and v2c, GETBULK efficiency, chunking and tooBig, stuck agent, timeout, cancel, a
+    300-case random sparse table compared with the truth, index decoding, CSV, SNMPv3 REPORT) and
+    the loopback scenarios `live-table-*` (real SNMP to a loopback-only agent that now answers
+    real GETBULK and SNMPv1 noSuchName: sparse table, AUGMENTS, IMPLIED), each also compared
+    object for object with a plain Walk of the same subtree. Checked read-only against real
+    Fabric Engine tables on 172.16.50.32 (ifTable 42 rows, ifXTable, entPhysical, rcVlan with 11
+    sparse rows, Q-BRIDGE FDB with MAC indexes, ipNetToMedia with IP indexes, dot3Stats and
+    others): every table matched a plain Walk of the same subtree exactly.
+
+    Added at owner request (2026-11-03; ready for manual validation): table and entry
+    context menus now offer Query Table > All Instances / Select Instance.
+    Discovery takes the union of readable columns so sparse rows remain selectable,
+    sorts/deduplicates numeric suffixes, and shows decoded INDEX values. Selecting
+    a row performs batched exact GETs through the existing table worker and Results
+    grid; missing cells remain empty and a vanished row cannot become its successor.
+    Discovery and retrieval share a captured target/credential/MIB environment.
+    Cancel and Stop preserve previous results during selection. No new persistence
+    or alternate MIB ownership is introduced. Discovery enumerates readable columns
+    first, so large tables may take time; Stop can cancel that work.
+    Validation: full Debug build, focused 9/9, complete deterministic suite 64/64
+    (888.51 s; all 26 tolerance scenarios and five libsmi goldens), and two backend
+    ASAN targets with leak detection passed. Installed Release repeated the three
+    table scenarios (v1, v2c, AUGMENTS/IMPLIED), including actual parent-table and
+    entry menus, decoded sparse instance lists, exact first/last rows, captured
+    connection settings, Cancel and Stop. Release install/startup/restart,
+    release-tree verification, executable and 355 module byte checks, ldd (no
+    missing libraries), and diff whitespace checks passed. Review also fixed
+    repeated-OID discovery loops, rejected-picker queries and replacement of a
+    worker thread before queued cleanup; dedicated regressions cover these.
+    One intermediate ASAN run used mismatched incremental objects after a header
+    edit; a rebuild of affected targets resolved that build artifact failure.
+    Existing Qt deprecation/tab-order/setuid warnings and documented legacy
+    full-app leaks remain outside this change. No desktop GUI or real devices
+    were used. Windows/macOS require CI. Sixteen task files changed, no scope
+    guardrail triggered, earlier work preserved, nothing committed/pushed.
+    Debug build: `/home/synoptics/src/snmpb-next/build-linux-debug`; Release build:
+    `/home/synoptics/src/snmpb-next/build-linux-release`; install:
+    `/tmp/mib-navigator-manual-validation/table-row`; executable:
+    `/tmp/mib-navigator-manual-validation/table-row/bin/mib-navigator`.
+
+
+    Follow-up correction (2026-11-03; owner verified latest build works as expected): discovery progress had
+    incorrectly used the completed-empty-reply formatter, showing "The device
+    returned no objects" while discovery was still running. Progress and picker
+    cancellation now avoid empty-response claims and do not finish the previous
+    Results query. Discovery's per-cell GETNEXT round trips are replaced by the
+    existing sparse-aware table engine: batched GETBULK for v2c/v3 and batched
+    GETNEXT for v1, with shared tooBig fallback, bounds, cancellation and REPORT
+    handling. An instances-only plan retains suffixes without collecting cells.
+    A deterministic 240-row/24-column sparse fixture reproduced 5,664 requests
+    before the fix; afterwards v2c/v3 take 30 requests and v1 takes 724, retaining
+    all 240 suffixes. The request-budget regression failed before the change and
+    passes afterwards. The repeated-OID test permits the legitimate extra v1
+    noSuchName batch retry while still requiring bounded failure.
+    Validation: full Debug build, focused 9/9, complete suite 64/64 (863.65 s;
+    26 tolerance scenarios, five libsmi goldens), two backend ASAN targets with
+    leak detection, and installed v1/v2c/AUGMENTS/IMPLIED scenarios passed. Actual
+    menu workflow checks cover the exact progress message, successful selection,
+    no false empty notice on Cancel, and Stop preserving prior results. Release
+    install/startup/restart, release-tree verification, executable and 355 bundled
+    module byte comparisons, ldd (no missing libraries), and diff checks passed.
+    No new persistent state or MIB ownership was added; discovery reuses the table
+    engine and captured request environment. Existing Qt/setuid warnings and
+    documented legacy full-app leaks remain. Device-specific elapsed time still
+    was confirmed by the owner on 2026-11-03; automated validation used no physical
+    devices or desktop GUI.
+    Windows/macOS need CI. Nine task files changed without triggering a scope
+    guardrail; earlier work remains intact, nothing committed/pushed. Debug build:
+    `/home/synoptics/src/snmpb-next/build-linux-debug`; Release build:
+    `/home/synoptics/src/snmpb-next/build-linux-release`; install:
+    `/tmp/mib-navigator-manual-validation/row-discovery`; executable:
+    `/tmp/mib-navigator-manual-validation/row-discovery/bin/mib-navigator`.
 
 ### Phase 4: Finish
 
 18. Visual polish: icons, consistent wording, optional dark mode, keyboard
-    shortcuts, remembered window layout.
+    shortcuts, remembered window layout. Refined on 2026-11-01 by a UI review
+    into the steps below, one build step each, in this order.
+18a. **Layout.** Remove the activity rail and its sidebar (the Queries and
+    Events sidebars held one button each, and the MIBs sidebar had two entries,
+    Modules and Catalog, that opened the same page). The MIB tree with its
+    filter becomes the permanent left pane. The query toolbar and the OID field
+    span the window under the connection bar. The middle area shows its tab bar:
+    Results always, plus closable MIB Library, MIB Editor and Search tabs. The
+    bottom panel holds Watch, Traps, Log and Problems; Raw stays there until 18b
+    gives Table results a real grid. The SNMP library log (the old Diagnostics
+    tab) moves to Help > Diagnostics. A View menu opens the Library, Profiles and
+    Editor and shows or hides the panels until 18d reorganises the menus. Delete
+    the unreachable legacy "MIB Library" tab from `mainw.ui` (and the code that
+    kept updating its hidden labels). Fix the Ctrl+R clash between Verify MIB
+    syntax and Replace (Replace becomes Ctrl+H). The "results below or beside the
+    tree" preference no longer applies and is hidden; its saved value is left
+    untouched, as are the retired `workbench/activity` and
+    `workbench/content-splitter` keys. *Done (2026-11-01).*
+18a-2. **Output in the middle, Results at the bottom** (owner request after 18a).
+    The middle area's always-open tab is Output, the SnmpB-style text that the
+    old "Raw" tab held (renamed: it is interpreted text, not raw packets, and
+    "Raw" is kept for the received-value toggle in 18b), with a Clear button.
+    Results becomes the first bottom tab; its title counts rows with MIB
+    warnings ("Results (2 warnings)"); it does not take the tab forward by itself. The
+    bottom panel spans the full width and the Inspector stops above it. Also
+    fixes the Library's "All states" filter, which was never placed in a layout
+    and sat over the Library/Profiles tab names. *Done (2026-11-01).*
+18a-3. **MIB Library as a full page, folder-based Profiles** (owner request).
+    View > MIB Library replaces the whole working area: no tree, bottom panel or
+    Inspector while it is shown, and leaving it restores them as they were. On
+    the Profiles page the available side is the Library's folder tree
+    (Standards, Unassigned, Vendor/Product, ...) with the MIB files inside;
+    Add and Remove handle both folders and single files, so "Add Files..." and
+    "Add Folder Snapshot..." go away. A folder added to a Custom profile is
+    remembered as a folder and followed, like an Automatic profile follows its
+    folder: MIBs later added to or removed from it change the profile (owner
+    decision, 2026-11-01). This adds folder members to the saved profile format;
+    the change must be additive, existing profiles load unchanged, and an older
+    build reading the file must not lose data.
+    Problems moves from the bottom panel to a third tab of the MIB Library page
+    (Library | Profiles | Problems), headed with the active profile's name,
+    because every item on it comes from loading the active profile's MIB
+    environment (nothing is about SNMP traffic, devices or traps). The
+    environment badge in the main window ("Loaded with 3 problems") opens that
+    tab, so the cause of a missing tree branch or an undecoded value is one
+    click away. The bottom panel keeps Results, Watch, Traps and Log (owner
+    decision, 2026-11-01).
+    The MIB Editor also takes the full page (owner decision, 2026-11-01).
+    Leaving either full page (its tab's close button, or View > Output) brings
+    the tree, Inspector and bottom panel back as they were. Inside a followed
+    folder, Remove on a single file excludes that file; the profile follows the
+    folder except its excluded files, and the member list shows them as
+    excluded so the difference from the folder is visible (owner decision,
+    2026-11-01). Defaults: a followed folder includes its subfolders (as
+    Automatic Profiles do); existing Custom profiles made with "Add Folder
+    Snapshot" keep their exact files and are not converted; a followed folder
+    that is renamed or deleted shows as missing in the profile and on the
+    Problems tab, never silently dropped.
+    *Done (2026-11-01).* Followed folders live in `profile-folders-v1.json` next to
+    `profiles-v1.json`, which keeps exactly the format older builds read and rewrite
+    (`snmpb.mib-profile-folders` simulates an older build rewriting it). Every
+    profile becomes a plan through one function, `MibPlanForProfile`, used by
+    activation, start-up, Detect and collection search alike (start-up used to
+    have its own copy). A followed folder's MIB files come from the Library
+    index, the same list the plan uses. A missing followed folder is the plan
+    finding `FolderNotFound`, shown on Problems as "Followed folder not found".
+    The report/cache limitation originally recorded here is fixed in 18a-4: missing-folder
+    findings participate in the Environment cache key even when the folder held no MIB files.
+
+18a-4. **Problems at the bottom when there are problems; clear, revision-based
+    conflicts** (owner feedback after 18a-3, 2026-11-01). Problems leaves the MIB
+    Library page and is a bottom-panel tab again, shown only while the active
+    profile has errors or warnings, titled with their number ("Problems (1)").
+    The environment badge and View > Problems open it on demand (also when there
+    are only notes). When different files define the same module, the one with
+    the newest LAST-UPDATED revision is used; only when revisions are equal or
+    missing does the first by path win (previously always first by path, which
+    chose correctly in the owner's Fabric Engine folder only by luck). The
+    Problems entry names the module, each file relative to the Library with its
+    revision date, and which one is used; the Profiles summary names conflicting
+    modules instead of "1 conflicts". Also: the test harness wrote Library
+    index files into the user's real data folder; tests must keep every file
+    inside their own temporary folders. The owner's library was checked before
+    any file move: `rfc2851.mib` stays where it is because the Custom profile
+    "Extreme Fabric" lists it as an exact file.
+    *Done (2026-11-01); manual UX validation pending.* Problems is a conditional bottom tab;
+    its count comes from the active Environment report, and its automatic appearance and count
+    updates do not take focus. The badge and View > Problems can open it even for notes alone, returning
+    from a full page to Output when necessary. The Library has only Library and Profiles tabs.
+    Both selected-file conflicts and imported dependencies use the newest per-module LAST-UPDATED
+    within the existing winning scope; an explicit dependency pin still wins. Equal or missing
+    dates fall back to path order; two-digit years mean 19YY. Identical copies are harmless.
+    Reports name every candidate relative to the Library, with its revision and the selected file;
+    the Profiles summary names conflicting modules. Resolver policy 2 invalidates old caches.
+    Review also fixed stale conflict reports after an alternative provider changes or disappears:
+    findings and candidate hashes now participate in the Environment key. Findings are retained
+    by module and kind, so a Modified note or stale-pin warning cannot hide a conflict warning.
+    Modified notes describe only the selected provider, never a shadowed copy.
+    This also fixes the
+    missing-empty-folder cache limitation from 18a-3. Indexes and diagnostic logs honour isolated
+    state roots; existing user-state files and the owner's exact rfc2851.mib membership are untouched.
+    Regression checks cover selected/imported conflicts, ties, missing/invalid dates, two-digit
+    years, multi-module files, quoted/comment dates, changed/removed alternative providers, missing
+    empty folders, conditional tabs, full-page badge navigation and test-state isolation.
+    Validation: focused tests 5/5; complete Debug suite 60/60 (784.76 seconds), including all five
+    libsmi goldens and 26 tolerance scenarios; AddressSanitizer resolver and shell checks passed;
+    `git diff --check` clean. Release application build and install passed; the executable and all
+    355 bundled MIB/PIB files match the build, and `ldd` reports no missing libraries. Existing Qt
+    deprecation and unchecked `setuid` warnings remain. An earlier execution-session termination
+    was avoided by running the final suite in a persistent process; the final run had no failures
+    or timeouts. No desktop GUI or real device was used. Windows/macOS still need CI verification.
+
+18a-5. **Permanent workspace navigation and shared collapsible panel** (owner
+    decision, 2026-11-02). Supersedes earlier layout details: Query | MIBs | Traps |
+    Watch are permanent top-level tabs; MIBs contains Library | Profiles | Editor.
+    Results | Log | Problems share a bottom panel, collapsed on first use, with a
+    Show panel / Hide panel button and running/problem indicators in the header.
+    Its selected page, height and expanded state persist using new presentation
+    keys; old settings remain untouched. Background updates do not expand or
+    navigate; explicit Problems navigation stays in the current workspace.
+    Reparent existing widgets without changing request, trap, watch or MIB runtime
+    ownership. Inspector and query tools belong to Query. This layout milestone is
+    implemented before 18b's Results grid work; manual desktop UX review remains.
+    Review fixed restoration of a saved Problems selection: wait for the initial
+    report, cancel that pending preference on explicit navigation, and never expand
+    the panel automatically. The loopback Watch workflow confirms continued polling
+    while its workspace and the panel are hidden, with its original target retained.
+    The scenario expectation was updated to match this strengthened check's message.
+    Validation: focused checks 3/3; complete Debug suite 60/60 (832.38 seconds),
+    including all five libsmi goldens and 26 tolerance scenarios; AddressSanitizer
+    shell/lifetime checks passed; `git diff --check` clean. Release build/install
+    passed; executable and all 355 bundled MIB/PIB files match, with no missing
+    libraries reported by `ldd`. Existing Qt deprecation and unchecked `setuid`
+    warnings remain. The final suite had no failures or timeouts. No desktop GUI
+    or physical device was used; Windows/macOS still require CI verification.
+    Nine files changed in this milestone, preserving the existing uncommitted work;
+    no file-scope guardrail was triggered. No commits or pushes were performed.
+
+18a-6. **Editor actions and Query Watch workflow** (owner correction, 2026-11-02).
+    Add visible Editor file actions using the existing menu actions. Restore Watch
+    to the Query tree context menu; ask for a table column's instance, preserve the
+    captured target/credential, and show watch rows beside the tree in Query's
+    center pane. Output and Watch are permanent local tabs; Search remains optional.
+    The separate top-level Watch tab is replaced by this Query view. Existing
+    watches and polling ownership stay in the single Watch service.
+    Implemented. Regression workflows click the Editor Open/Verify buttons and the
+    Query tree context menu, poll scalar .0 and compound column instances, verify
+    that results appear beside the tree, and check cancellation and invalid input.
+    Review added explicit 32-bit component bounds: malformed or oversized instance
+    suffixes are explained and never create a watch or reach the transport.
+    Validation: focused tests 4/4 plus the targeted loopback scenario; complete Debug
+    suite 60/60 (833.91 seconds), including 26 tolerance scenarios and all five
+    libsmi goldens; AddressSanitizer shell/lifetime check passed; `git diff --check`
+    clean. Release build/install passed. The installed executable and all 355
+    bundled MIB/PIB files match the build; `ldd` reports no missing libraries.
+    Existing Qt deprecation and unchecked `setuid` warnings remain. Final tests
+    had no failures or timeouts. Desktop UX review and Windows/macOS CI remain;
+    no desktop GUI or physical device was used. Ten source/doc files changed,
+    preserving existing work, with no scope guardrail triggered. No commits/pushes.
+
+18a-7. **Unified named credentials and same-user SNMPv3 variants** (owner request,
+    2026-11-02). Replace the communities/users tabs with one list and New/Duplicate/
+    Delete above it. New chooses v1, v2c or v3; a matching editor appears on the right.
+    SNMPv3 display names are independent of the wire USM username. Saved credential
+    IDs select complete protocol/secret snapshots; repeated wire usernames are valid.
+    Each v3 variant has an isolated, reusable SNMP++ message/security context so
+    concurrent operations cannot overwrite another variant's USM user or caches.
+    Incoming v3 notifications retain the first saved variant per username as their
+    default; a successful query installs the exact variant for that remote engine ID.
+    An unsolicited trap from another variant's device therefore needs a successful
+    query first in the current session. Existing single-variant trap behavior stays.
+    Legacy USM files and identity mappings remain untouched during migration. New
+    v3 records use an atomic, owner-restricted store next to the old identity file;
+    existing IDs are retained and imported unmapped IDs are deterministic. Existing
+    community entries keep their legacy shared v1/v2c behavior and history keys;
+    newly created entries select one version. Cancel discards working copies. Save
+    publishes neither service until both atomic files succeed and rolls back the
+    first file if the second write fails. Corrupt stores are reported, never replaced.
+
+    Validation: focused workflows 5/5, credential AddressSanitizer/leak checks 4/4,
+    revised Walk interleaving check 10/10 consecutive runs, and the complete Debug
+    suite 62/62 (839.95 seconds), including all 26 tolerance scenarios and five
+    libsmi goldens. Autonomous review fixed the SNMP++ None protocol-ID mismatch,
+    security-cache destruction order, and learned notification keys surviving
+    deletion of a secondary variant. Release build/install, installed headless
+    startup/restart, executable/MIB byte comparisons (355 MIB/PIB files), and `ldd`
+    passed. `git diff --check` is clean. Existing Qt deprecation and unchecked
+    `setuid` warnings remain. The broader app passes ASAN invalid-access checks
+    with leak detection disabled; strict full-app LeakSanitizer separately reports
+    pre-existing libsmi diagnostic and legacy UI leaks (101,206 bytes), documented
+    in `usm-credential-management-v2.md`. Those are not a leak-free full-app result.
+    Desktop UX and Windows/macOS CI remain. No desktop GUI or physical device was
+    used. This request changed 35 source/doc files while preserving prior work;
+    no file-scope guardrail triggered, and nothing was committed or pushed.
+
+18b. **Results.** Table queries show a real grid (rows are instances, columns
+    are the table's columns, plus Index), with warning cells tinted and
+    right-click Watch and Copy as CSV. Get and Walk results default to
+    Object.Instance, Value and Type; OID, Syntax, Received and Time are available
+    from the header's column menu. Warnings show as an icon and row tint with the
+    raw value in the tooltip, and an Interpreted/Raw toggle. A header line above
+    Results names the object, its OID, the row count and the time taken; a filter
+    box narrows the rows. Results occupies the main Query area beside Watch; Output
+    is in the bottom panel (owner correction after Results review, 2026-11-02).
+
+    Implemented (2026-11-02): `QueryResultsPanel` owns presentation snapshots copied
+    from query results, never parser pointers or retained model indexes. Table results
+    show one row per instance with decoded Index and readable data columns; unavailable
+    cells have no Watch action and export as empty values. Get/Walk default to
+    Object.Instance, Value and received Type; the header menu exposes metadata columns.
+    Filter, numeric sorting (including full Counter64 precision), Raw/Interpreted,
+    warning icons/tints/raw tooltips, and object/OID/count/duration summaries apply to
+    the displayed snapshot. CSV copies visible rows and columns in displayed order
+    and value mode. The old table-record snapshot remains for independent verification;
+    it no longer owns clipboard exports. Warnings are counted incrementally and streamed
+    Walk delivery remains bounded. Query entry points exclude overlapping result
+    operations, including the interval before a table completion is delivered. Results
+    now occupies the main Query area; Output keeps its existing text representation
+    in the shared bottom panel.
+    Expanded table/all-instance Watch remains deferred in `todo.txt`.
+    Validation: focused tests 9/9; complete deterministic Debug suite 63/63
+    (822.90 seconds), including 26 tolerance scenarios and all five libsmi goldens.
+    Results component AddressSanitizer/leak checks passed. Application startup/restart
+    AddressSanitizer invalid-access checks passed with leak detection disabled for
+    the existing application leaks recorded in step 18a. Release build/install,
+    installed startup/restart and synthetic loopback table workflow passed; executable
+    and all 355 bundled MIB/PIB files matched the build, and ldd found no missing
+    libraries. Diff whitespace checks passed. Existing Qt deprecation/setuid warnings
+    remain; Windows/macOS still require CI. This milestone changed 12 files without
+    triggering scope guardrails. No desktop GUI or physical devices were used, and
+    no commits or pushes were made.
+    Desktop UX validation is pending.
+
+    Layout correction (2026-11-02): Results | Watch are permanent Query tabs;
+    Output | Log | conditional Problems are panel pages. A named query start selects
+    Results once, while streamed results and Watch updates preserve navigation.
+    Existing Results/Output widgets are reparented; request and Watch ownership stay
+    unchanged. Old saved panel ID "results" maps to "output" during restoration;
+    normal save writes the new ID. Warning counts annotate the main Results tab.
+    MIB-only Problems placement remains a separate next step.
+    Validation: focused tests 8/8; complete Debug suite 63/63 (864.75 seconds),
+    including all 26 tolerance scenarios and five libsmi goldens. Results and shell
+    AddressSanitizer checks passed 2/2 with leak detection enabled. Installed Release
+    startup/restart and synthetic table workflows passed, including starting from
+    Watch and preserving Watch selection through background completion. The Release
+    executable and all 355 installed MIB/PIB files match the build; ldd found no missing
+    libraries. Diff whitespace and line-ending checks passed. No new product defects
+    were found. Existing Qt deprecation/unchecked setuid warnings and previously
+    recorded application leaks remain outside this layout step; Windows/macOS need
+    CI. Nine files changed with no scope guardrail triggered. No desktop GUI or
+    physical device was used; no commits or pushes were made. Desktop UX review is
+    pending. Release build: `/home/synoptics/src/snmpb-next/build-linux-release`;
+    install: `/tmp/mib-navigator-manual-validation/query-layout`;
+    executable: `/tmp/mib-navigator-manual-validation/query-layout/bin/mib-navigator`.
+    Owner verified Watch behavior after the layout correction (2026-11-02).
+
+    MIB-only Problems (2026-11-02): show Problems only in the MIBs workspace,
+    conditional on the MIB report or explicit inspection. Profile indicator and View
+    Problems navigation select MIBs without changing its Library/Profiles/Editor tab.
+    Background reports never navigate or expand the panel. MIBs remembers its selected
+    panel page separately from Query/Traps; presentation hides cannot overwrite that
+    preference. Old shared Problems preferences restore safely into the MIB-only
+    selection, with settings rewritten only during normal save. Query errors and
+    value warnings remain in Results/Log; MIB report ownership stays unchanged.
+    Validation: focused tests 8/8; complete Debug suite 63/63 (816.54 seconds),
+    including all 26 tolerance scenarios and five libsmi goldens. The workspace
+    navigation/lifetime test passed AddressSanitizer with leak detection enabled.
+    Release build/install and installed headless startup/restart passed, including
+    profile-indicator navigation from Query and hiding Problems when leaving MIBs.
+    Executable and all 355 installed MIB/PIB files match the build; ldd found no
+    missing libraries. Diff whitespace and line-ending checks passed. No new product
+    defects were found. The first combined validation session ended with SIGTERM
+    before its final summary, without reported test failures; rerunning the complete
+    suite in a dedicated execution session passed. This was an execution interruption,
+    not evidence of a test flake. Existing Qt deprecation/unchecked setuid warnings
+    and previously documented full-application leaks remain outside this layout step.
+    Windows/macOS need CI. Five files changed without triggering scope guardrails;
+    no desktop GUI or physical devices were used, and nothing was committed/pushed.
+    Owner verified MIB-only Problems visibility after generating problems (2026-11-02).
+    Build:
+    `/home/synoptics/src/snmpb-next/build-linux-release`; install:
+    `/tmp/mib-navigator-manual-validation/mib-problems`; executable:
+    `/tmp/mib-navigator-manual-validation/mib-problems/bin/mib-navigator`.
+18c. **Look.** Fusion style with Light, Dark and Follow-system themes. Remove
+    hard-coded light-only colours (environment badge, request status,
+    connection hint). One SVG line-icon set for actions instead of platform
+    standard pixmaps. Remove titles that repeat their tab ("Current operation
+    results", "MIB Object Inspector", "Raw SNMP and protocol output"). Show the
+    environment state once instead of three times (header badge, permanent
+    status-bar label, transient status message).
+    Implemented (2026-11-02; validation completed 2026-11-03): one application-owned
+    Appearance controller applies
+    Fusion, persists only the theme preference in the existing settings root, and
+    exposes View > Appearance > Follow System / Light / Dark. Follow System listens
+    for platform colour-scheme/palette changes. Semantic item roles supply warning,
+    failure, active-profile and paused styling through a palette-aware delegate;
+    existing rows repaint without model resets. Semantic status labels paint from
+    the current application palette, avoiding per-label stylesheet colour caches.
+    Theme changes refresh resolved palettes on workbench controls and containers.
+    Legacy Query HTML colours are adapted before insertion so streamed Walks
+    do not trigger repeated document re-layout. Existing read-only text is
+    recoloured in a batch on theme changes, preserving source query text and
+    error classification. Editor syntax formatting changes
+    colours without editing its source/undo state. Authored SVG action icons share
+    one palette-aware renderer and Qt Svg is an explicit target dependency. The
+    header indicator owns environment/startup presentation; duplicate permanent and
+    transient environment status text and the Inspector's repeated heading retire.
+    Validation: focused 9/9; complete deterministic suite 64/64, including all
+    26 tolerance scenarios and five libsmi goldens; all 63 non-tolerance tests
+    also passed after rebuilding every Debug target. The full-suite execution
+    wrapper ended with signal 143 after CTest wrote all 64 passing results and its
+    completed End testing record, before the wrapper status file was written;
+    CTest result records were independently checked. Appearance-only ASAN with
+    leak detection passed. Review caught and fixed stale Qt stylesheet palettes,
+    theme initialization before the legacy settings root, and synchronous output
+    recolouring that stalled large Walks. Query now maps HTML colours before
+    insertion; theme switches batch document formatting. Final full-run Walk:
+    3,000 objects in 3.29 s, longest UI stall 219 ms; Stop 184 ms.
+    Release build/install, installed startup/restart, release-tree verification,
+    byte comparison of all 355 bundled MIB/PIB files, dependency check (no missing
+    libraries), and `git diff --check` passed. Existing Qt deprecations, unchecked
+    setuid, obsolete UI tab-stop warnings and previously documented full-app
+    legacy leaks remain outside this appearance step. Windows/macOS require CI;
+    owner accepted the visible appearance/icons on 2026-11-03. Native Follow System
+    remains dependent on desktop integration.
+    No desktop GUI or real devices were used. Forty task files (including 17
+    SVGs) changed; no scope guardrail triggered. Earlier uncommitted work was
+    preserved; nothing was committed/pushed. Debug build:
+    `/home/synoptics/src/snmpb-next/build-linux-debug`; Release build:
+    `/home/synoptics/src/snmpb-next/build-linux-release`; install:
+    `/tmp/mib-navigator-manual-validation/appearance`; executable:
+    `/tmp/mib-navigator-manual-validation/appearance/bin/mib-navigator`.
+18d. **Menus and Preferences.** Menus become File, Edit, View, MIB, SNMP, Tools,
+    Help. Preferences become a sectioned dialog (General, SNMP, Traps, MIB
+    Library). Remove "Automatic MIB loading on walk" (nothing reads it). Retiring
+    "MIB Module Search Paths" is a separate traced change: it still feeds the
+    libsmi search path (`MibModule::ReadMibPaths`) alongside the Library, which
+    is a second source of truth for where MIBs come from.
+18e. **Library and Profiles.** Move the IANA download (Refresh Catalog, Check
+    for Updates, the two Download buttons) into a "Get MIBs from IANA..."
+    dialog. Give the Profiles page one clear meaning for its profile selector
+    ("edit this profile", not a second "Active MIB Profile"). The folder tree
+    and the Add / Remove buttons are kept (18a-3 replaces the flat list and the
+    Add Files / Add Folder Snapshot buttons).
+    Check whether a library-wide Check Dependencies needs to restore the
+    runtime afterwards: the unreachable legacy button did (`modules->Refresh()`
+    after semantic verification), the Library's own button does not.
 19. Optional: **implementation check**. Walk the live device and compare it
     with the selected profile (objects defined but missing, objects returned but
     undefined, values that break MIB rules).

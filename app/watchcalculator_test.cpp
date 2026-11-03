@@ -61,6 +61,25 @@ int main(int argc, char **argv)
     c = ComputeWatchChange(counter32(1000000, 0), counter32(500, 10000), false);
     ok &= check(c.change == "-" && c.note == "Counter reset: baseline reset" && c.rate.isEmpty() && c.baselineReset,
                 "without sysUpTime a fall from a low value is a reset, not a wrap");
+    // A counter cleared on a device that did not restart: sysUpTime keeps rising, so it is no
+    // evidence of a wrap (the harness case: 1,000,000 -> 500 once showed +4293967796, 3.44 Gbit/s).
+    c = ComputeWatchChange(counter32(1000000, 0, true, 100000), counter32(500, 10000, true, 101000), true);
+    ok &= check(c.change == "-" && c.note == "Counter reset: baseline reset" && c.rate.isEmpty() &&
+                c.baselineReset,
+                "a cleared counter with a rising sysUpTime is a reset, not a wrap");
+    c = ComputeWatchChange(counter32(0xBFFFFFFFull, 0, true, 100000), counter32(10, 10000, true, 101000), false);
+    ok &= check(c.change == "-" && c.note == "Counter reset: baseline reset" && c.rate.isEmpty() &&
+                c.baselineReset,
+                "a fall from just below the top quarter, with sysUpTime, is a reset");
+    c = ComputeWatchChange(counter32(0xC0000000ull, 0, true, 100000), counter32(10, 10000, true, 101000), false);
+    ok &= check(c.note == "Counter wrapped" && !c.baselineReset && c.change == "+1073741834",
+                "a fall from exactly the top-quarter floor, with sysUpTime, is a wrap");
+    c = ComputeWatchChange(counter32(0xBFFFFFFFull, 0), counter32(10, 10000), false);
+    ok &= check(c.baselineReset && c.rate.isEmpty(),
+                "just below the floor without sysUpTime is also a reset");
+    c = ComputeWatchChange(counter32(4294967000ull, 0, true, 100000), counter32(10, 10000, true, 500), false);
+    ok &= check(c.note == "Device restarted: baseline reset" && c.baselineReset && c.rate.isEmpty(),
+                "a restart wins even when the counter fell from the top of its range");
     c = ComputeWatchChange(counter64(900, 0), counter64(100, 1000), false);
     ok &= check(c.baselineReset && c.rate.isEmpty(), "Counter64 never wraps in practice: a fall is a reset");
 

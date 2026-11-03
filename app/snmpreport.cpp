@@ -61,3 +61,56 @@ QString ExplainSnmpReport(const Pdu &pdu, const QString &securityName)
             .arg(hasVarbind ? QObject::tr(" (%1)").arg(QString::fromLatin1(oid.get_printable())) : QString());
     return {};
 }
+
+bool IsSnmpErrorStatusCode(int code)
+{
+    return code >= SNMP_ERROR_TOO_BIG && code <= SNMP_ERROR_INCONSIS_NAME;
+}
+
+QString ExplainSnmpTransportFailure(int transportStatus, const QString &securityName)
+{
+    const QString user = securityName.isEmpty() ? QObject::tr("the user") : QObject::tr("'%1'").arg(securityName);
+    switch (transportStatus) {
+    case SNMPv3_USM_DECRYPTION_ERROR:
+        return QObject::tr("The device's reply could not be decrypted (SNMPv3 decryption error). The privacy "
+            "passphrase or algorithm (AES, DES) for %1 likely does not match the device.").arg(user);
+    case SNMPv3_USM_UNKNOWN_SECURITY_NAME:
+        return QObject::tr("The SNMPv3 user %1 is not set up in this application's credentials "
+            "(unknown security name). Check the user name in the Credential.").arg(user);
+    case SNMPv3_USM_AUTHENTICATION_FAILURE:
+    case SNMPv3_USM_AUTHENTICATION_ERROR:
+        return QObject::tr("SNMPv3 authentication failed. The authentication passphrase or algorithm "
+            "(MD5, SHA-1, SHA-2) for %1 likely does not match the device. Check both on the device and "
+            "in the Credential.").arg(user);
+    default:
+        return QObject::tr("The request could not be completed: %1 (SNMP++ code %2).")
+            .arg(QString::fromLatin1(Snmp::error_msg(transportStatus))).arg(transportStatus);
+    }
+}
+
+QString ExplainSnmpErrorStatus(int errorStatus)
+{
+    QString text;
+    switch (errorStatus) {
+    case SNMP_ERROR_TOO_BIG: text = QObject::tr("tooBig: the answer would not fit in one message"); break;
+    case SNMP_ERROR_NO_SUCH_NAME: text = QObject::tr("noSuchName: the device does not have this object"); break;
+    case SNMP_ERROR_BAD_VALUE: text = QObject::tr("badValue: the device does not accept this value (SNMPv1 reports every rejected value this way)"); break;
+    case SNMP_ERROR_READ_ONLY: text = QObject::tr("readOnly: this object cannot be changed"); break;
+    case SNMP_ERROR_GENERAL_VB_ERR: text = QObject::tr("genErr: the device failed to carry out the request"); break;
+    case SNMP_ERROR_NO_ACCESS: text = QObject::tr("noAccess: this community or user is not allowed to change this object"); break;
+    case SNMP_ERROR_WRONG_TYPE: text = QObject::tr("wrongType: the value has the wrong data type for this object"); break;
+    case SNMP_ERROR_WRONG_LENGTH: text = QObject::tr("wrongLength: the value has the wrong length for this object"); break;
+    case SNMP_ERROR_WRONG_ENCODING: text = QObject::tr("wrongEncoding: the value was encoded incorrectly"); break;
+    case SNMP_ERROR_WRONG_VALUE: text = QObject::tr("wrongValue: the device does not accept this value for this object"); break;
+    case SNMP_ERROR_NO_CREATION: text = QObject::tr("noCreation: the device cannot create this object"); break;
+    case SNMP_ERROR_INCONSIST_VAL: text = QObject::tr("inconsistentValue: this value conflicts with the device's current settings"); break;
+    case SNMP_ERROR_RESOURCE_UNAVAIL: text = QObject::tr("resourceUnavailable: the device has no resources to carry this out right now"); break;
+    case SNMP_ERROR_COMITFAIL: text = QObject::tr("commitFailed: the device could not apply the change"); break;
+    case SNMP_ERROR_UNDO_FAIL: text = QObject::tr("undoFailed: the device could not undo a partly applied change"); break;
+    case SNMP_ERROR_AUTH_ERR: text = QObject::tr("authorizationError: the credential is not authorised to change this object"); break;
+    case SNMP_ERROR_NOT_WRITEABLE: text = QObject::tr("notWritable: this object cannot be changed"); break;
+    case SNMP_ERROR_INCONSIS_NAME: text = QObject::tr("inconsistentName: this object cannot be created or changed in the device's current state"); break;
+    default: return QObject::tr("The device reported an error (SNMP error %1)").arg(errorStatus);
+    }
+    return QObject::tr("%1 (SNMP error %2)").arg(text).arg(errorStatus);
+}
