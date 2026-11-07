@@ -46,7 +46,6 @@ private:
     UsmCredentialService *usm;
     QComboBox *targetCombo;
     QComboBox *credentialCombo;
-    QLabel *hint;
     QToolButton *detectButton = nullptr;
     QList<ConnectionCredentialChoice> choices;
     bool updating = false;

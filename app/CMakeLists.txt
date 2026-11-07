@@ -80,6 +80,7 @@ set(SNMPB_APP_SOURCES
     tableindex.cpp
     snmpb.cpp
     trap.cpp
+    trapview.cpp
     trapdecoder.cpp
     traphistorystore.cpp
     trappresenter.cpp
@@ -94,6 +95,7 @@ set(SNMPB_APP_SOURCES
 )
 
 set(SNMPB_APP_HEADERS
+    dialoglayout.h
     appearance.h
     appearancecolors.h
     themedtextedit.h
@@ -180,6 +182,7 @@ set(SNMPB_APP_HEADERS
     snmpb.h
     snmpbapp.h
     trap.h
+    trapview.h
     trapdecoder.h
     traphistorystore.h
     trappresenter.h
@@ -214,6 +217,8 @@ add_executable(snmpb
     snmpb.qrc
     appearance.qrc
 )
+
+add_dependencies(snmpb snmpb_build_identity)
 
 set_target_properties(snmpb PROPERTIES
     OUTPUT_NAME "mib-navigator"
@@ -461,6 +466,7 @@ if(BUILD_TESTING)
 
     add_executable(snmpb_product_identity_test
         productidentity.cpp productidentity.h productidentity_test.cpp)
+    add_dependencies(snmpb_product_identity_test snmpb_build_identity)
     target_include_directories(snmpb_product_identity_test PRIVATE
         ${PROJECT_BINARY_DIR}/generated)
     target_link_libraries(snmpb_product_identity_test PRIVATE Qt6::Core)
@@ -677,8 +683,8 @@ if(BUILD_TESTING)
         snmprequestconfig.cpp snmprequestconfig.h snmprequestcontext.cpp snmprequestcontext.h
         mibnode.cpp mibnode.h mibview.cpp mibview.h mibtreemodel.cpp mibtreemodel.h
         mibmodelview.cpp mibmodelview.h mibrecords.h tablenodevalidation.cpp tablenodevalidation.h
-        tabletraversal.cpp tabletraversal.h find.ui mibenvironmentconsumer_test.cpp)
-    set_target_properties(snmpb_mib_environment_consumer_test PROPERTIES AUTOMOC ON AUTOUIC ON)
+        tabletraversal.cpp tabletraversal.h find.ui snmpb.qrc mibenvironmentconsumer_test.cpp)
+    set_target_properties(snmpb_mib_environment_consumer_test PROPERTIES AUTOMOC ON AUTOUIC ON AUTORCC ON)
     target_compile_definitions(snmpb_mib_environment_consumer_test PRIVATE SNMPB_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
     target_link_libraries(snmpb_mib_environment_consumer_test PRIVATE Qt6::Core Qt6::Widgets snmpb_libsmi snmpb_snmp_pp snmpb_libtomcrypt)
     if(WIN32)
@@ -705,7 +711,8 @@ if(BUILD_TESTING)
         mibdownloadtransport.cpp mibdownloadtransport.h
         mibdiagnosticcollector.cpp mibdiagnosticcollector.h mibrecords.h
         mibcandidatefilter.cpp mibcandidatefilter.h
-        miblibrary.cpp miblibrary.h mibcollection.cpp mibcollection.h miblibrary_test.cpp)
+        miblibrary.cpp miblibrary.h mibcollection.cpp mibcollection.h
+        mibdependencyindex.cpp mibdependencyindex.h miblibrary_test.cpp)
     set_target_properties(snmpb_mib_library_test PROPERTIES AUTOMOC ON)
     target_compile_definitions(snmpb_mib_library_test PRIVATE
         SNMPB_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
@@ -765,6 +772,7 @@ if(BUILD_TESTING)
         mibenvironment.cpp mibenvironment.h mibenvironmentextractor.cpp mibenvironmentextractor.h
         mibenvironmentregistry.cpp mibenvironmentregistry.h
         trapservice.cpp trapservice.h
+        mibvaluesemantics.cpp mibvaluesemantics.h
         trap_pipeline_test.cpp)
     set_target_properties(snmpb_trap_pipeline_test PROPERTIES AUTOMOC ON)
     target_link_libraries(snmpb_trap_pipeline_test PRIVATE
@@ -777,6 +785,27 @@ if(BUILD_TESTING)
             $<TARGET_FILE:snmpb_trap_pipeline_test>)
     else()
         add_test(NAME snmpb.trap-pipeline COMMAND $<TARGET_FILE:snmpb_trap_pipeline_test>)
+    endif()
+
+    add_executable(snmpb_trap_view_test
+        trapview.cpp trapview.h trapview_test.cpp
+        trapdecoder.cpp trapdecoder.h traprecord.h
+        traphistorystore.cpp traphistorystore.h trapservice.cpp trapservice.h
+        trappresenter.cpp trappresenter.h mibvaluesemantics.cpp mibvaluesemantics.h
+        mibengine.cpp mibengine.h
+        mibenvironment.cpp mibenvironment.h mibenvironmentextractor.cpp mibenvironmentextractor.h
+        mibenvironmentregistry.cpp mibenvironmentregistry.h)
+    set_target_properties(snmpb_trap_view_test PROPERTIES AUTOMOC ON)
+    target_link_libraries(snmpb_trap_view_test PRIVATE
+        Qt6::Widgets snmpb_libsmi snmpb_snmp_pp snmpb_libtomcrypt)
+    target_compile_definitions(snmpb_trap_view_test PRIVATE SNMPB_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+    if(WIN32)
+        add_test(NAME snmpb.trap-view COMMAND ${CMAKE_COMMAND} -E env
+            "QT_QPA_PLATFORM=offscreen" "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
+            $<TARGET_FILE:snmpb_trap_view_test>)
+    else()
+        add_test(NAME snmpb.trap-view COMMAND ${CMAKE_COMMAND} -E env
+            "QT_QPA_PLATFORM=offscreen" $<TARGET_FILE:snmpb_trap_view_test>)
     endif()
 
     add_executable(snmpb_snmp_operations_test

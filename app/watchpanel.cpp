@@ -24,9 +24,10 @@ WatchPanel::WatchPanel(WatchService *watchService,
 {
     setObjectName(QStringLiteral("WorkbenchWatchPage"));
     auto *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(4, 4, 4, 4);
+    layout->setContentsMargins(10, 10, 10, 10);
 
-    auto *hint = new QLabel(tr("Right-click an object in the Query tree or a value in Results and choose Watch."), this);
+    auto *hint = new QLabel(tr("No watches yet. Right-click an object in the Query tree or a value in Results and choose Watch."), this);
+    hint->setObjectName("WatchHint");
     hint->setWordWrap(true);
     layout->addWidget(hint);
     auto *bar = new QHBoxLayout;
@@ -62,8 +63,9 @@ WatchPanel::WatchPanel(WatchService *watchService,
     table->horizontalHeader()->setSectionResizeMode(Notes, QHeaderView::Stretch);
     table->setContextMenuPolicy(Qt::CustomContextMenu);
     layout->addWidget(table, 1);
+    setProperty("workbenchFocusTarget", QStringLiteral("WatchTable"));
 
-    connect(service, &WatchService::rowAdded, this, [this](quint64 id) {
+    connect(service, &WatchService::rowAdded, this, [this, hint](quint64 id) {
         const WatchRow *data = service->row(id);
         if (!data) return;
         const int row = table->rowCount();
@@ -72,16 +74,18 @@ WatchPanel::WatchPanel(WatchService *watchService,
         table->item(row, Target)->setData(Qt::UserRole, QVariant::fromValue(id));
         fill(row, *data);
         clearButton->setEnabled(true);
+        hint->setText(tr("Each row keeps its own target and credential. Select a row to pause or remove it."));
     });
     connect(service, &WatchService::rowChanged, this, [this](quint64 id) {
         const int row = rowOf(id);
         if (const WatchRow *data = service->row(id); data && row >= 0) fill(row, *data);
         selectionChanged();
     });
-    connect(service, &WatchService::rowRemoved, this, [this](quint64 id) {
+    connect(service, &WatchService::rowRemoved, this, [this, hint](quint64 id) {
         const int row = rowOf(id);
         if (row >= 0) table->removeRow(row);
         clearButton->setEnabled(table->rowCount() > 0);
+        if (!table->rowCount()) hint->setText(tr("No watches yet. Right-click an object in the Query tree or a value in Results and choose Watch."));
         selectionChanged();
     });
     connect(table, &QTableWidget::itemSelectionChanged, this, &WatchPanel::selectionChanged);
@@ -97,14 +101,16 @@ WatchPanel::WatchPanel(WatchService *watchService,
         table->selectRow(item->row());
         const WatchRow *data = service->row(selectedId());
         if (!data) return;
+        const quint64 id = data->id;
+        const bool wasPaused = data->paused;
         QMenu menu(table);
         QAction *pause = menu.addAction(data->paused ? tr("Resume") : tr("Pause"));
         QAction *poll = menu.addAction(tr("Poll now"));
         QAction *remove = menu.addAction(tr("Remove"));
         QAction *chosen = menu.exec(table->viewport()->mapToGlobal(position));
-        if (chosen == pause) service->setPaused(data->id, !data->paused);
-        else if (chosen == poll) service->pollNow(data->id);
-        else if (chosen == remove) service->remove(data->id);
+        if (chosen == pause) service->setPaused(id, !wasPaused);
+        else if (chosen == poll) service->pollNow(id);
+        else if (chosen == remove) service->remove(id);
     });
 }
 

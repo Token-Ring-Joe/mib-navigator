@@ -48,6 +48,10 @@ QString RenderMibOid(const MibEnvironmentPtr &environment, const Oid &oid)
 QString RenderMibValue(const MibResolvedObject &object, const Vb &source)
 {
     Vb vb=source;
+    const int syntax = int(vb.get_syntax());
+    if (syntax == sNMP_SYNTAX_NULL || syntax == sNMP_SYNTAX_NOSUCHOBJECT ||
+        syntax == sNMP_SYNTAX_NOSUCHINSTANCE || syntax == sNMP_SYNTAX_ENDOFMIBVIEW)
+        return SnmpSyntaxName(syntax);
     const auto *node=object.node;
     if (!node) return QString::fromLatin1(vb.get_printable_value());
     if (node->baseType==MibEnvironmentBaseType::Enumeration) {

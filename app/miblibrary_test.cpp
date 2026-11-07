@@ -3,6 +3,7 @@
 #include "mibdownloadtransport.h"
 #include "mibdiagnosticcollector.h"
 #include "mibengine.h"
+#include "mibdependencyindex.h"
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -221,14 +222,102 @@ END
     smiSetFlags(normalFlags);
     smiSetPath((temporary.path() + QDir::listSeparator() +
         QStringLiteral(SNMPB_SOURCE_DIR "/libsmi/mibs/ietf")).toLocal8Bit().constData());
-    const auto engineBad=MibEngine::instance().validateSource(
+    MibDependencyIndex verificationIndex(temporary.filePath("verification-index.json"));
+    verificationIndex.update({QStringLiteral(SNMPB_SOURCE_DIR "/libsmi/mibs/ietf")}, &error);
+    QFile savedIndex(verificationIndex.path());
+    ok &= check(savedIndex.open(QIODevice::ReadOnly), "open persisted verification baseline");
+    const QByteArray persistedIndexBefore = savedIndex.readAll();
+    savedIndex.close();
+    const auto verify = [&](const QByteArray &bytes, const QStringList &paths, int level, bool recursive) {
+        return MibEngine::instance().validateSource(bytes, paths, level, recursive, verificationIndex);
+    };
+    const auto engineBad=verify(
         "ENGINE-BAD-MIB DEFINITIONS ::= BEGIN\nIMPORTS OBJECT-TYPE FROM SNMPv2-SMI;\nbroken OBJECT-TYPE t\nEND\n",
-        temporary.path(),MibValidationErrorLevel(MibValidationLevel::FullReview),true);
-    const auto engineGood=MibEngine::instance().validateSource(
-        mib("ENGINE-GOOD-MIB"),temporary.path(),MibValidationErrorLevel(MibValidationLevel::ErrorsAndWarnings),false);
+        {QStringLiteral(SNMPB_SOURCE_DIR "/libsmi/mibs/ietf")},
+        MibValidationErrorLevel(MibValidationLevel::FullReview),true);
+    const auto engineGood=verify(
+        mib("ENGINE-GOOD-MIB"),{QStringLiteral(SNMPB_SOURCE_DIR "/libsmi/mibs/ietf")},
+        MibValidationErrorLevel(MibValidationLevel::ErrorsAndWarnings),false);
     ok &= check(!engineBad.diagnostics.isEmpty() && engineGood.success,
                 "engine editor validation isolates diagnostics and recovers after malformed input");
     ok &= check(smiGetFlags()==normalFlags,"engine editor validation restores parser flags");
+    const QString standards = QStringLiteral(SNMPB_SOURCE_DIR "/libsmi/mibs/ietf");
+    const auto hasTag = [](const MibEngineValidationResult &result, const QString &tag) {
+        for (const auto &diagnostic : result.diagnostics) if (diagnostic.tag == tag) return true;
+        return false;
+    };
+    const auto writeFixture = [&](const QString &path, const QByteArray &bytes) {
+        QFile file(path);
+        return file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size();
+    };
+    const QString importsDirectory = temporary.filePath("imports");
+    QDir().mkpath(importsDirectory);
+    const QByteArray firstDependency =
+        "VERIFY-BASE-MIB DEFINITIONS ::= BEGIN\nIMPORTS enterprises FROM SNMPv2-SMI;\n"
+        "verifyBase OBJECT IDENTIFIER ::= { enterprises 64991 }\nEND\n";
+    const QByteArray secondDependency =
+        "VERIFY-DEP-MIB DEFINITIONS ::= BEGIN\nIMPORTS verifyBase FROM VERIFY-BASE-MIB;\n"
+        "verifyChild OBJECT IDENTIFIER ::= { verifyBase 1 }\nEND\n";
+    const QByteArray editorSource =
+        "VERIFY-ROOT-MIB DEFINITIONS ::= BEGIN\nIMPORTS verifyChild FROM VERIFY-DEP-MIB;\n"
+        "verifyLeaf OBJECT IDENTIFIER ::= { verifyChild 1 }\nEND\n";
+    ok &= check(writeFixture(QDir(importsDirectory).filePath("unrelated-name.my"), firstDependency) &&
+                writeFixture(QDir(importsDirectory).filePath("another-vendor-file.txt"), secondDependency),
+                "write filename-independent recursive editor imports");
+    const QStringList verificationPaths{standards, importsDirectory};
+    MibEngine::instance().initialize(standards, true);
+    smiSetFlags(normalFlags);
+    const auto completeVerification = verify(editorSource, verificationPaths, 5, false);
+    ok &= check(completeVerification.success && !hasTag(completeVerification, "module-not-found") &&
+                !hasTag(completeVerification, "unknown-identifier"),
+                "editor imports resolve by Library identity outside the active Query parser paths");
+    const auto unresolvedVerification = verify(editorSource, {standards}, 5, false);
+    ok &= check(hasTag(unresolvedVerification, "module-not-found"),
+                "fresh verification does not reuse imports from the previous document/check");
+    const auto repeatedVerification = verify(editorSource, verificationPaths, 5, false);
+    ok &= check(repeatedVerification.success && !hasTag(repeatedVerification, "module-not-found"),
+                "restoring Library availability recovers without restarting the app");
+    const auto editedVerification = verify(
+        QByteArray(editorSource).replace("verifyLeaf OBJECT IDENTIFIER", "verifyLeaf OBJECT-TYPE t"), verificationPaths, 5, false);
+    bool editedSyntaxError = false;
+    for (const auto &diagnostic : editedVerification.diagnostics)
+        editedSyntaxError |= diagnostic.severity <= 3 && diagnostic.message.contains("syntax error") &&
+                             diagnostic.sourcePath == editedVerification.stagedSourcePath;
+    ok &= check(editedSyntaxError, "current unsaved editor bytes are reparsed for an existing identity");
+    const QString duplicate = QDir(importsDirectory).filePath("duplicate-base.mib");
+    ok &= check(writeFixture(duplicate, firstDependency), "write identical provider duplicate");
+    const auto identicalVerification = verify(editorSource, verificationPaths, 5, false);
+    ok &= check(!hasTag(identicalVerification, "editor-provider-conflict") &&
+                !hasTag(identicalVerification, "module-not-found"), "identical duplicate imports remain usable");
+    ok &= check(writeFixture(duplicate, QByteArray(firstDependency).replace("64991", "64992")), "write conflicting provider");
+    const auto conflictVerification = verify(editorSource, verificationPaths, 5, false);
+    ok &= check(hasTag(conflictVerification, "editor-provider-conflict"),
+                "different-content providers produce an explicit Library conflict instead of an arbitrary choice");
+    QFile::remove(duplicate);
+    QFile pib(QStringLiteral(SNMPB_SOURCE_DIR "/libsmi/pibs/tubs/ACCESSBIND-PIB"));
+    ok &= check(pib.open(QIODevice::ReadOnly), "open representative PIB");
+    const auto pibVerification = verify(pib.readAll(),
+        {standards, QStringLiteral(SNMPB_SOURCE_DIR "/libsmi/mibs/iana"),
+         QStringLiteral(SNMPB_SOURCE_DIR "/libsmi/mibs/tubs"),
+         QStringLiteral(SNMPB_SOURCE_DIR "/libsmi/pibs/ietf"),
+         QStringLiteral(SNMPB_SOURCE_DIR "/libsmi/pibs/tubs")}, 5, false);
+    ok &= check(!hasTag(pibVerification, "module-not-found") && hasTag(pibVerification, "attribute-not-in-group"),
+                "ACCESSBIND retains real compliance findings without profile-induced missing imports");
+    for (const auto &diagnostic : pibVerification.diagnostics)
+        ok &= check(!diagnostic.sourcePath.contains("/aliases/"), "import diagnostics show original Library source paths");
+    ok &= check(savedIndex.open(QIODevice::ReadOnly) && savedIndex.readAll() == persistedIndexBefore,
+                "verification never writes its refreshed snapshot into the persisted Library index");
+    savedIndex.close();
+    QFile atm(standards + "/ATM-MIB");
+    ok &= check(atm.open(QIODevice::ReadOnly), "open representative RowStatus warning");
+    const auto atmVerification = verify(atm.readAll(),
+        {standards, QStringLiteral(SNMPB_SOURCE_DIR "/libsmi/mibs/iana")}, 5, false);
+    bool rowStatusWarning = false;
+    for (const auto &diagnostic : atmVerification.diagnostics)
+        if (diagnostic.tag == "rowstatus-default" && diagnostic.severity == 4) rowStatusWarning = true;
+    ok &= check(rowStatusWarning, "fresh verification preserves the ATM-MIB RowStatus warning severity");
+    std::cout << "Verification import scope/reparse/conflict/PIB workflows passed; PIB-ms="
+              << pibVerification.elapsedMilliseconds << std::endl;
     auto explicitDefect = [&](const QString &filename, const QByteArray &bytes) {
         const QString path = temporary.filePath(filename);
         QFile fixture(path);

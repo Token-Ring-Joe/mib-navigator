@@ -54,6 +54,7 @@ int main(int argc, char **argv)
     panel.beginQuery({}, {});
     check(starts == 0, "clearing presentation does not request navigation");
     panel.beginQuery("Get ifInOctets", "1.3.6.1.2.1.2.2.1.10");
+    check(summary->text().contains("Waiting for the first response"), "busy empty Results does not claim completion");
     auto warned = value("1.3.6.1.2.1.2.2.1.10.2", "4294967295", "4,294,967,295 octets");
     warned.warnings = "Unexpected received type";
     panel.appendValue(warned); panel.finishQuery();
@@ -129,5 +130,12 @@ int main(int argc, char **argv)
           "mixed numeric and textual values have consistent sorting");
     filter->setText("no such value"); settle();
     check(panel.csvRecords().size() == 1 && summary->text().contains("0 of 5"), "empty filter results retain a useful header and count");
+    panel.beginQuery("Get", "1.3.6.1"); panel.appendValue(value("1.3.6.1.1.0", "7")); panel.finishQuery();
+    filter->setText("nothing matches this filter"); settle();
+    check(summary->text().contains("No rows match the filter") && table->isRowHidden(0),
+          "filtered-empty results explain how to restore the retained data");
+    filter->clear(); settle();
+    check(!table->isRowHidden(0) && !summary->text().contains("No rows match"),
+          "clearing the filter restores results and removes empty guidance");
     return failures ? 1 : 0;
 }

@@ -115,5 +115,15 @@ int main(int argc, char **argv)
 
     ok &= check(SnmpSyntaxName(sNMP_SYNTAX_TIMETICKS) == "TimeTicks" && SnmpSyntaxName(sNMP_SYNTAX_OID) == "OBJECT IDENTIFIER" &&
                 SnmpSyntaxName(0x7e).startsWith("unknown type"), "syntax names");
+    for (int syntax : {sNMP_SYNTAX_NULL, sNMP_SYNTAX_NOSUCHOBJECT,
+                       sNMP_SYNTAX_NOSUCHINSTANCE, sNMP_SYNTAX_ENDOFMIBVIEW}) {
+        Vb exception;
+        exception.set_syntax(syntax);
+        ok &= check(RenderMibValue({}, exception) == SnmpSyntaxName(syntax),
+                    "NULL and exception values retain readable names without MIB metadata");
+        MibResolvedObject resolved; resolved.node = &status;
+        ok &= check(RenderMibValue(resolved, exception) == SnmpSyntaxName(syntax),
+                    "NULL and exception values do not acquire enum interpretation");
+    }
     return ok ? 0 : 1;
 }

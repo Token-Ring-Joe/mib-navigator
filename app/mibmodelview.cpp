@@ -6,12 +6,13 @@
 #include <QContextMenuEvent>
 #include <QInputDialog>
 #include <QMenu>
+#include <QTextDocument>
 
 namespace { constexpr int NodeScalar=2,NodeTable=4,NodeRow=8,NodeColumn=16;
 MibEnvironmentNodeKind environmentKind(int kind){switch(kind){case NodeScalar:return MibEnvironmentNodeKind::Scalar;case NodeTable:return MibEnvironmentNodeKind::Table;case NodeRow:return MibEnvironmentNodeKind::Row;case NodeColumn:return MibEnvironmentNodeKind::Column;default:return MibEnvironmentNodeKind::Unknown;}} }
 
-MibModelView::MibModelView(QWidget *parent)
-    : QTreeView(parent), filterModel(new MibTreeFilterModel(this))
+MibModelView::MibModelView(QWidget *parent, Mode mode)
+    : QTreeView(parent), filterModel(new MibTreeFilterModel(this)), interactionMode(mode)
 {
     setHeaderHidden(true);
     setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
@@ -24,7 +25,10 @@ void MibModelView::currentChanged(const QModelIndex &current, const QModelIndex 
 {
     QTreeView::currentChanged(current, previous);
     updateQueryTableAvailability();
-    if (!current.isValid()) { emit NodeProperties({}); return; }
+    if (!current.isValid()) {
+        if (interactionMode == Mode::Query) emit CurrentObjectChanged({});
+        emit NodeProperties({}); return;
+    }
     retainedOid = current.data(MibTreeModel::OidRole).toString();
     emit CurrentObjectChanged(retainedOid);
     emit NodeProperties(detailsFor(current));
@@ -39,23 +43,26 @@ void MibModelView::SetFilterText(const QString &text)
 
 void MibModelView::QueryCurrent(int operation)
 {
+    if (interactionMode == Mode::OidSelection) return;
     const QString oid = currentOid();
     if (!oid.isEmpty()) emit GetFromOid(oid + QStringLiteral(".0"), operation);
 }
 
 void MibModelView::WalkCurrent()
 {
+    if (interactionMode == Mode::OidSelection) return;
     if (!currentOid().isEmpty()) emit WalkFromOid(currentOid());
 }
 
 void MibModelView::SetCurrent()
 {
+    if (interactionMode == Mode::OidSelection) return;
     if (!currentOid().isEmpty()) emit SetFromOid(currentOid());
 }
 
 bool MibModelView::queryTableAvailable() const
 {
-    return queryPrerequisitesAvailable && currentIndex().isValid() &&
+    return interactionMode == Mode::Query && queryPrerequisitesAvailable && currentIndex().isValid() &&
            IsTableQueryCapableNodeKind(environmentKind(currentKind()));
 }
 
@@ -204,13 +211,12 @@ QString MibModelView::detailsFor(const QModelIndex &index) const
         for (const QString &item : index.data(role).toStringList()) escaped.append(item.toHtmlEscaped());
         return escaped.join(QStringLiteral("<br>"));
     };
-    QString text = QStringLiteral("<table>");
+    QString text = QStringLiteral("<h3>%1</h3><p><b>%2</b><br><tt>%3</tt></p><table cellpadding=\"4\" cellspacing=\"0\" width=\"100%\">")
+        .arg(index.data(Qt::DisplayRole).toString().toHtmlEscaped(), tr("OID"), value(MibTreeModel::OidRole));
     const auto row = [&text](const QString &label, const QString &content) {
         if (!content.isEmpty())
             text += QStringLiteral("<tr><td><b>%1:</b></td><td>%2</td></tr>").arg(label, content);
     };
-    row(tr("Name"), index.data(Qt::DisplayRole).toString().toHtmlEscaped());
-    row(tr("OID"), value(MibTreeModel::OidRole));
     row(tr("Module"), value(MibTreeModel::ModuleRole));
     const int kind = index.data(MibTreeModel::NodeKindRole).toInt();
     QString structure;
@@ -226,9 +232,14 @@ QString MibModelView::detailsFor(const QModelIndex &index) const
     row(tr("Access"), value(MibTreeModel::AccessRole));
     row(tr("Status"), value(MibTreeModel::StatusRole));
     row(tr("Units"), value(MibTreeModel::UnitsRole));
-    row(tr("Description"), value(MibTreeModel::DescriptionRole));
-    row(tr("Reference"), value(MibTreeModel::ReferenceRole));
-    return text + QStringLiteral("</table>");
+    text += QStringLiteral("</table>");
+    for (const auto &section : {QPair<int, QString>{MibTreeModel::DescriptionRole, tr("Description")},
+                               {MibTreeModel::ReferenceRole, tr("Reference")}}) {
+        const QString content = index.data(section.first).toString();
+        if (!content.isEmpty()) text += QStringLiteral("<h4>%1</h4>%2")
+            .arg(section.second, Qt::convertFromPlainText(content));
+    }
+    return text;
 }
 
 void MibModelView::contextMenuEvent(QContextMenuEvent *event)
@@ -243,6 +254,14 @@ void MibModelView::contextMenuEvent(QContextMenuEvent *event)
     QAction *expandAction = menu.addAction(tr("Expand Branch"));
     QAction *collapseAction = menu.addAction(tr("Collapse Branch"));
     menu.addSeparator();
+    if (interactionMode == Mode::OidSelection) {
+        QAction *findAction = menu.addAction(tr("Find..."));
+        QAction *chosen = menu.exec(event->globalPos());
+        if (chosen == expandAction) expandRecursively(currentIndex());
+        else if (chosen == collapseAction) collapse(currentIndex());
+        else if (chosen == findAction) FindFromNode();
+        return;
+    }
     QAction *walkAction = menu.addAction(tr("Walk"));
     QAction *stopAction = menu.addAction(tr("Stop"));
     stopAction->setEnabled(walkInProgress);

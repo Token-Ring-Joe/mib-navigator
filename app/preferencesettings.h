@@ -28,7 +28,8 @@ struct PreferencesSettings
     QPoint windowPosition;
 
     static PreferencesSettings load(QSettings &settings);
-    void save(QSettings &settings, bool preserveLegacyMibPreloads = false) const;
+    void save(QSettings &settings, bool preserveLegacyMibPreloads = false,
+              bool preserveLegacyMibPaths = false) const;
     bool networkRestartRequired(const PreferencesSettings &persisted) const;
 };
 

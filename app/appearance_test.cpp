@@ -59,7 +59,7 @@ int main(int argc,char **argv)
         check(app.style()->objectName().compare("fusion",Qt::CaseInsensitive)==0,"Fusion is the application style");
         QMainWindow window;
         window.setStyleSheet("QToolButton { padding: 3px 7px; } QHeaderView::section { padding: 4px; }");
-        auto *view=window.menuBar()->addMenu("View");view->setObjectName("WorkbenchViewMenu");
+        auto *settings=window.menuBar()->addMenu("Settings");settings->setObjectName("settingsMenu");
         auto *central=new QWidget(&window);window.setCentralWidget(central);
         auto *layout=new QVBoxLayout(central);
         auto *badge=new AppearanceColors::SemanticLabel("Environment: Error",AppearanceColors::SemanticLabel::EnvironmentBadge,central);badge->setObjectName("CurrentEnvironmentStatus");badge->setProperty("status","error");layout->addWidget(badge);
@@ -136,6 +136,14 @@ int main(int argc,char **argv)
             check(!action->icon().isNull(),"Editor/menu action receives the line icon set");
         }
         check(lightIcon!=darkIcon,"action icons change colour with the palette");
+        const auto originalFont=app.font();
+        auto largerFont=originalFont;
+        largerFont.setPointSizeF(originalFont.pointSizeF()+2);
+        app.setFont(largerFont);app.processEvents();app.processEvents();
+        check(window.font().pointSizeF()==largerFont.pointSizeF() &&
+              button->font().pointSizeF()==largerFont.pointSizeF(),
+              "existing window and controls follow application font changes");
+        app.setFont(originalFont);app.processEvents();app.processEvents();
         editor->undo();check(editor->toPlainText()!=source,"unsaved Editor change can still be undone");
         editor->redo();check(editor->toPlainText()==source,"Editor redo survives theme switching");
         appearance.setMode(Appearance::Mode::Dark);
@@ -144,7 +152,7 @@ int main(int argc,char **argv)
               "new rich-text output uses the active theme");
         auto *light=window.findChild<QAction *>("Appearancelight");if(light)light->trigger();
         check(light && light->isChecked() && appearance.mode()==Appearance::Mode::Light && QSettings().value("ui/theme")=="light",
-              "View Appearance selection applies and persists the theme");
+              "Settings Appearance selection applies and persists the theme");
         appearance.setMode(Appearance::Mode::System);app.processEvents();
         check(QSettings().value("ui/theme")=="system","Follow System is persisted independently of the effective palette");
         if(app.styleHints()->colorScheme()==Qt::ColorScheme::Unknown) {

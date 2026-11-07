@@ -5,6 +5,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QDir>
+#include <QDialog>
 #include <QFile>
 #include <QElapsedTimer>
 #include <QHeaderView>
@@ -21,6 +22,7 @@
 #include <QTemporaryDir>
 #include <QThread>
 #include <QTreeWidget>
+#include <QTreeWidgetItemIterator>
 #include <QGroupBox>
 #include <QComboBox>
 #include <QAbstractButton>
@@ -132,15 +134,29 @@ int main(int argc, char **argv)
         return result;
     };
     callbacks.libraryDependencySummary = [&dependencySummary]() { return dependencySummary; };
-    callbacks.checkDependencies = [&performDependencyCheck](QString *) {
+    std::function<void(const QString &)> finishDependencyCheck;
+    callbacks.checkDependencies = [&performDependencyCheck, &finishDependencyCheck](
+        std::function<void(const QList<MibModuleRecord> &)> prepare,
+        std::function<void(const QString &)> completed) {
         performDependencyCheck();
-        return true;
+        prepare({});
+        finishDependencyCheck = std::move(completed);
     };
     callbacks.effectivePlan = [](const MibProfileRecord &profile) {
         MibEffectivePlan plan; plan.profileId = profile.id; plan.profileName = profile.name;
         plan.profileType = profile.type; plan.explicitModules = profile.explicitModules;
         plan.effectiveModules = plan.explicitModules; plan.sha256 = "test-plan"; return plan;
     };
+    MibCatalog fixtureCatalog;
+    for (const auto &name : {QStringLiteral("IANA-ONE-MIB"), QStringLiteral("IANA-TWO-MIB")}) {
+        MibCatalogEntry entry; entry.moduleName = name; entry.filename = name;
+        entry.sourceId = "iana"; entry.sourceName = "IANA";
+        entry.url = "https://example.invalid/" + name;
+        fixtureCatalog.upsert(entry);
+    }
+    MibCatalogCacheInfo fixtureInfo; fixtureInfo.sourceId = "iana";
+    ok &= check(MibCatalogCache::save(QDir(MibCollection::legacyManagedRoot()).filePath("cache/catalog-v1.json"),
+                                    fixtureCatalog, fixtureInfo), "scripted IANA catalog is cached without network access");
     MibLibraryWidget widget({}, nullptr, &transport, callbacks);
     {
         // Every input control is placed by a layout (a splitter places its own children). An
@@ -163,7 +179,7 @@ int main(int argc, char **argv)
             QWidget *parent = control->parentWidget();
             // Controls that belong to another control (a combo box's editor, a tab bar's buttons,
             // a header's select-all box in its viewport) are placed by their owner.
-            if (!parent || qobject_cast<QComboBox *>(parent) || qobject_cast<QTabBar *>(parent) ||
+            if (!parent || qobject_cast<QComboBox *>(parent) || qobject_cast<QLineEdit *>(parent) || qobject_cast<QTabBar *>(parent) ||
                 qobject_cast<QHeaderView *>(parent) || qobject_cast<QAbstractScrollArea *>(parent) ||
                 qobject_cast<QAbstractScrollArea *>(parent->parentWidget()) ||   // drawn in a viewport
                 qobject_cast<QSplitter *>(parent) || control->isWindow() ||
@@ -274,8 +290,7 @@ int main(int argc, char **argv)
                 !applicationSourceText.contains("loadPreferredMibsRequested") &&
                 !applicationSourceText.contains("DevicePane"),
                 "download entry point cannot bypass Profile intent and the retired Connection (device) entry points are gone");
-    ok &= check(applicationSourceText.contains("modules->CheckProfileDependencies(QStringLiteral(\"mib-library\")") &&
-                applicationSourceText.contains("modules->DependencyIndex()->moduleNames()"),
+    ok &= check(applicationSourceText.contains("modules->CheckProfileDependencies(QStringLiteral(\"mib-library\")"),
                 "MIB Library owns the library-wide Check Dependencies action");
     ok &= check(applicationSourceText.contains("&MibEditor::FileSaved") &&
                 applicationSourceText.contains("refreshRootHash(saved, hash)") &&
@@ -305,8 +320,7 @@ int main(int argc, char **argv)
                 moduleSourceText.contains("MibRuntimeParser::loadExplicitRoots(") &&
                 !moduleSourceText.contains("MibBoundedDependencyLoader().load(plan, load)") &&
                 moduleSourceText.contains("MibEnvironmentExtractor().extract(isolatedPlan,missing,rootOutcomes,{},") &&
-                moduleSourceText.contains("MibRuntimeStage::prepare(plan)") &&
-                moduleSourceText.contains("RestoreRuntimeAfterEditorValidation"),
+                moduleSourceText.contains("MibRuntimeStage::prepare(plan)"),
                 "one pure Effective Plan resolver owns membership while runtime loads explicit roots alias-first and leaves imports native");
     auto *table = widget.findChild<QTableWidget *>("MibLibraryTable");
     ok &= check(table && table->columnCount() == 6,
@@ -416,7 +430,7 @@ int main(int argc, char **argv)
     auto *updates = widget.findChild<QPushButton *>("MibLibraryCheckForUpdates");
     auto *cancel = widget.findChild<QPushButton *>("MibLibraryCancel");
     ok &= check(header->property("checkState").toInt() == Qt::Unchecked &&
-                count->text() == "0 selected for download" && !download->isEnabled() && !install->isEnabled(),
+                count->text() == "Selected: 0" && !download->isEnabled() && !install->isEnabled(),
                 "empty checkbox selection has unchecked header, zero count, and disabled actions");
     auto *headerCheckbox = header->findChild<QCheckBox *>("MibLibraryHeaderSelectAll");
     ok &= check(headerCheckbox &&
@@ -426,18 +440,18 @@ int main(int argc, char **argv)
                 "Inventory header checkbox is left-aligned with row checkboxes");
     ok &= check(download->text() == "Download to Library" &&
                 install->text() == "Download and Add to Active Profile" &&
-                refresh->text() == "Refresh Catalog" && updates->isHidden(),
+                refresh->text() == "Refresh Catalog" && !updates,
                 "Inventory actions use final grouped labels");
     table->item(0, 0)->setCheckState(Qt::Checked); application.processEvents();
     ok &= check(header->property("checkState").toInt() == Qt::PartiallyChecked &&
-                count->text() == "1 selected for download" && download->isEnabled() && install->isEnabled(),
-                "ordinary active Profile permits exact downloaded-file membership edits");
+                count->text() == "Selected: 1" && !download->isEnabled() && !install->isEnabled(),
+                "Library dependency selection does not select IANA downloads");
     search->setText("IANA"); application.processEvents();
     ok &= check(header->property("checkState").toInt() == Qt::Unchecked,
                 "filter change recalculates header against displayed rows");
     clickHeaderCheckbox(header); application.processEvents();
     ok &= check(header->property("checkState").toInt() == Qt::Checked &&
-                count->text() == "3 selected for download" && table->item(0, 0)->checkState() == Qt::Checked,
+                count->text() == "Selected: 3" && table->item(0, 0)->checkState() == Qt::Checked,
                 "unchecked header selects filtered rows without clearing hidden selection");
     // Rows are sorted by module name and the fixture also imports DECLARED-IMPORT-MIB,
     // so address the visible IANA row by name instead of by position.
@@ -452,19 +466,33 @@ int main(int argc, char **argv)
     ok &= check(header->property("checkState").toInt() == Qt::PartiallyChecked,
                 "individual filtered checkbox updates header to partial");
     clickHeaderCheckbox(header); application.processEvents();
-    ok &= check(header->property("checkState").toInt() == Qt::Checked && count->text() == "3 selected for download",
+    ok &= check(header->property("checkState").toInt() == Qt::Checked && count->text() == "Selected: 3",
                 "partial header click selects all filtered rows");
     clickHeaderCheckbox(header); application.processEvents();
     ok &= check(header->property("checkState").toInt() == Qt::Unchecked &&
-                count->text() == "1 selected for download" && table->item(0, 0)->checkState() == Qt::Checked,
+                count->text() == "Selected: 1" && table->item(0, 0)->checkState() == Qt::Checked,
                 "checked header clears filtered rows while preserving hidden selection");
-    ok &= check(refresh->isEnabled() && updates->isHidden() && !cancel->isVisible(),
+    auto *iana = widget.findChild<QDialog *>("IanaMibDialog");
+    auto *ianaTable = widget.findChild<QTableWidget *>("IanaCatalogTable");
+    auto *getIana = widget.findChild<QPushButton *>("MibLibraryGetIana");
+    ok &= check(iana && ianaTable && getIana && !iana->isVisible() && !transport.requested.isValid(),
+                "IANA has its own initially closed window and never requests network automatically");
+    getIana->click(); application.processEvents();
+    ok &= check(iana->isVisible() && iana->isAncestorOf(refresh) && iana->isAncestorOf(download) &&
+                iana->isAncestorOf(install) && ianaTable->rowCount() == 2,
+                "IANA catalog and download actions are grouped in their own window");
+    ianaTable->selectRow(0); application.processEvents();
+    ok &= check(download->isEnabled() && install->isEnabled() ==
+                    (widget.currentProfile().type == MibProfileType::Custom),
+                "IANA selection enables downloads and respects active-profile editability");
+    ok &= check(refresh->isEnabled() && !updates && !cancel->isVisible(),
                 "catalog actions are selection-independent and Cancel is hidden while idle");
     refresh->click(); application.processEvents();
     ok &= check(cancel->isVisible() && !refresh->isEnabled() && transport.requested.isValid(),
                 "Cancel is visible during scripted catalog refresh");
     transport.finishWithError(); application.processEvents();
     ok &= check(!cancel->isVisible(), "Cancel hides after catalog operation finishes");
+    iana->close();
     bool resolveButtonFound = false;
     for (QPushButton *button : widget.findChildren<QPushButton *>())
         resolveButtonFound |= button->text() == "Resolve Dependencies";
@@ -525,22 +553,59 @@ int main(int argc, char **argv)
                 tabs->tabText(1) == "Profiles", "Library and Profiles are separate tabs");
     auto *profileSelector = widget.findChild<QComboBox *>("MibProfileEditorSelector");
     auto *profileSummary = widget.findChild<QLabel *>("MibProfileDependencySummary");
-    auto *profileLabel = widget.findChild<QLabel *>("MibProfileActiveLabel");
+    auto *profileLabel = widget.findChild<QLabel *>("MibProfileEditorLabel");
     auto *profileGuidance = widget.findChild<QLabel *>("MibProfileGuidance");
     ok &= check(profileSelector && profileSummary && !profileSummary->isHidden() &&
-                profileLabel && profileLabel->text() == "Active MIB Profile:" &&
+                profileLabel && profileLabel->text() == "Edit profile" &&
                 profileGuidance && profileGuidance->text().contains("Custom profile") &&
                 widget.findChild<QPushButton *>("MibLibraryCheckDependencies") &&
                 !widget.findChild<QPushButton *>("MibProfileCheckDependencies") &&
                 !widget.findChild<QPushButton *>("MibProfileDownloadMissing") &&
                 !widget.findChild<QListWidget *>("MibProfileRequiredDependencies")->isHidden(),
                 "Profiles present exact-file snapshots and read-only plan results without dependency-management controls");
+    const QString activeBeforeEditing = widget.currentProfile().id;
+    const int requestsBeforeEditing = runtimeSelectionRequests;
     profileSelector->setCurrentIndex(1); application.processEvents();
+    ok &= check(widget.currentProfile().id == activeBeforeEditing && runtimeSelectionRequests == requestsBeforeEditing,
+                "choosing a profile to edit preserves Query's active profile and runtime");
     ok &= check(dependencyChecks == 0,
                 "switching Profiles does not invoke library dependency validation");
-    performDependencyCheck(); widget.refresh(); application.processEvents();
-    ok &= check(dependencyChecks == 1,
+    auto *checkAction = widget.findChild<QPushButton *>("MibLibraryCheckDependencies");
+    checkAction->click();
+    ok &= check(finishDependencyCheck && !checkAction->isEnabled() &&
+                !widget.findChild<QPushButton *>("MibLibraryImportFiles")->isEnabled() &&
+                widget.findChild<QLineEdit *>("MibLibrarySearch")->isEnabled(),
+                "dependency check leaves browsing enabled and prevents overlapping collection changes");
+    finishDependencyCheck({});
+    ok &= check(checkAction->isEnabled() &&
+                widget.findChild<QLabel *>("MibLibraryStatus")->text().contains("complete"),
+                "asynchronous dependency completion restores controls and status");
+    auto *publicationTable = widget.findChild<QTableWidget *>("MibLibraryTable");
+    auto *publicationAvailable = widget.findChild<QTreeWidget *>("MibProfileAvailableTree");
+    ok &= check(publicationTable && publicationTable->updatesEnabled() &&
+                publicationTable->horizontalHeader()->sectionResizeMode(0) == QHeaderView::ResizeToContents &&
+                publicationTable->horizontalHeader()->sectionResizeMode(1) == QHeaderView::Stretch,
+                "dependency publication restores painting and Library column sizing");
+    ok &= check(publicationAvailable && publicationAvailable->updatesEnabled() &&
+                publicationAvailable->header()->sectionResizeMode(0) == QHeaderView::Stretch &&
+                publicationAvailable->header()->sectionResizeMode(1) == QHeaderView::ResizeToContents,
+                "Profile tree publication restores painting and automatic column sizing");
+    checkAction->click();
+    finishDependencyCheck("Synthetic index write failure");
+    ok &= check(checkAction->isEnabled() &&
+                widget.findChild<QLabel *>("MibLibraryStatus")->text() == "Synthetic index write failure",
+                "asynchronous dependency failure restores controls and preserves the error");
+    ok &= check(dependencyChecks == 2,
                 "library-wide dependency refresh does not become Profile UI state");
+    {
+        auto *temporary = new MibLibraryWidget({}, nullptr, &transport, callbacks);
+        temporary->findChild<QPushButton *>("MibLibraryCheckDependencies")->click();
+        auto lateCompletion = finishDependencyCheck;
+        delete temporary;
+        lateCompletion({});
+        ok &= check(true, "a dependency completion after widget destruction is safely ignored");
+    }
+
 
     QTemporaryDir customTemp;
     writeMib(customTemp.filePath("base.mib"),
@@ -585,6 +650,7 @@ int main(int argc, char **argv)
     synchronizationWidget.refresh();
     auto *syncSelector = synchronizationWidget.findChild<QComboBox *>("MibProfileEditorSelector");
     synchronizationWidget.selectProfile(MibProfileDefinitions::standardsId());
+    syncSelector->setCurrentIndex(syncSelector->findData(MibProfileDefinitions::standardsId()));
     auto *syncTable = synchronizationWidget.findChild<QTableWidget *>("MibLibraryTable");
     auto *syncAvailableFilter = synchronizationWidget.findChild<QLineEdit *>("MibProfileAvailableFilter");
     auto *syncMemberFilter = synchronizationWidget.findChild<QLineEdit *>("MibProfileMemberFilter");
@@ -705,7 +771,8 @@ int main(int argc, char **argv)
                     "the left side shows the Library's folders (even empty ones) and the MIB files in them");
 
         // The built-in profile cannot be edited, and says what to do instead.
-        page.selectProfile(MibProfileDefinitions::standardsId());
+        auto *editSelector = page.findChild<QComboBox *>("MibProfileEditorSelector");
+        editSelector->setCurrentIndex(editSelector->findData(MibProfileDefinitions::standardsId()));
         selectOnly(available, find(available, "folder", lab));
         add->setEnabled(true); add->click();
         // (Here the Standards id is held by a profile from before exact files; either way it is not
@@ -720,7 +787,7 @@ int main(int argc, char **argv)
         QString error;
         const QString id = page.profileService()->create("Folder lab", &error);
         page.refresh();
-        page.selectProfile(id);
+        editSelector->setCurrentIndex(editSelector->findData(id));
         selectOnly(available, find(available, "folder", lab));
         add->click();
         const MibProfileRecord *profile = page.profileService()->find(id);
@@ -771,12 +838,95 @@ int main(int argc, char **argv)
         add->click();
         ok &= check(QDir().rename(lab, library.filePath("Acme/Moved")), "folder moved for the test");
         page.refresh();
-        page.selectProfile(id);
+        editSelector->setCurrentIndex(editSelector->findData(id));
         QTreeWidgetItem *gone = find(members, "followed-folder", lab);
         ok &= check(page.profileService()->find(id)->folders.size() == 1 && gone &&
                     gone->text(2) == "Folder not found" && gone->childCount() == 0,
                     "a followed folder that was moved away stays in the profile, marked Folder not found");
         QDir().rename(library.filePath("Acme/Moved"), lab);
+    }
+    // A large Profile tree keeps its selection/scroll and sizing through a batched rebuild.
+    {
+        auto largeCallbacks = callbacks;
+        largeCallbacks.libraryFiles = [&]() {
+            QList<MibDependencyFileRecord> files;
+            for (int i = 0; i < 360; ++i) {
+                MibDependencyFileRecord file;
+                file.canonicalPath = QDir(fixtureRoot).filePath(QString("Acme/Lab/large-%1.mib").arg(i, 4, 10, QChar('0')));
+                file.filename = QFileInfo(file.canonicalPath).fileName(); file.sha256 = "fixture";
+                file.importsByModule.insert(QString("LARGE-%1-MIB").arg(i), {});
+                files.append(file);
+            }
+            return files;
+        };
+        MibLibraryWidget page({}, nullptr, &transport, largeCallbacks);
+        page.resize(1000, 500); page.showWorkspaceMode(1); page.refresh(); page.show();
+        auto *tree = page.findChild<QTreeWidget *>("MibProfileAvailableTree");
+        tree->expandAll(); tree->doItemsLayout(); QCoreApplication::processEvents();
+        QTreeWidgetItem *selected = nullptr;
+        QTreeWidgetItemIterator iterator(tree);
+        while (*iterator) {
+            if ((*iterator)->data(0, Qt::UserRole).toString().endsWith("large-0200.mib")) selected = *iterator;
+            ++iterator;
+        }
+        ok &= check(selected, "large publication fixture contains the selected file");
+        if (selected) {
+            const QString path = selected->data(0, Qt::UserRole).toString();
+            tree->setCurrentItem(selected); tree->scrollToItem(selected, QAbstractItemView::PositionAtCenter);
+            QCoreApplication::processEvents();
+            const int scroll = tree->verticalScrollBar()->value();
+            ok &= check(scroll > 0, "large Profile publication fixture has a scrolled viewport");
+            page.refresh(); QCoreApplication::processEvents();
+            bool retained = false;
+            QTreeWidgetItemIterator rebuilt(tree);
+            while (*rebuilt) {
+                if ((*rebuilt)->data(0, Qt::UserRole).toString() == path) retained = (*rebuilt)->isSelected();
+                ++rebuilt;
+            }
+            ok &= check(retained && tree->verticalScrollBar()->value() == scroll,
+                        "batched Profile publication restores stable file selection and scroll position");
+            ok &= check(tree->updatesEnabled() && tree->header()->sectionResizeMode(1) == QHeaderView::ResizeToContents,
+                        "large Profile publication restores painting and automatic column sizing");
+        }
+    }
+    // A download retains its requested destination even after the user changes
+    // Query's active profile and closes the IANA window. Only scripted transport.
+    {
+        const QString savedRoot = QSettings().value("mib-library/root").toString();
+        const QString savedActive = QSettings().value("mib-library/current-profile").toString();
+        QSettings().setValue("mib-library/root", temp.filePath("DownloadLibrary"));
+        QDir().mkpath(temp.filePath("DownloadLibrary"));
+        IdleTransport downloadTransport;
+        QString deliveredDestination; int delivered = 0;
+        MibLibraryWidget::Callbacks downloadCallbacks;
+        downloadCallbacks.validate = [](const QString &, QString *) { return true; };
+        downloadCallbacks.downloadsCompleted = [&](const QStringList &, bool add, int count, const QString &destination) {
+            if (add && count == 1) { deliveredDestination = destination; ++delivered; }
+            return QStringLiteral("Scripted download complete");
+        };
+        MibLibraryWidget downloads({}, nullptr, &downloadTransport, downloadCallbacks);
+        downloads.refresh();
+        QString error;
+        const QString destination = downloads.profileService()->create("Download destination", &error);
+        const QString other = downloads.profileService()->create("Keep Query here", &error);
+        downloads.reloadProfiles(); downloads.selectProfile(destination);
+        downloads.findChild<QPushButton *>("MibLibraryGetIana")->click();
+        auto *catalog = downloads.findChild<QTableWidget *>("IanaCatalogTable");
+        auto *dialog = downloads.findChild<QDialog *>("IanaMibDialog");
+        catalog->selectRow(0);
+        downloads.findChild<QPushButton *>("MibLibraryInstallWithDependencies")->click();
+        ok &= check(downloadTransport.requested.isValid(), "IANA Add starts one scripted download");
+        downloads.selectProfile(other); dialog->close();
+        MibDownloadResult result; result.initialUrl = downloadTransport.requested;
+        result.finalUrl = result.initialUrl; result.httpStatus = 200;
+        result.content = catalog->item(0, 0)->text().toUtf8() + " DEFINITIONS ::= BEGIN\nEND\n";
+        emit downloadTransport.finished(result);
+        ok &= check(delivered == 1 && deliveredDestination == destination &&
+                    downloads.currentProfile().id == other && !dialog->isVisible() &&
+                    downloads.findChild<QLabel *>("IanaStatus")->text() == "Scripted download complete",
+                    "IANA completion retains its destination, Query profile and closed-window state");
+        QSettings().setValue("mib-library/root", savedRoot);
+        QSettings().setValue("mib-library/current-profile", savedActive);
     }
     return ok ? 0 : 1;
 }

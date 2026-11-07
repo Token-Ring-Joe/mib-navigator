@@ -14,6 +14,7 @@
 class MibDownloadTransport;
 class QCheckBox;
 class QComboBox;
+class QDialog;
 class QLabel;
 class QLineEdit;
 class QListWidget;
@@ -43,13 +44,16 @@ public:
     };
     struct Callbacks {
         std::function<bool(const QString &, QString *)> validate;
-        std::function<QString(const QStringList &, bool, int)> downloadsCompleted;
+        std::function<QString(const QStringList &, bool, int, const QString &)> downloadsCompleted;
         std::function<MibModuleRecord(const QString &, const QString &)> metadata;
         std::function<QList<MibModuleRecord>()> localInventory;
         std::function<DependencySummary()> libraryDependencySummary;
         std::function<void()> collectionChanged;
         std::function<bool(MibProfileService &, QString *)> retryLegacyProfiles;
-        std::function<bool(QString *)> checkDependencies;
+        // Preparation runs on the serialized worker with copied, verified records;
+        // completion runs on the UI thread after the index snapshot is published.
+        std::function<void(std::function<void(const QList<MibModuleRecord> &)>,
+                           std::function<void(const QString &)>)> checkDependencies;
         std::function<MibEffectivePlan(const MibProfileRecord &)> effectivePlan;
         // The Automatic profiles derived from the Library's Vendor/Product folders right now.
         std::function<QList<MibProfileRecord>()> automaticProfiles;
@@ -73,10 +77,12 @@ public:
     void publishPreparedProfile(const QString &id, const MibEffectivePlan &plan);
     void beginInitialRefresh(quint64 generation);
     bool initialRefreshReady() const { return initialReady; }
+    bool operationRunning() const { return dependencyCheckRunning || catalogRefreshInProgress || !downloadQueue.isEmpty(); }
     void showWorkspaceMode(int mode);   // 0 Library, 1 Profiles, 2 Editor
     void setEditorPage(QWidget *page);
 signals:
     void workspaceModeChanged(int mode);
+    void activityChanged();
     void openModuleRequested(const QString &path);
     void profilesChanged();
     void profileSelectionChanged(const QString &id, const MibEffectivePlan &plan);
@@ -106,11 +112,18 @@ private:
     void loadCachedCatalog();
     QString catalogCachePath() const;
     QStringList selectedModules() const;
+    QStringList selectedIanaModules() const;
+    void refreshIanaCatalog();
+    void filterIanaCatalog();
+    void updateIanaActions();
+    void setStatusText(const QString &text);
+    void setIanaStatusText(const QString &text);
     void setFilteredSelection(bool selected);
     void updateSelectionUi();
     void setOperationActive(bool active);
     QString originText(const MibLibraryRecord &record) const;
     void refreshProfiles(const QString &selectId = {});
+    void refreshActiveProfile();
     void refreshProfileLists(const MibEffectivePlan *providedPlan = nullptr);
     QList<MibDependencyFileRecord> libraryFileRecords() const;
     QString profileSummaryText(const MibProfileRecord &profile) const;
@@ -118,7 +131,7 @@ private:
     void fillAvailableTree(const MibProfileRecord &profile, const QList<MibDependencyFileRecord> &files);
     void fillMemberTree(const MibProfileRecord &profile, const QList<MibDependencyFileRecord> &files,
                         const MibEffectivePlan &effective);
-    void refreshImpl(bool prepareProfile);
+    void refreshImpl(bool prepareProfile, const QList<MibLibraryRecord> *preparedInventory = nullptr);
     void publishInitialChunk(quint64 generation);
     void publishRecord(int row, const MibLibraryRecord &record,
                        const QSet<QString> &selectedBefore = {});
@@ -133,7 +146,9 @@ private:
     QStringList downloadQueue;
     QStringList requestedTargets;
     bool loadAfterDownload = false;
+    QString downloadProfileId;
     bool catalogRefreshInProgress = false;
+    bool dependencyCheckRunning = false;
     int completedDownloads = 0;
     QString sourceStatusText;
     MibDownloadSessionState sessionState;
@@ -151,6 +166,11 @@ private:
     QMap<QString, QWidget *> infoLabels;
     QTextEdit *contactInfo;
     QLabel *selectedCount;
+    QDialog *ianaDialog = nullptr;
+    QTableWidget *ianaTable = nullptr;
+    QLineEdit *ianaSearch = nullptr;
+    QLabel *ianaStatus = nullptr;
+    QLabel *ianaSelectedCount = nullptr;
     QPushButton *openEditorButton;
     QComboBox *profileCombo;
     QLineEdit *availableSearch;

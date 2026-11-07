@@ -1,108 +1,98 @@
 # MIB Navigator 1.0.0-rc1 validation
 
+Current redesign guidance: 2026-11-07. The authoritative development direction
+is `docs/redesign-plan.md`; current Linux evidence and exact validation artifacts
+are recorded in `docs/finish-review-validation.md` in the working tree.
+A historical passing build or an old temporary install is not evidence that a
+current package exists or has passed platform acceptance.
+
 ## Build prerequisites
 
-- CMake 3.22 or newer and a C++17 compiler.
-- Qt 6.10 or newer with Core, Gui/Widgets, Svg, and LinguistTools development
-  files. The validated Windows RC uses Qt 6.11.1.
+- CMake 3.22+, a C++17 compiler and Qt 6.10+ with Core, Widgets, Network and Svg.
+- Linux: the configured GCC/Clang and Qt development environment; Ninja is used
+  for local development. Build on the VM's local disk, never on the NAS archive.
 - Windows: MSVC x64 matching the installed Qt kit.
-- Linux: GCC/Clang plus Qt development packages and normal socket/thread system libraries.
-- macOS: AppleClang, Qt development files, and standard bundle deployment tools.
+- macOS: AppleClang, Qt and the normal bundle deployment tools.
+- Python is required for the deterministic loopback SNMP acceptance scenarios.
 
-No external Qwt package is used; the official Qwt 6.3.0 source is vendored and
-built as a presentation-only static target.
+Use the actual CMake cache/toolchain rather than an old compiler minor version.
+The patched libsmi, SNMP++ and crypto libraries remain independent targets.
+Qwt/Graphs and Discovery have been removed.
 
 ## Configure, build, test, install, and package
 
 ```text
 cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
 cmake --build build-release --config Release
-ctest --test-dir build-release -C Release -E snmpb.launch-smoke --output-on-failure
+ctest --test-dir build-release -C Release --output-on-failure
 cmake --install build-release --config Release --prefix <absolute-staging-path>
-cpack --config build-release/CPackConfig.cmake -C Release
 cmake -DSNMPB_PACKAGE_ROOT=<absolute-staging-path> -P cmake/VerifyReleaseTree.cmake
+cpack --config build-release/CPackConfig.cmake -C Release
 cmake -DSNMPB_PACKAGE_DIR=<archive-directory> -DSNMPB_EXTRACT_DIR=<temporary-extract-directory> -P cmake/VerifyReleaseArchive.cmake
 ```
 
-On Windows, run these commands from the appropriate Qt/MSVC developer
-environment. CPack produces `MIB-Navigator-1.0.0-rc1-windows-x64.zip`. It uses the
-same explicit install rules as the verified staging tree and Qt's supported
-deployment helper; no Qt installation path is hard-coded.
+The complete deterministic run includes the five historical libsmi diagnostics,
+headless startup/restart, tolerance scenarios and scripted loopback SNMP. The
+GitHub Actions matrix currently excludes `snmpb.launch-smoke`; local Linux
+validation explicitly runs it. Test processes use isolated settings/collections.
+Do not launch the desktop GUI or contact real devices as an implicit build check.
 
-Linux CPack produces
-`MIB-Navigator-1.0.0-rc1-linux-<architecture>.tar.gz`. macOS CPack produces
-`MIB-Navigator-1.0.0-rc1-macos-<architecture>.tar.gz`. The CI matrix creates,
-extracts, verifies, and uploads these archives for manual inspection; native
-package validation is established only by a successful CI run containing
-those steps.
+Verify the actual installed executable and all packaged MIB/PIB bytes against the
+source/build. On Linux, run `ldd <installed-executable>` and require no missing
+libraries. Installed offscreen startup/restart can exercise deployment paths
+without launching a desktop window. Create one stable install for owner review;
+prefer a local persistent location when it must survive a VM reboot. Do not reuse
+a stale artifact or modify generated repository `manual-validation/` output
+without authorization.
 
-On macOS, the application target installs as `snmpb.app`; its executable,
-resources, deployed Qt frameworks, and platform plugins reside under
-`Contents/MacOS`, `Contents/Resources`, `Contents/Frameworks`, and
-`Contents/PlugIns`. MIB/PIB data is in `Contents/Resources`, and Qwt is
-statically linked. Qt's supported deployment script assembles the bundle.
-Mutable configuration remains in the user's configuration location, outside
-the bundle. This RC is unsigned and unnotarized, and GUI launch has not been
-validated by automated CI. On Linux, data installs beneath
-`${CMAKE_INSTALL_DATADIR}/snmpb`, located at runtime through the compiled
-relative install layout.
+CPack produces platform archives from the explicit install rules. The CI matrix
+builds, tests, stages, verifies, packages, extracts and verifies those archives.
+Successful native archive validation requires the corresponding CI run; a local
+Linux build does not establish Windows/macOS results. Do not push solely to
+trigger CI without the owner's instruction.
 
-## Runtime files and first run
+On Windows, launch `bin/mib-navigator.exe` with its deployed Qt runtime/plugins.
+On Linux, launch `bin/mib-navigator`; data is under `share/snmpb` and resolved
+through the compiled relative install layout. On macOS, launch `MIB Navigator.app`;
+the executable is `Contents/MacOS/MIB Navigator`, with resources/frameworks/plugins
+in the bundle's standard locations. Qt's deployment support assembles the native
+runtime. Packages are unsigned and macOS notarization is not provided.
 
-Preferences use user-scope INI `QSettings` with the established organization
-domain `snmpb.sourceforge.net` and application name `SnmpB`. Keeping that
-identity preserves existing settings. The directory containing that INI owns
-all sibling runtime files:
+## Runtime ownership and compatibility
 
-- `agents.conf`, `device-tree.conf`, `profile-metadata.conf`, `graphs.conf`
-- `credential-identities.conf`, `community-credentials.conf`,
-  `credential-bindings.conf`, and `usm_users.conf`
-- `smi.conf`, `boot_counter.conf`, and `log.conf`
+Preferences retain the historical user-scope INI identity
+`snmpb.sourceforge.net/SnmpB`. Credentials and diagnostic/parser/boot-counter
+files retain their existing locations. Private profile definitions/indexes/caches
+use application data storage. The user-visible configurable collection defaults
+to `Documents/MIB Navigator/MIBs`; bundled MIB/PIB resources seed that collection.
+The active Profile plan authorizes providers; old mibpaths/preload arrays do not
+silently override it. See the development-tree `docs/settings-schema.md`.
 
-Missing files are a normal first-run state. Repositories return empty/default
-records and create files only through their established write paths. The
-installation directory is not used for mutable configuration.
+Target history, reusable credentials and MIB Profiles are independent. There is
+no saved-device migration. Existing `agents.conf` and other retired files remain
+untouched. The package must contain no user profiles, credentials, settings,
+logs, boot counters or generated parser state. `VerifyReleaseTree.cmake` checks
+private filenames and development/debug artifacts as well as required resources.
+Preserve source MIB bytes and investigate golden changes rather than rewriting
+the historical expected diagnostics.
 
-Bundled MIB and PIB defaults are installation-relative. Lookup remains
-nonrecursive and ordered as before: platform data roots first where applicable,
-then executable-relative `mibs` and `pibs`. User-configured paths and preload
-semantics are unchanged. No source-tree `SMIPATH` is required at runtime.
+## Remaining acceptance and known limits
 
-## Compatibility and privacy
+Desktop UX review is the final local step: inspect the tested build's controls,
+keyboard behavior and resized dialogs; do not ask the owner to debug internals.
+Use `manual-real-device-acceptance.md` only for separately authorized lab tests.
+The optional implementation-check feature remains deferred, as do Query Macros
+implementation and Watch-all/table expansion. Current SNMPv3 connection-bar
+requests use the default empty context; its planned preference remains absent.
 
-Legacy `agents.conf` records without stable IDs, selected profile names,
-device-tree v1, profile metadata v1, name-based graph references, absent
-reusable-credential stores, existing `usm_users.conf`, and historical
-Preferences remain covered by deterministic repository tests. Reads do not
-perform an unconditional destructive migration.
+Existing full-application/libsmi leaks require disabling leak detection for broad
+ASAN invalid-access workflows. Strict isolated widget checks should retain leak
+detection; do not describe a broad run as leak-free. Existing compiler warnings
+must remain visible. Parser shutdown may wait for a running uninterruptible parse.
+Credential storage limitations remain documented in `security.md`. Translation
+and native platform/desktop integration need their established release review.
 
-Each package is assembled exclusively from install rules. It must not contain
-profiles, credentials, device trees, graphs, logs, preferences, boot counters,
-or loaded-MIB state. `cmake/VerifyReleaseTree.cmake` enforces these exclusions
-and rejects common build/debug artifacts.
-
-## Known limitations and release policy
-
-- Community credentials are plaintext-equivalent; USM password bytes are
-  encoded, not cryptographically encrypted. See `security.md`.
-- Native Linux and macOS archive validation requires the updated CI packaging
-  steps to pass; successful build/test/install evidence alone is not an archive
-  validation claim.
-- Qt distribution licensing and corresponding notices/source obligations need
-  release-owner review before public distribution.
-- Ukrainian is the only application translation currently bundled.
-- Startup MIB scanning intentionally accepts `.txt` and unusual/extensionless
-  vendor files for compatibility; full paths identify failed candidates.
-- Remaining BasicMibView compatibility dialogs and the ordinary Query callback
-  architecture are maintenance concerns, not demonstrated correctness defects.
-
-Use `manual-real-device-acceptance.md` for authorized network acceptance. The
-automated suite deliberately does not contact SNMP devices.
-
-The numeric CMake project version remains `1.0.0`; the canonical release label
-is `1.0.0-rc1` and feeds the About display and CPack filenames. The established
-QSettings organization/application identity remains unchanged.
-
-Public release under the "MIB Navigator" name requires release-owner
-name/trademark clearance. Promote to
-`1.0.0` only after native package and manual device acceptance gates pass.
+The numeric CMake project version remains `1.0.0`; the release label is
+`1.0.0-rc1`. Do not promote, commit, push, tag or publish without the owner's
+instruction. Qt licensing/notices and release-owner name/trademark clearance
+remain distribution responsibilities.

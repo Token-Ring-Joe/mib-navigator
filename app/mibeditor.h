@@ -34,6 +34,7 @@
 
 class QSortFilterProxyModel;
 class QComboBox;
+struct MibEngineValidationResult;
 
 class MibEditor: public QObject
 {
@@ -42,9 +43,11 @@ class MibEditor: public QObject
 signals:
     // Emitted after the editor writes a MIB file to disk.
     void FileSaved(const QString &path);
+    void VerificationFinished(bool currentDocument);
 
 public:
     MibEditor(Snmpb *snmpb);
+    bool VerificationRunning() const { return verificationRunning; }
     void ErrorHandler(char *path, int line, int severity, 
                       char *msg, char *tag);
     const QList<MibDiagnosticRecord> &Diagnostics() const { return diagnostics; }
@@ -73,6 +76,7 @@ public slots:
     void SetCurrentFileName(const QString &FileName);
 
 private:
+    void CompleteVerification(const MibEngineValidationResult &result, int pathCount);
     void Find(bool reevaluate);
     bool Replace(bool doreplace);
 
@@ -87,6 +91,10 @@ private:
     QLabel *lfn;
     
     QString LoadedFile;
+    bool verificationRunning = false;
+    quint64 documentGeneration = 0;
+    quint64 verifiedGeneration = 0;
+    QString verifiedFile;
 
     int num_error;
     int num_warning;

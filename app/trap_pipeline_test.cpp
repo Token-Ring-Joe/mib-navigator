@@ -58,11 +58,11 @@ int main(int argc, char **argv)
           "endpoint is captured");
     check(record.notificationOid == "1.3.6.1.6.3.1.1.5.1",
           "numeric notification OID retained");
-    check(record.varbinds.size() == 1 && record.varbinds.first().printableValue == "one",
+    check(record.varbinds.size() == 1 && QString::fromLatin1(record.varbinds.first().value.get_printable_value()) == "one",
           "varbind order and value retained");
     TrapRecord copy = record;
-    copy.varbinds[0].printableValue = "copy";
-    check(record.varbinds[0].printableValue == "one", "records have value semantics");
+    copy.varbinds[0].value.set_value("copy");
+    check(QString::fromLatin1(record.varbinds[0].value.get_printable_value()) == "one", "records have value semantics");
 
     {
         TrapRecord r; r.sourceAddress = "192.0.2.10"; r.snmpVersion = TrapSnmpVersion::V2c;
@@ -147,7 +147,7 @@ int main(int argc, char **argv)
     service.stop();
 
     TrapPresentation view = TrapPresenter().present(record);
-    check(view.summaryColumns.size() == 9 && view.varbindLines.size() == 1,
+    check(view.summaryColumns.size() == 9 && view.bindings.size() == 1,
           "full pipeline produces presentation data");
     check(TrapPresenter::symbolicOid("9.9.9.9") == "9.9.9.9",
           "missing MIB uses numeric fallback");
@@ -159,17 +159,36 @@ int main(int argc, char **argv)
     check(TrapPresenter::symbolicOid("1.3.6.1.6.3.1.1.5.1") == "coldStart",
           "loaded MIB enriches numeric notification OID");
 
-    auto formatted = [](const char *oid, int syntax, const QString &value) {
-        TrapVarbind vb;
-        vb.oid = QString::fromLatin1(oid);
-        vb.syntax = syntax;
-        vb.printableValue = value;
-        return TrapPresenter::formattedValue(vb);
+    // Build actual typed values: production never parses formatted text.
+    auto binding = [](const char *oid, int syntax, const QString &text) {
+        TrapVarbind result;
+        result.value.set_oid(Oid(oid));
+        switch (syntax) {
+        case sNMP_SYNTAX_INT32: result.value.set_value(SnmpInt32(text.toLong())); break;
+        case sNMP_SYNTAX_CNTR32: result.value.set_value(Counter32(text.toULong())); break;
+        case sNMP_SYNTAX_GAUGE32: result.value.set_value(Gauge32(text.toULong())); break;
+        case sNMP_SYNTAX_CNTR64: result.value.set_value(Counter64(text.toULongLong())); break;
+        case sNMP_SYNTAX_TIMETICKS: result.value.set_value(TimeTicks(1234)); break;
+        case sNMP_SYNTAX_IPADDR: result.value.set_value(IpAddress(text.toLatin1().constData())); break;
+        case sNMP_SYNTAX_OID: result.value.set_value(Oid(text.toLatin1().constData())); break;
+        case sNMP_SYNTAX_OCTETS:
+        case sNMP_SYNTAX_OPAQUE: {
+            const QByteArray bytes = text.startsWith("hex:") ? QByteArray::fromHex(text.mid(4).toLatin1()) : text.toLatin1();
+            result.value.set_value(OctetStr(reinterpret_cast<const unsigned char *>(bytes.constData()), bytes.size()));
+            if (syntax == sNMP_SYNTAX_OPAQUE) result.value.set_value(OpaqueStr(bytes.constData()));
+            break;
+        }
+        default: result.value.set_exception_status(syntax); break;
+        }
+        return result;
+    };
+    auto formatted = [&binding](const char *oid, int syntax, const QString &text) {
+        return TrapPresenter::formattedValue(binding(oid, syntax, text));
     };
     check(formatted("1.3.6.1.2.1.2.2.1.8.1", sNMP_SYNTAX_INT32, "1") == "up(1)",
           "enumerated INTEGER uses MIB label and value");
     const QString physical = formatted("1.3.6.1.2.1.2.2.1.6.1", sNMP_SYNTAX_OCTETS,
-                    "  00 11 22 33 44 55                      ..\"3DU\n");
+                    "hex:001122334455");
     check(physical == "00:11:22:33:44:55",
           "display hint formats a binary physical address");
     check(formatted("1.3.6.1.2.1.1.2.0", sNMP_SYNTAX_OID,
@@ -189,7 +208,7 @@ int main(int argc, char **argv)
     const QString display = formatted("1.3.6.1.2.1.1.1.0", sNMP_SYNTAX_OCTETS, "router");
     check(display == "router", "printable DisplayString uses legacy rendering");
     check(formatted("9.9.9.9", sNMP_SYNTAX_OCTETS,
-                    "  00 FF                                         ..\n").contains("00 FF"),
+                    "hex:00FF").contains("00 FF"),
           "untyped binary OCTET STRING retains SNMP++ hex fallback");
     check(formatted("1.3.6.1.2.1.1.1.0", sNMP_SYNTAX_NOSUCHOBJECT,
                     "noSuchObject") == "noSuchObject" &&
@@ -201,15 +220,17 @@ int main(int argc, char **argv)
           "INTEGER without MIB enumeration falls back to SNMP++ text");
     check(formatted("9.9.9.9", sNMP_SYNTAX_IPADDR, "192.0.2.9") == "192.0.2.9",
           "IpAddress fallback retained");
-    check(formatted("9.9.9.9", sNMP_SYNTAX_OPAQUE, "opaque-value") == "opaque-value",
+    check(formatted("9.9.9.9", sNMP_SYNTAX_OPAQUE, "opaque-value").contains("opaque-value"),
           "Opaque fallback retained");
     check(formatted("9.9.9.9", sNMP_SYNTAX_NULL, "NULL") == "NULL",
           "NULL fallback retained");
     check(smiLoadModule("ACCOUNTING-CONTROL-MIB") != nullptr,
           "bundled BITS fixture MIB loads");
     publishEnvironment();
-    const QString bits = formatted("acctngSelectionType", sNMP_SYNTAX_OCTETS,
-                                   "  C0                                           .\n");
+    const auto nodes = MibEnvironmentRegistry::active()->nodesByName("acctngSelectionType");
+    check(nodes.size() == 1, "BITS object is present in environment");
+    const QString bits = formatted(nodes.first()->oid.toLatin1().constData(), sNMP_SYNTAX_OCTETS,
+                                   "hex:C0");
     check(bits.contains("svcIncoming") && bits.contains("svcOutgoing"),
           "BITS uses MIB bit labels");
     check(TrapPresenter::symbolicOid("1.3.6.1.2.1.2.2.1.8.27") ==
@@ -218,18 +239,29 @@ int main(int argc, char **argv)
     TrapRecord presentationRecord = record;
     presentationRecord.recordId = 12;
     presentationRecord.varbinds = {
-        {"1.3.6.1.2.1.2.2.1.8.1", sNMP_SYNTAX_INT32, "1", true},
-        {"1.3.6.1.2.1.1.3.0", sNMP_SYNTAX_TIMETICKS, "0:00:12.34", true}
+        binding("1.3.6.1.2.1.2.2.1.8.1", sNMP_SYNTAX_INT32, "1"),
+        binding("1.3.6.1.2.1.1.3.0", sNMP_SYNTAX_TIMETICKS, "0:00:12.34")
     };
     const TrapPresentation parity = TrapPresenter().present(presentationRecord);
-    check(parity.varbindLines == QStringList{
-              "#0 ifOperStatus.1: up(1)", "#1 sysUpTime.0: 0:00:12.34"},
+    check(parity.bindings.size() == 2 && parity.bindings[0].object == "ifOperStatus.1" &&
+              parity.bindings[0].interpretedValue == "up(1)" && parity.bindings[1].object == "sysUpTime.0" &&
+              parity.bindings[1].interpretedValue == "0:00:12.34",
           "multiple varbinds preserve formatting and order");
     check(parity.summaryColumns.size() == 9 && parity.summaryColumns.at(0) == "0012" &&
           parity.summaryColumns.at(4) == "coldStart" &&
           parity.summaryColumns.at(5) == "Trap(v2)" &&
           parity.summaryColumns.at(6) == "SNMPv2c",
           "notification summary formatting retained");
+    TrapRecord malformedBinding = record;
+    malformedBinding.varbinds = {TrapVarbind{Vb(), false}};
+    const auto invalid = TrapPresenter().present(malformedBinding);
+    check(invalid.bindings.size() == 1 && invalid.bindings.first().warnings.join(' ').contains("could not be decoded"),
+          "a malformed binding has an explicit warning instead of invented value data");
+    unsigned char unknownBits[] = {0x80, 0x01};
+    TrapVarbind bitBinding;
+    bitBinding.value.set_oid(Oid(nodes.first()->oid.toLatin1().constData()));
+    bitBinding.value.set_value(OctetStr(unknownBits, sizeof unknownBits));
+    check(TrapPresenter::formattedValue(bitBinding).contains("bit15"), "unknown BITS remain visible alongside named bits");
     smiExit();
     return failures == 0 ? 0 : 1;
 }

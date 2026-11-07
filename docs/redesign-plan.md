@@ -5,6 +5,25 @@ product direction and build order. Where older design documents in `docs/`
 disagree with it, this document wins. Standing engineering rules remain in
 `AGENTS.md`.
 
+## Current checkpoint — 2026-11-07
+
+Phase 4 is active. The main visual refresh, Menus/Settings/Help, Library/Profiles
+cleanup and dialog consistency are implemented. The 2026-11-07 finishing pass
+addresses empty/busy guidance, keyboard/focus access and safe remembered layouts.
+Its complete headless Linux validation passes; the exact results and fresh
+validated artifact are recorded in
+[finish-review-validation.md](finish-review-validation.md). Earlier validation
+reports are historical checkpoints, and their temporary install paths may have
+been lost at reboot.
+
+[Query Macros v1](query-macros-v1-design.md) now has a concrete scope, architecture,
+four-milestone sequence and effort estimate agreed by the owner on 2026-11-07.
+Implementation remains deferred. Watch-all/table expansion remains a separate deferred discussion.
+The owner approved the accumulated work and authorized its commit on 2026-11-07.
+Cross-platform release validation and any remaining native/lab acceptance are
+still outstanding; approval does not claim those tests were performed. See the
+[current outstanding-task inventory](outstanding-tasks.md).
+
 ## Product intent
 
 MIB Navigator is a lab and MIB-engineering tool for network engineers, not a
@@ -58,8 +77,9 @@ Obsolete design documents (historical record only): `device-manager.md`,
 - **Detect** button next to the MIB Profile dropdown (see Phase 3).
 - Port, timeout, retries, GETBULK max-repetitions, and transport are **global
   settings** reached from the menu bar. They are not shown in the main window.
-  SNMPv3 context name is also global for now. Per-query context may be added
-  later if VRF contexts are needed.
+  Planned: expose SNMPv3 context name as a global setting. The current
+  connection bar creates requests with the default empty context; its preference
+  control is not implemented yet. Per-query context may be considered later.
 
 ### Traps
 
@@ -95,10 +115,10 @@ vendor names or enterprise numbers. Mapping comes from the MIB collection.
 ### Target layout
 
 ```text
-File  Edit  View  MIB  SNMP  Tools  Help
+File  Edit  View  MIB  SNMP  Settings  Help
 Target [...]  Credential [...]  MIB Profile [...] [Detect]   (activity) [Show panel]
 [Query] [MIBs] [Traps]
-Query: query toolbar, MIB tree | [Results] [Watch] [Search when open] | Inspector
+Query: OID navigation and collection search; MIB tree | [Results] [Watch] [Search when open] | Inspector
 MIBs:  [Library] [Profiles] [Editor]
 Traps: trap list and selected trap details
 [Output] [Log]                                (shared panel; collapsed initially)
@@ -126,6 +146,63 @@ counts stay visible in the header while collapsed. Background updates never open
 the panel or change workspace. Explicit View commands and the environment badge
 open the requested panel page; Problems navigation also selects MIBs. Log is in
 this panel for now; a future move to a top-level workspace remains open. SNMP has no connection session.
+
+Owner visual refinement (2026-11-04): the shared connection bar and permanent
+Query / MIBs / Traps navigation keep the same height in every workspace. OID
+navigation and collection search sit inside Query, below that navigation. The
+Get / Get Next / Get Bulk / Walk / Table / Set / Stop toolbar buttons are retired;
+menu/context actions and Escape remain. This supersedes the historical toolbar
+placement described in 18a. The shared panel button is named Operations.
+
+Profiles has an **Edit profile** selector: inspecting or editing another profile
+does not activate it in Query. Only the connection bar selects the active MIB
+Profile. Library's Active Profile column continues to describe that active
+selection. IANA catalog browsing/downloads live in a separate **Get MIBs from
+IANA…** window. It opens cached data without automatic network requests and
+captures a download's destination profile. Closing that window or changing
+Query's profile cannot retarget a download. The old hidden Check for Updates
+placeholder is retired; the IANA catalog does not provide reliable comparable
+revision data. Credentials retain their unified list and independent display
+name/USM identity, with name and version displayed in separate aligned columns.
+
+The implementation and automated validation are recorded in
+[visual-refresh-validation.md](visual-refresh-validation.md): 65/65 deterministic
+tests, five libsmi goldens, eight ASAN checks, five strict widget leak checks,
+and installed Release startup/restart at 150% scaling passed. Desktop UX review
+remains with the owner.
+
+Owner accepted the main visual refresh and approved a dialog-consistency /
+smaller-window follow-up on 2026-11-04. Editor Find, Replace and Go to Line use
+standard button rows; Preferences and Credentials scroll their form content with
+confirmation buttons kept visible. Instance pickers have explicit Cancel and
+selection states; dismissing manual instance entry must never issue a .0 query.
+The existing connection model, profile ownership and credential persistence are
+unchanged. Workspaces are checked at 1024 x 720 and dialogs at 640 x 480. See
+[dialog-polish-validation.md](dialog-polish-validation.md) for validation status
+and the new stable manual-validation artifact. Final validation passed 65/65
+complete deterministic tests (all 27 tolerance scenarios and five libsmi goldens),
+8/8 ASAN workflows, 5/5 strict widget leak checks and installed startup/restart at
+normal and 150% scaling. Full-workflow review also fixed long Environment warning
+text forcing the window wider; the complete badge now wraps inside the header.
+The 2026-11-07 finishing follow-up adds empty/busy guidance, actual work-area
+focus routing, discoverable keyboard navigation and safe remembered-layout checks.
+It preserves normal Tab order and fixes restored windows whose lower controls were
+off-screen. See [finishing validation](finish-review-validation.md). No general
+compact-density preference is introduced.
+
+## Deferred feature priority
+
+Query Macros is a high-priority deferred feature (owner decision, 2026-11-04),
+near the top of `todo.txt`. Named persistent collections describe what to read;
+the connection bar supplies Target, Credential and MIB Profile when run.
+Bulk-style grouped results, scalar .0 resolution and table instance choices
+(all, choose at run time, fixed) are the intended direction. Unrelated indexes
+remain separate and unknown numeric OIDs need explicit instances. Query Macros
+is read-focused; it replaces the current temporary multiple-varbind workflow.
+Do not implement it until the other reported menu/Help/Preferences issues are
+fixed and its final design/estimate is agreed. The agreed design and estimate
+are in [query-macros-v1-design.md](query-macros-v1-design.md); the owner agreed them
+on 2026-11-07 and implementation remains deferred. Existing single-object SET remains.
 
 ## Build order
 
@@ -175,6 +252,8 @@ into smaller steps, each with its own working build.
 ### Phase 2: Layout and connection model
 
 7. Main window layout per the target layout, building on the workbench shell.
+   *Implemented; the final workspace arrangement is recorded under Target layout
+   and steps 18a–18e below.*
 8. Replace the address book with the connection bar in a **single working
    step**: Target history, Credential dropdown, MIB Profile dropdown, the
    Credentials screen, and global connection settings. Graph-era and
@@ -229,11 +308,12 @@ into smaller steps, each with its own working build.
    raw value) and Warnings columns, and the row is highlighted on a mismatch. The
    check is the pure function `CheckMibValue` (`mibvaluesemantics.*`, covered by
    `snmpb.mib-value-check`) and is exercised end to end against a loopback agent
-   that answers one object with the wrong type. Still to do: show it in the Query
-   Table view, Traps, and Watch. Not checked yet: DISPLAY-HINT mismatches and
-   values that violate a TEXTUAL-CONVENTION beyond range, size, and enumeration.
+   that answers one object with the wrong type. Query Tables, Traps and Watch now
+   use the shared renderer/checker too (steps 11, 17 and 18b). Broader DISPLAY-HINT
+   validation and TEXTUAL-CONVENTION constraints beyond range, size and enumeration
+   remain outside the implemented checks.
 10. **Watch.** *Done (2026-10-31):* right-click a row in Results and choose "Watch this value".
-    The Watch tab (bottom panel) lists each watch with its own target and credential, value,
+    The Watch tab (now inside Query) lists each watch with its own target and credential, value,
     change since the previous poll, rate per second, the raw received type, any MIB warnings,
     and its status. Rates use the device's own sysUpTime when it answers (so polling jitter does
     not distort them) and fall back to the local clock; "octets" objects show bits per second.
@@ -243,10 +323,35 @@ into smaller steps, each with its own working build.
     shows a false spike. A row captures the target text and a credential
     reference; the credential is re-resolved at every poll, and the connection bar never
     retargets a row (`snmpb.watch-service`, `snmpb.watch-calculator`, and the loopback
-    scenario, which points the bar elsewhere while a watch keeps polling). Not done yet:
-    watches are not saved across restarts, there is no per-row interval edit, and Watch cannot
-    be started from the Tree.
+    scenario, which points the bar elsewhere while a watch keeps polling). Watch now
+    starts from both Tree and Results and lives beside Results inside Query (18b).
+    Remaining: saved watches, per-row interval editing, and the separately deferred
+    column/table Watch expansion.
 11. **Traps**: Copy source IP, plus raw/interpreted varbinds from step 9.
+    Implemented (2026-11-03): typed SNMP++ value copies retain exact binary data
+    and Counter64 precision; the shared MIB renderer/checker supplies interpreted
+    and raw values, received types, units and mismatch warnings. Traps stays a
+    top-level workspace. Active Profile publication reinterprets retained history;
+    incremental receipt preserves selection by record ID and eviction clears stale
+    details. Copy source IP preserves the v1 relayed-agent rule. Saving the history
+    limit now updates the running service immediately. Validation also exposed
+    a narrow Library/Profile publication timing margin; batching painting and
+    column sizing preserves selection/scroll and keeps the original UI budget.
+    No parser, transport,
+    notification-security or settings-format change.
+    Validation: focused 15/15; 47 widget assertions in Debug/ASAN; complete
+    deterministic suite 65/65 (946.59 seconds), including all 27 application
+    scenarios and five libsmi goldens; installed Release startup/restart, binary
+    and 355 MIB/PIB comparisons, release-tree verification, ldd and diff checks
+    passed. Unfiltered sanitizer setup finds existing libsmi leaks (the pipeline's
+    exact count reproduces without trap code). Components pass with explicit
+    parser-only leak exclusions; full-app ASAN invalid-access checks pass with
+    existing full-app leak detection disabled. Existing warnings and Windows/macOS
+    CI remain. No desktop GUI, physical devices, commits or pushes. Twenty-two task
+    files; 30 total with prior uncommitted MIB work; no scope guardrail triggered.
+    Install: `/tmp/mib-navigator-manual-validation/traps`. See
+    [Traps validation](traps-validation.md) for ownership, limitations and exact
+    build/executable paths. Desktop UX review remains.
 12. **Log / PDU view**, starting with plain-English SNMPv3 REPORT translation
     (unknown user, wrong auth, decryption failure, time window, unknown engine
     ID). Full packet decode is optional later. *Done (2026-10-31):* the REPORT
@@ -257,20 +362,20 @@ into smaller steps, each with its own working build.
     object, how it ended (OK, Failed, Timeout, Refused by device, Stopped), how many
     objects, how long it took, and the plain-English detail. It never contains a
     community or passphrase, can be copied as tab-separated text for a ticket, and
-    keeps the newest 1000 entries. Not done: the table and instance-picker requests
-    are not logged yet, Watch polls are not logged, and there is no raw packet
-    decode.
+    keeps the newest 1000 entries. Table and instance-picker requests are logged
+    (step 17). Watch polls and raw packet decoding remain outside this log view.
 13. **MIB Problems view** (competitive features #1 and #6 merged). Actionable
     messages for missing imports, unresolved symbols, duplicate and conflicting
     providers, and parse diagnostics. Show where each definition came from and
     why that provider was chosen. *Foundation done (2026-10-30): tolerant
     loading, a structured problem report with parser line numbers, and a
-    Problems tab (see `mib-architecture.md`). Remaining: filtering and sorting,
-    "why this provider" detail, and copy/export.*
+    Problems tab (see `mib-architecture.md`). Provider conflict reports now name
+    candidates, revisions and the chosen provider (18a-4); Problems is MIB-only
+    (18b). Further filtering/sorting and copy/export remain refinements.*
 14. **Collection-wide search** (#7) by name, qualified name, or numeric OID
     across the whole MIB collection, not only the loaded tree. Results say which
     module and which profiles contain the match. *Done (2026-10-31):* the "Search all
-    MIBs..." box in the query toolbar fills a Search tab in the bottom panel. It searches an
+    MIBs..." box in the Query search field opens a local Search tab beside Results and Watch. It searches an
     index built by reading the text of every MIB file in the Library (`mibcollectionindex.*`),
     so it covers MIBs that are in no profile and even MIBs the parser rejects. Queries: a
     name or part of one, `Module::name`, or a numeric OID (an instance finds the definition
@@ -306,10 +411,8 @@ into smaller steps, each with its own working build.
     nothing and explains why (for example "the collection has MIBs for this vendor but no saved
     profile includes them"). A device that is unreachable, refuses the login (SNMPv3 reports are
     translated), or reports no sysObjectID changes nothing. No vendor name or enterprise number
-    is built in. **Limit:** Automatic Profiles generated from `Vendor/Product` folders do not
-    exist in the code yet (folder snapshots become Custom profiles), so Detect considers every
-    saved profile except the built-in Standards profile, which would match every device.
-    (Superseded by step 15a: Automatic Profiles now exist and Detect prefers them.)
+    is built in. Automatic Profiles now exist (15a) and Detect prefers them. The
+    built-in Standards profile is excluded because it would match every device.
 17. **Table verification** (#3) against real vendor tables (sparse rows,
     string/IP indexes, IMPLIED, AUGMENTS), plus Copy as CSV. *Done (2026-10-31):* Query Table
     reads every column in step (`SnmpTableOperation`): the smallest next instance across the
@@ -739,21 +842,88 @@ into smaller steps, each with its own working build.
     `/home/synoptics/src/snmpb-next/build-linux-release`; install:
     `/tmp/mib-navigator-manual-validation/appearance`; executable:
     `/tmp/mib-navigator-manual-validation/appearance/bin/mib-navigator`.
-18d. **Menus and Preferences.** Menus become File, Edit, View, MIB, SNMP, Tools,
-    Help. Preferences become a sectioned dialog (General, SNMP, Traps, MIB
-    Library). Remove "Automatic MIB loading on walk" (nothing reads it). Retiring
-    "MIB Module Search Paths" is a separate traced change: it still feeds the
-    libsmi search path (`MibModule::ReadMibPaths`) alongside the Library, which
-    is a second source of truth for where MIBs come from.
-18e. **Library and Profiles.** Move the IANA download (Refresh Catalog, Check
-    for Updates, the two Download buttons) into a "Get MIBs from IANA..."
-    dialog. Give the Profiles page one clear meaning for its profile selector
-    ("edit this profile", not a second "Active MIB Profile"). The folder tree
-    and the Add / Remove buttons are kept (18a-3 replaces the flat list and the
-    Add Files / Add Folder Snapshot buttons).
-    Check whether a library-wide Check Dependencies needs to restore the
-    runtime afterwards: the unreachable legacy button did (`modules->Refresh()`
-    after semantic verification), the Library's own button does not.
+18d. **Menus, Settings and Help.** Implemented, with owner corrections
+    (2026-11-04): File, Edit, View, MIB, SNMP, Settings, Help. Settings contains
+    Credentials, Preferences and Appearance. MIB contains Verify Current MIB
+    (Editor-only, with visible location help) and Extract MIB from RFC (available
+    everywhere; activates Editor). Stop remains on the GUI/context controls and
+    Esc, with its redundant menu entry removed. Menu mnemonics are distinct;
+    Settings retains Alt+T. Diagnostics exposes its application/SNMP log controls
+    and data; About includes current capabilities, build UTC and source revision.
+    Preferences has General, SNMP and Traps, preserving pending edits until OK.
+    The redundant MIB Library preference page is retired. Collection configuration
+    remains in MIBs > Library; global/fallback parser paths now come only from
+    that collection. Active Profile plans still own loaded provider selection.
+    Historical mibpaths/preload settings and files remain untouched, with no
+    hidden provider precedence from that array. Query Macros is explicitly deferred
+    near the top of todo.txt; its multiple-varbind replacement is not implemented.
+    Validation: focused 5/5, complete deterministic 65/65 (27 scenarios/five goldens),
+    focused Esc/large-Walk workflow, installed Release startup/restart and ASAN
+    invalid-access checks passed. Build identity archive/reproducibility, release
+    tree/MIB-byte/dependency and diff checks passed. Existing legacy leaks/warnings
+    remain; Windows/macOS require CI. No desktop GUI, real device, commit or push.
+    See [Settings/Help validation](settings-help-validation.md). Earlier checkpoints:
+    [menus](menus-validation.md), [Preferences](preferences-validation.md).
+    Verification/chooser follow-up (owner-authorized nonvisual fixes, 2026-11-04):
+    Editor verification now uses a fresh serialized parser and a read-only copy
+    of the full Library provider index, independent of the active Query profile.
+    Private identity aliases support filenames differing from module names;
+    unsaved text wins, real diagnostics remain, and latest-profile restoration
+    preserves the published immutable Environment. OID selection uses a frozen
+    model-based tree instead of eagerly allocating per-OID widget items/icons.
+    It retains its captured interpretation across profile changes and recognizes
+    scalar .0 instances. Focused 12/12, complete deterministic 65/65 (27 app
+    scenarios/five goldens), ASAN focused 4/4 and app startup/restart, installed
+    Release workflows, MIB-byte/dependency checks and diff/LF checks passed.
+    Full-library chooser construction/selection: 57 ms for 25,704 nodes.
+    Sixteen task files, no scope guardrail triggered; no desktop GUI, physical
+    devices, commit or push. Windows/macOS require CI. See
+    [verification/chooser validation](verification-chooser-validation.md).
+    Editor responsiveness follow-up (2026-11-04): Verify now returns immediately
+    and completes through a worker-owned snapshot, with busy controls and stale
+    document/Library-context rejection. Metadata uses published values while
+    refresh/profile requests defer; completion restores the latest Profile.
+    Shutdown drains parser work safely and ignores late UI deliveries. Final
+    focused 10/10, complete deterministic 65/65 (27 application scenarios and
+    five goldens), ASAN 4/4, installed Release startup/restart, source/MIB byte,
+    dependency and diff/LF checks passed. Nine task files; no scope guardrail,
+    desktop GUI, physical devices, commit or push. Closing may wait for an
+    uninterruptible parse; existing leak/warning and Windows/macOS CI limitations
+    remain. See [asynchronous Verify validation](async-verify-validation.md).
+18e. **Library and Profiles.** *Implemented in the accepted visual refresh
+    (2026-11-04).* IANA catalog refresh and downloads live in **Get MIBs from IANA…**;
+    opening uses cached data and does not start a network request. Downloads capture
+    their destination. The obsolete Check for Updates placeholder is removed because
+    the catalog has no reliable comparable revision data. Profiles has an **Edit
+    profile** selector independent of Query's active selection. Folder-tree Add/Remove
+    remains. See [visual refresh validation](visual-refresh-validation.md).
+    Library dependency-check runtime consistency completed separately as a
+    nonvisual fix (2026-11-03). Uncached checks use a fresh serialized parser
+    with Library-only paths, then force restoration of the latest requested
+    Profile after the Library UI refresh. Changed files are rechecked; roots
+    come from the refreshed index so additions/removals participate immediately.
+    Equivalent duplicate providers remain supported, failed index writes do
+    not mark a check current, and a versioned check key prevents reuse of
+    obsolete semantic results while retaining the provider graph. Focused 9/9,
+    complete deterministic suite 64/64
+    (27 application/tolerance scenarios, five libsmi goldens), installed Release
+    workflow and ASAN workflow passed. The Library/Profiles UI changes above were subsequently
+    completed in the visual refresh; legacy search-path retirement was completed in 18d. See
+    [consistency validation](mib-environment-consistency-validation.md) for
+    architecture, limitations, warnings and exact build/install paths.
+    Responsiveness follow-up (2026-11-03): discovery, semantic checks and
+    inventory preparation now use worker-owned snapshots; the UI publishes once
+    without waiting for the parser or duplicating Library rescans. Profile changes
+    and refreshes defer safely, and files changed during checking invalidate the
+    report and request retry. Focused 9/9, nine dependency workflows (eight button actions and one deterministic
+    worker-phase injection; 53 assertions each) in Debug/installed Release/ASAN, and complete deterministic
+    64/64 (903.62 seconds; all 27 scenarios and five goldens) passed.
+    Strict widget ASAN/leak checks, Release install/startup/restart, all 355
+    installed MIB/PIB comparisons, unchanged repository MIB bytes, ldd and diff
+    checks passed. Existing warnings/application leaks and Windows/macOS CI
+    remain. No desktop GUI, physical devices, commits or pushes. Thirteen task
+    files; no scope guardrail triggered. Latest install:
+    `/tmp/mib-navigator-manual-validation/dependency-responsive`.
 19. Optional: **implementation check**. Walk the live device and compare it
     with the selected profile (objects defined but missing, objects returned but
     undefined, values that break MIB rules).

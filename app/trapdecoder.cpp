@@ -71,10 +71,7 @@ TrapRecord TrapDecoder::decode(const Pdu &pdu, const TrapEndpoint &endpoint,
         }
         Oid oid;
         vb.get_oid(oid);
-        item.oid = printable(oid);
-        item.syntax = vb.get_syntax();
-        const char *value = vb.get_printable_value();
-        item.printableValue = value ? QString::fromLocal8Bit(value) : QString();
+        item.value = vb;
         item.valid = oid.len() > 0;
         record.varbinds.append(item);
     }

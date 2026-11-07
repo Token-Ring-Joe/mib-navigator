@@ -11,7 +11,8 @@ class MibModelView : public QTreeView
 {
     Q_OBJECT
 public:
-    explicit MibModelView(QWidget *parent = nullptr);
+    enum class Mode { Query, OidSelection };
+    explicit MibModelView(QWidget *parent = nullptr, Mode mode = Mode::Query);
     void RegisterToLoader(MibViewLoader *loader);
     void setTreeModel(MibTreeModel *model);
     void Populate();
@@ -63,6 +64,7 @@ private:
     QModelIndex proxyIndexForOid(const QString &oid) const;
     void restoreSelection();
     MibTreeFilterModel *filterModel;
+    Mode interactionMode;
     QString retainedOid;
     bool walkInProgress = false;
     bool agentIsV1 = true;

@@ -43,11 +43,12 @@ CollectionSearchPanel::CollectionSearchPanel(MibCollectionService *collection, L
     table->horizontalHeader()->setSectionResizeMode(Profiles, QHeaderView::Stretch);
     table->setContextMenuPolicy(Qt::CustomContextMenu);
     layout->addWidget(table, 1);
+    setProperty("workbenchFocusTarget", QStringLiteral("SearchResults"));
 
-    connect(table, &QTableWidget::cellDoubleClicked, this, [this](int row, int) { activate(row); });
+    connect(table, &QTableWidget::cellActivated, this, [this](int row, int) { activate(row); });
     connect(service, &MibCollectionService::indexChanged, this, [this]() {
         if (!lastQuery.isEmpty() && !service->isBuilding()) search(lastQuery);   // refresh with the new index
-        else if (lastQuery.isEmpty()) summary->setText(service->statusText());
+        else if (lastQuery.isEmpty()) search({});
     });
     connect(table, &QWidget::customContextMenuRequested, this, [this](const QPoint &position) {
         QTableWidgetItem *item = table->itemAt(position);
@@ -56,6 +57,9 @@ CollectionSearchPanel::CollectionSearchPanel(MibCollectionService *collection, L
         const QString oid = table->item(row, Oid)->text();
         const QString module = table->item(row, Module)->text();
         const bool inTree = !oid.isEmpty() && table->item(row, Module)->data(Qt::UserRole).toBool();
+        // A background index publication may rebuild the table while the menu runs.
+        const QString file = table->item(row, File)->data(Qt::UserRole).toString();
+        const int line = table->item(row, File)->data(Qt::UserRole + 1).toInt();
         QMenu menu(table);
         QAction *tree = menu.addAction(tr("Show in the MIB Tree"));
         tree->setEnabled(inTree);
@@ -66,8 +70,7 @@ CollectionSearchPanel::CollectionSearchPanel(MibCollectionService *collection, L
         QAction *chosen = menu.exec(table->viewport()->mapToGlobal(position));
         if (chosen == tree) emit showInTreeRequested(oid);
         else if (chosen == editor)
-            emit openInEditorRequested(table->item(row, File)->data(Qt::UserRole).toString(),
-                                       table->item(row, File)->data(Qt::UserRole + 1).toInt());
+            emit openInEditorRequested(file, line);
         else if (chosen == copy) QApplication::clipboard()->setText(oid);
     });
 }
@@ -78,9 +81,15 @@ void CollectionSearchPanel::search(const QString &query)
 {
     lastQuery = query.trimmed();
     table->setRowCount(0);
-    if (lastQuery.isEmpty()) { summary->setText(service->statusText()); return; }
+    if (lastQuery.isEmpty()) {
+        summary->setText(tr("Type a name, a Module::name, or a numeric OID in \"Search all MIBs\".")
+            + QStringLiteral(" ") + service->statusText());
+        return;
+    }
     if (!service->hasIndex()) {
-        summary->setText(service->statusText() + tr(" Search again in a moment."));
+        summary->setText(service->statusText() + (service->isBuilding()
+            ? tr(" Your search will run when indexing finishes. You can keep browsing.")
+            : tr(" No search index is available. Refresh the Library and try again.")));
         return;
     }
     const MibCollectionSearchResult result = service->search(lastQuery);
@@ -127,6 +136,7 @@ void CollectionSearchPanel::search(const QString &query)
 
 void CollectionSearchPanel::activate(int row)
 {
+    if (row < 0 || row >= table->rowCount()) return;
     const QString oid = table->item(row, Name)->data(Qt::UserRole).toString();
     const bool inTree = !oid.isEmpty() && table->item(row, Module)->data(Qt::UserRole).toBool();
     if (inTree) emit showInTreeRequested(oid);

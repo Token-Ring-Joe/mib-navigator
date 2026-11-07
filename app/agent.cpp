@@ -1,3 +1,6 @@
+#include "dialoglayout.h"
+#include <QRegularExpressionValidator>
+#include <QRegularExpression>
 #include "queryresultspanel.h"
 /*
     Copyright (C) 2004-2011 Martin Jolicoeur (snmpb1@gmail.com) 
@@ -54,6 +57,7 @@
 #include "snmpquerytext.h"
 #include "requestlog.h"
 #include <QLabel>
+#include <QListWidget>
 #include <QStatusBar>
 #include <QStyle>
 #include <QTextDocumentFragment>
@@ -1533,30 +1537,26 @@ void Agent::PresentInstanceResult(const SnmpInstanceResult &result)
         return;
     }
 
-    // Build the instance selection dialog and show it ...
-    QDialog dlist(s->MainUI()->MIBTree, Qt::WindowTitleHint);
+    // The selected instance is a copied suffix, independent of model lifetime.
+    QDialog dlist(s->MainUI()->MIBTree);
     dlist.setObjectName("TableInstanceDialog");
-    dlist.resize(rowContext ? 520 : 220, 300);
-    QGridLayout gl1(&dlist);
-    QGridLayout gl2;
-    QLabel label(tr("Please select table instance to query"), &dlist);
-    gl2.addWidget(&label, 0, 0, 1, 1);
-    QListWidget ilist(&dlist);
-    ilist.setObjectName("TableInstanceList");
-    gl2.addWidget(&ilist, 1, 0, 1, 1);
-    QDialogButtonBox box(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, Qt::Horizontal, &dlist);
+    QVBoxLayout layout(&dlist);
+    QLabel label(tr("Select an instance to query."), &dlist); label.setWordWrap(true);
+    QListWidget ilist(&dlist); ilist.setObjectName("TableInstanceList");
+    ilist.setAccessibleName(tr("Available table instances"));
+    QDialogButtonBox box(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dlist);
+    auto *queryButton = box.button(QDialogButtonBox::Ok);
+    queryButton->setText(tr("Query")); queryButton->setEnabled(false);
+    connect(&ilist, &QListWidget::itemSelectionChanged, queryButton, [&ilist, queryButton]() {
+        queryButton->setEnabled(!ilist.selectedItems().isEmpty());
+    });
+    layout.addWidget(&label); layout.addWidget(&ilist, 1); layout.addWidget(&box);
     connect(&box, &QDialogButtonBox::rejected, &dlist, &QDialog::reject);
-    gl2.addWidget(&box, 2, 0, 1, 1);
-    gl1.addLayout(&gl2, 0, 0, 1, 1);
+    connect(&box, &QDialogButtonBox::accepted, &dlist, &QDialog::accept);
+    connect(&ilist, &QListWidget::itemDoubleClicked, &dlist, &QDialog::accept);
     dlist.setWindowTitle(tr("Select Instance"));
-    QMetaObject::connectSlotsByName(&dlist);
-    connect(&ilist, SIGNAL(itemDoubleClicked(QListWidgetItem *)), 
-            &dlist, SLOT(accept()));
-    connect(&box, SIGNAL(accepted()), &dlist, SLOT(accept()));
-    dlist.setModal(true);
-    dlist.show();
-    dlist.raise();
-    dlist.activateWindow();
+    DialogLayout::initialize(dlist, QSize(rowContext ? 560 : 420, 400));
+    ilist.setFocus();
 
     for (const QString &instance : result.instances) {
         QString decoded;
@@ -1611,15 +1611,23 @@ int Agent::SelectTableInstance(const QString &oid, QString &outinstance)
     runner.wait();
     if (result.status != SnmpOperationStatus::Complete || result.instances.isEmpty())
         return 0;
-    QDialog dialog(s->MainUI()->MIBTree, Qt::WindowTitleHint);
+    QDialog dialog(s->MainUI()->MIBTree);
+    dialog.setObjectName("ValueInstanceDialog"); dialog.setWindowTitle(tr("Select Instance"));
     QVBoxLayout layout(&dialog);
-    QListWidget list(&dialog);
+    QLabel heading(tr("Select an instance for this value."), &dialog); heading.setWordWrap(true);
+    QListWidget list(&dialog); list.setAccessibleName(tr("Available value instances"));
     list.addItems(result.instances);
-    QDialogButtonBox buttons(QDialogButtonBox::Ok, &dialog);
-    layout.addWidget(&list);
-    layout.addWidget(&buttons);
+    QDialogButtonBox buttons(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    auto *select = buttons.button(QDialogButtonBox::Ok);
+    select->setText(tr("Select")); select->setEnabled(false);
+    layout.addWidget(&heading); layout.addWidget(&list, 1); layout.addWidget(&buttons);
+    connect(&list, &QListWidget::itemSelectionChanged, select, [&list, select]() {
+        select->setEnabled(!list.selectedItems().isEmpty());
+    });
     connect(&buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(&buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     connect(&list, &QListWidget::itemDoubleClicked, &dialog, &QDialog::accept);
+    DialogLayout::initialize(dialog, QSize(420, 400)); list.setFocus();
     if (dialog.exec() != QDialog::Accepted || list.selectedItems().isEmpty()) return 0;
     outinstance = list.selectedItems().first()->text();
     return 1;
@@ -1649,49 +1657,32 @@ void Agent::GetFromSelectInstance(const QString& oid, int op)
                           root, std::make_unique<SnmpPlusTransport>(config));
 }
 
-// Callback when the linedit edition is finished in the prompt dialog.
-void Agent::GetTypedTableInstance(void)
-{
-    tinstresult = le->text();
-}
 
 void Agent::GetFromPromptInstance(const QString& oid, int op)
 {
-    int res;
-
-    QDialog dprompt(s->MainUI()->MIBTree, Qt::WindowTitleHint);
-    dprompt.resize(370, 60);
-    QGridLayout gl(&dprompt);
-    QLabel label(tr("Please type table instance to query"), &dprompt);
-    gl.addWidget(&label, 0, 0, 1, 1);
-    QDialogButtonBox box(QDialogButtonBox::Ok, Qt::Vertical, &dprompt);
-    gl.addWidget(&box, 0, 1, 2, 1);
-    le = new QLineEdit(&dprompt);
-    le->setFocus(Qt::OtherFocusReason);
-    gl.addWidget(le, 1, 0, 1, 1);
-    dprompt.setWindowTitle(tr("Type Instance"));
-    QObject::connect(&box, SIGNAL(accepted()), &dprompt, SLOT(accept()));
-    QMetaObject::connectSlotsByName(&dprompt);
-    connect(le, SIGNAL(editingFinished(void)), 
-            this, SLOT(GetTypedTableInstance(void)));
-
-    // Wait for the result and then query the proper instance
-    res = dprompt.exec();
-    switch(op)
-    {
-    case 0:
-        Get(oid + (res?("." + tinstresult):".0"));
-        break;
-    case 1:
-        GetNext(oid + (res?("." + tinstresult):".0"));
-        break;
-    case 2:
-        GetBulk(oid + (res?("." + tinstresult):".0"));
-        break;
-    default:
-        break;
+    QDialog prompt(s->MainUI()->MIBTree);
+    prompt.setObjectName("TypeInstanceDialog"); prompt.setWindowTitle(tr("Enter Instance"));
+    QVBoxLayout layout(&prompt);
+    QLabel label(tr("&Instance suffix"), &prompt);
+    QLineEdit instance(&prompt); instance.setObjectName("InstanceSuffix");
+    instance.setPlaceholderText(tr("For example, 3 or 1.4")); label.setBuddy(&instance);
+    instance.setValidator(new QRegularExpressionValidator(QRegularExpression("[0-9]+(?:\\.[0-9]+)*"), &instance));
+    QDialogButtonBox buttons(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &prompt);
+    auto *query = buttons.button(QDialogButtonBox::Ok);
+    query->setText(tr("Query")); query->setEnabled(false);
+    layout.addWidget(&label); layout.addWidget(&instance); layout.addWidget(&buttons);
+    connect(&instance, &QLineEdit::textChanged, query, [&instance, query]() { query->setEnabled(instance.hasAcceptableInput()); });
+    connect(&buttons, &QDialogButtonBox::accepted, &prompt, &QDialog::accept);
+    connect(&buttons, &QDialogButtonBox::rejected, &prompt, &QDialog::reject);
+    DialogLayout::initialize(prompt, QSize(420, 180)); instance.setFocus();
+    if (prompt.exec() != QDialog::Accepted || !instance.hasAcceptableInput()) return;
+    const QString requestedOid = oid + "." + instance.text();
+    switch (op) {
+    case 0: Get(requestedOid); break;
+    case 1: GetNext(requestedOid); break;
+    case 2: GetBulk(requestedOid); break;
+    default: break;
     }
 
-    delete le;
 }
 

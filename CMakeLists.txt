@@ -13,6 +13,18 @@ configure_file(
     @ONLY
 )
 
+find_package(Git QUIET)
+add_custom_target(snmpb_build_identity
+    COMMAND ${CMAKE_COMMAND}
+        "-DSNMPB_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+        "-DSNMPB_BUILD_INFO=${PROJECT_BINARY_DIR}/generated/snmpb_build_info.h"
+        "-DSNMPB_GIT=${GIT_EXECUTABLE}"
+        -P "${PROJECT_SOURCE_DIR}/cmake/GenerateBuildIdentity.cmake"
+    BYPRODUCTS "${PROJECT_BINARY_DIR}/generated/snmpb_build_info.h"
+    COMMENT "Recording MIB Navigator build identity"
+    VERBATIM
+)
+
 include(CTest)
 include(GNUInstallDirs)
 

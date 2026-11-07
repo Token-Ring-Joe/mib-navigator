@@ -252,7 +252,7 @@ bool MibDependencyIndex::save(QString *error) const
     return true;
 }
 
-MibDependencyScanResult MibDependencyIndex::update(const QStringList &searchPaths, QString *error)
+MibDependencyScanResult MibDependencyIndex::update(const QStringList &searchPaths, QString *error, bool persist)
 {
     QElapsedTimer timer; timer.start(); MibDependencyScanResult result;
     QMap<QString, MibDependencyFileRecord> old;
@@ -284,7 +284,7 @@ MibDependencyScanResult MibDependencyIndex::update(const QStringList &searchPath
     if (result.deleted > 0) result.changed = true;
     records = next; if (result.changed) { ++currentGeneration; profileChecks.clear(); }
     rebuildProviders(); result.elapsedMsecs = timer.elapsed();
-    if (result.changed && !save(error)) return result;
+    if (persist && result.changed && !save(error)) return result;
     return result;
 }
 
@@ -412,7 +412,12 @@ bool MibDependencyIndex::profileCheckCurrent(const QString &id, const QString &s
 }
 QString MibDependencyIndex::profileSignature(const QStringList &modules, bool base) {
     QStringList normalized = modules; normalized.removeDuplicates(); normalized.sort(Qt::CaseSensitive);
-    return QString::fromLatin1(QCryptographicHash::hash((normalized.join('\n') + (base ? "\n+base" : "\n-base")).toUtf8(), QCryptographicHash::Sha256).toHex());
+    // v2 checks run in a fresh Library parser session. Do not reuse reports
+    // produced by the former shared-parser/identity-only shortcut. Version the
+    // check key, preserving the provider graph and all user MIB files.
+    const QString material = QStringLiteral("dependency-check-v2\n") +
+        normalized.join('\n') + (base ? "\n+base" : "\n-base");
+    return QString::fromLatin1(QCryptographicHash::hash(material.toUtf8(), QCryptographicHash::Sha256).toHex());
 }
 void MibDependencyIndex::recordVerification(const QString &moduleName, bool success, const QString &diagnostic)
 {

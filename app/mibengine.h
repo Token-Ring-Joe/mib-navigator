@@ -8,11 +8,14 @@
 #include <memory>
 #include <functional>
 
+class MibDependencyIndex;
+
 struct MibEngineValidationResult
 {
     bool success = false;
     QList<MibDiagnosticRecord> diagnostics;
     QString stagingError;
+    QString stagedSourcePath;
     qint64 elapsedMilliseconds = 0;
 };
 
@@ -35,9 +38,10 @@ public:
     static MibEngine &instance();
     Operation beginOperation(const QString &name);
     MibEngineValidationResult validateSource(const QByteArray &content,
-                                             const QString &directory,
+                                             const QStringList &libraryPaths,
                                              int errorLevel,
-                                             bool recursive);
+                                             bool recursive,
+                                             const MibDependencyIndex &librarySnapshot);
     int maximumConcurrentOperations() const;
     void resetConcurrencyMetrics();
     QString libraryVersion() const;

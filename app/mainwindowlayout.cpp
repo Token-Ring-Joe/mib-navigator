@@ -39,7 +39,7 @@ QRect SafeRestoredWindowGeometry(const QRect &requested,
     const bool usefulWidth = visible.width() >= qMin((repaired.width() * 2) / 3, 960);
     const bool titleVisible = repaired.top() >= target.top() - 8 &&
                               repaired.top() <= target.bottom() - 32;
-    if (usefulWidth && titleVisible) return repaired;
+    if (usefulWidth && titleVisible && repaired.bottom() <= target.bottom()) return repaired;
     repaired.moveLeft(qBound(target.left(), repaired.left(), target.right() - repaired.width() + 1));
     repaired.moveTop(qBound(target.top(), repaired.top(), target.bottom() - repaired.height() + 1));
     return repaired;

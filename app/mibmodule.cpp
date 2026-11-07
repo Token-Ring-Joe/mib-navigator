@@ -29,7 +29,9 @@
 #include <QCryptographicHash>
 #include <QMutex>
 #include <QMutexLocker>
+#include <QScopeGuard>
 #include <algorithm>
+#include <optional>
 
 #include "mibmodule.h"
 #include "mibenvironmentextractor.h"
@@ -290,6 +292,7 @@ void MibModule::RebuildTotalList()
 
 MibModule::~MibModule()
 {
+    StopBackgroundWork();
     environmentManager.reset();
     CurrentModuleObject=nullptr;
     MibEngine::instance().shutdown();
@@ -386,9 +389,12 @@ void MibModule::RebuildTotalListLegacyCompileAll()
 }
 #endif
 
-void MibModule::RebuildCandidateList()
+void MibModule::RebuildCandidateList(bool scan)
 {
-    auto engineOperation=MibEngine::instance().beginOperation(QStringLiteral("candidate-list"));
+    // Scanning may replace the index while a builder reads its generation.
+    // Snapshot publication below needs no parser lock or filesystem rescan.
+    std::optional<MibEngine::Operation> operation;
+    if (scan) operation.emplace(MibEngine::instance().beginOperation(QStringLiteral("candidate-list")));
     const QString libraryRoot = currentLibraryRoot();
     if (!sameRuntimePath(dependencyIndex.libraryRoot(), libraryRoot)) {
         dependencyIndex = MibDependencyIndex::forLibraryRoot(libraryRoot);
@@ -399,9 +405,14 @@ void MibModule::RebuildCandidateList()
                                   .arg(loadError));
     }
     const QStringList paths = MibCollection(libraryRoot).runtimeSearchPaths();
-    const MibDependencyInspection inspection = dependencyIndex.inspect(paths);
+    MibDependencyInspection inspection;
+    if (scan) inspection = dependencyIndex.inspect(paths);
+    else for (const auto &file : dependencyIndex.files()) {
+        MibPhysicalCandidate candidate; candidate.filename = file.filename;
+        candidate.canonicalPath = file.canonicalPath; inspection.candidates.append(candidate);
+    }
     bool stale = inspection.stale();
-    if (dependencyIndex.generation() == 0 || inspection.stale()) {
+    if (scan && (dependencyIndex.generation() == 0 || inspection.stale())) {
         QString updateError;
         const MibDependencyScanResult update = dependencyIndex.update(paths, &updateError);
         if (updateError.isEmpty()) stale = false;
@@ -428,95 +439,197 @@ void MibModule::RebuildCandidateList()
     std::sort(Total.begin(), Total.end(), compareModule);
 }
 
-MibProfileDependencyCheck MibModule::CheckProfileDependencies(
+void MibModule::CheckProfileDependencies(
     const QString &profileId, const QStringList &explicitModules,
-    bool includeStandardBase, QString *error)
+    bool includeStandardBase,
+    std::function<void(const QList<MibModuleRecord> &)> prepareInventory,
+    std::function<void(const QString &)> completed)
 {
-    auto engineOperation=MibEngine::instance().beginOperation(QStringLiteral("dependency-check"));
-    QElapsedTimer totalTimer;
-    totalTimer.start();
-    const MibDependencyScanResult scan = RefreshDependencyIndex(error);
-    QStringList roots = explicitModules;
-    if (includeStandardBase) roots.append(MibProfileDefinitions::standardsModules());
-    roots.removeDuplicates(); roots.sort(Qt::CaseInsensitive);
-    const QString signature = MibDependencyIndex::profileSignature(explicitModules, includeStandardBase);
-    if (!scan.changed && dependencyIndex.profileCheckCurrent(profileId, signature)) {
-        const MibProfileDependencyCheck cached = dependencyIndex.profileCheck(profileId);
-        DiagnosticLogger::log("MIB", tr("Dependency check profile=%1 files-scanned=0 reused=%2 cache=reused inspection-ms=%3 graph-ms=0 semantic-ms=0 total-ms=%4")
-            .arg(profileId).arg(scan.reused).arg(scan.elapsedMsecs).arg(totalTimer.elapsed()));
-        emit inventoryChanged();
-        return cached;
+    if (ParserCheckRunning()) {
+        completed(tr("A MIB check is already running"));
+        return;
     }
-    QElapsedTimer semanticTimer;
-    semanticTimer.start();
-
-    QSet<QString> loading;
-    const bool libraryWide = profileId == QStringLiteral("mib-library");
-    std::function<MibDependencyLoadAttempt(const QString &, const QString &)> loadIndexed;
-    loadIndexed = [this, libraryWide, &loading, &loadIndexed](const QString &path, const QString &expected) {
-        MibDependencyLoadAttempt attempt;
-        if (libraryWide && dependencyIndex.semanticallyVerified(expected)) {
-            attempt.success = true; attempt.loadedModuleNames = {expected}; return attempt;
+    struct Work {
+        MibDependencyIndex index;
+        MibDependencyScanResult scan;
+                MibProfileDependencyCheck check;
+                QString error;
+                bool resetParser = false;
+            };
+            auto work = std::make_shared<Work>();
+            work->index = dependencyIndex;
+            const QString libraryRoot = currentLibraryRoot();
+            dependencyCheckRunning = true;
+            // Copy the index before enqueueing. The UI continues reading its published
+            // snapshot; the worker never mutates that object or widget-owned state.
+            MibEngine::instance().submit([this, work, libraryRoot, profileId, explicitModules,
+                                          includeStandardBase, prepareInventory = std::move(prepareInventory),
+                                  completed = std::move(completed)] {
+                const auto run = [&] {
+                    if (!sameRuntimePath(work->index.libraryRoot(), libraryRoot)) {
+                        work->index = MibDependencyIndex::forLibraryRoot(libraryRoot);
+                        if (!work->index.load(&work->error)) return;
+                    }
+                    const QStringList libraryPaths = MibCollection(libraryRoot).runtimeSearchPaths();
+                    work->scan = work->index.update(libraryPaths, &work->error);
+                    if (!work->error.isEmpty()) return;
+                    const QStringList selectedModules = profileId == QStringLiteral("mib-library")
+                        ? work->index.moduleNames() : explicitModules;
+                    QStringList roots = selectedModules;
+                    if (includeStandardBase) roots.append(MibProfileDefinitions::standardsModules());
+                    roots.removeDuplicates(); roots.sort(Qt::CaseInsensitive);
+                    const QString signature = MibDependencyIndex::profileSignature(selectedModules, includeStandardBase);
+                    if (!work->scan.changed && work->index.profileCheckCurrent(profileId, signature)) {
+                        work->check = work->index.profileCheck(profileId);
+                        return;
+                    }
+                    auto operation = MibEngine::instance().beginOperation(QStringLiteral("dependency-check"));
+                    work->resetParser = true;
+                    const int flags = smiGetFlags();
+                    MibEngine::instance().initialize(libraryPaths.join(QDir::listSeparator()), true);
+                    smiSetFlags(flags | SMI_FLAG_ERRORS);
+                    smiSetErrorHandler(NormalErrorHdlr);
+                    smiSetErrorLevel(3);
+                    QSet<QString> loading;
+                    QHash<QString, MibDependencyLoadAttempt> attempts;
+                    std::function<MibDependencyLoadAttempt(const QString &, const QString &)> loadIndexed;
+                    loadIndexed = [this, &loading, &attempts, &loadIndexed, work](const QString &path, const QString &expected) {
+                        MibDependencyLoadAttempt attempt;
+                        // A failed partial module must not become successful merely
+                        // because libsmi now knows its name. Unloaded failures can still
+                        // retry after another dependency has made progress.
+                        if (attempts.contains(expected) && smiIsLoaded(expected.toLocal8Bit().constData()))
+                            return attempts.value(expected);
+                        if (smiIsLoaded(expected.toLocal8Bit().constData())) {
+                            const auto record = SnapshotMibModule(smiGetModule(expected.toLocal8Bit().constData()));
+                            attempt.success = sameRuntimePath(record.path, path);
+                            if (!attempt.success) {
+                                // Identical duplicate providers are interchangeable Library
+                                // sources. Reject a different body, not an equivalent copy.
+                                QString requestedHash, loadedHash;
+                                for (const auto &provider : work->index.providersFor(expected)) {
+                                    if (sameRuntimePath(provider.canonicalPath, path)) requestedHash = provider.sha256;
+                                    if (sameRuntimePath(provider.canonicalPath, record.path)) loadedHash = provider.sha256;
+                                }
+                                attempt.success = !requestedHash.isEmpty() && requestedHash == loadedHash;
+                            }
+                            if (attempt.success) attempt.loadedModuleNames = {expected};
+                            else attempt.diagnostic = tr("Loaded identity belongs to a different-content provider file");
+                            return attempt;
+                        }
+                        if (loading.contains(expected)) { attempt.diagnostic = tr("Circular provider load"); return attempt; }
+                        loading.insert(expected);
+                        for (const QString &dependency : work->index.imports(expected)) {
+                            if (smiIsLoaded(dependency.toLocal8Bit().constData())) continue;
+                            const auto provider = work->index.provider(dependency);
+                            if (provider.status == MibProviderStatus::Found) loadIndexed(provider.path, dependency);
+                        }
+                        ErrorWhileLoading = false;
+                        char *canonicalName = smiLoadModule(QDir::toNativeSeparators(path).toLocal8Bit().constData());
+                        const QList<MibModuleRecord> fromFile = MibService().modulesFromFile(path);
+                        for (const MibModuleRecord &record : fromFile) attempt.loadedModuleNames.append(record.name);
+                        attempt.success = canonicalName && attempt.loadedModuleNames.contains(expected) && !ErrorWhileLoading;
+                        if (!attempt.success) attempt.diagnostic = ErrorWhileLoading
+                            ? tr("libsmi reported a parser/semantic error")
+                            : tr("Provider did not produce the requested module identity");
+                        loading.remove(expected); attempts.insert(expected, attempt); return attempt;
+                    };
+                    const auto result = MibBoundedDependencyLoader().load(roots, work->index, loadIndexed);
+            MibProfileDependencyCheck check;
+            check.profileSignature = signature;
+            check.indexGeneration = work->index.generation(); check.effectiveModules = result.loaded;
+            check.dependencies = result.dependencies; check.checkedUtc = QDateTime::currentDateTimeUtc();
+            check.elapsedMsecs = work->scan.elapsedMsecs + result.elapsedMsecs;
+            for (const MibDependencyFailure &failure : result.failures) {
+                check.unresolved.append(failure.moduleName);
+                check.failureSummaries.append(tr("%1: %2%3").arg(failure.moduleName,
+                    MibDependencyFailureText(failure.kind), failure.detail.isEmpty() ? QString() : tr(" — %1").arg(failure.detail)));
+            }
+            for (const QString &module : result.loaded) work->index.recordVerification(module, true);
+            for (const MibDependencyFailure &failure : result.failures)
+                work->index.recordVerification(failure.moduleName, false, failure.detail);
+            const auto previousCheck = work->index.profileCheck(profileId);
+            work->index.setProfileCheck(profileId, check);
+            if (!work->index.save(&work->error)) {
+                work->index.setProfileCheck(profileId, previousCheck);
+                DiagnosticLogger::log("MIB", tr("dependency index save failed path=\"%1\" reason=\"%2\"")
+                    .arg(QDir::toNativeSeparators(work->index.path()), work->error));
+                work->check = check;
+                return;
+            }
+            DiagnosticLogger::log("MIB", tr("dependency index save records=%1 generation=%2 path=\"%3\"")
+                .arg(work->index.files().size()).arg(work->index.generation())
+                .arg(QDir::toNativeSeparators(work->index.path())));
+            work->check = check;
+        };
+        try {
+            run();
+            const auto prepare = [&] {
+                if (!prepareInventory) return;
+                QList<MibModuleRecord> inventory;
+                for (const auto &file : work->index.files()) {
+                    if (file.checkState != QStringLiteral("verified")) continue;
+                    for (auto it = file.importsByModule.cbegin(); it != file.importsByModule.cend(); ++it) {
+                        MibModuleRecord record; record.name = it.key();
+                        record.path = file.canonicalPath; record.imports = it.value();
+                        inventory.append(record);
+                    }
+                }
+                prepareInventory(inventory);
+            };
+            prepare();
+            if (work->error.isEmpty()) {
+                // An editor save or external copy can arrive while verification
+                // runs. Publish fresh discovery, but never cache a semantic report
+                // against bytes that changed during that same check.
+                const auto changed = work->index.update(
+                    MibCollection(libraryRoot).runtimeSearchPaths(), &work->error);
+                if (changed.changed && work->error.isEmpty()) {
+                    work->error = tr("Library files changed during checking. Run Check Dependencies again to verify the updated files.");
+                    prepare();
+                }
+            }
         }
-        if (smiIsLoaded(expected.toLocal8Bit().constData())) {
-            attempt.success = true; attempt.loadedModuleNames = {expected}; return attempt;
-        }
-        if (loading.contains(expected)) { attempt.diagnostic = tr("Circular provider load"); return attempt; }
-        loading.insert(expected);
-        for (const QString &dependency : dependencyIndex.imports(expected)) {
-            if (smiIsLoaded(dependency.toLocal8Bit().constData())) continue;
-            const auto provider = dependencyIndex.provider(dependency);
-            if (provider.status == MibProviderStatus::Found) loadIndexed(provider.path, dependency);
-        }
-        ErrorWhileLoading = false;
-        char *canonicalName = smiLoadModule(QDir::toNativeSeparators(path).toLocal8Bit().constData());
-        const QList<MibModuleRecord> fromFile = MibService().modulesFromFile(path);
-        for (const MibModuleRecord &record : fromFile) attempt.loadedModuleNames.append(record.name);
-        attempt.success = canonicalName && attempt.loadedModuleNames.contains(expected) && !ErrorWhileLoading;
-        if (!attempt.success) attempt.diagnostic = ErrorWhileLoading
-            ? tr("libsmi reported a parser/semantic error")
-            : tr("Provider did not produce the requested module identity");
-        loading.remove(expected); return attempt;
-    };
-    const MibDependencyCheckResult result = MibBoundedDependencyLoader().load(roots, dependencyIndex, loadIndexed);
-    MibProfileDependencyCheck check;
-    check.profileSignature = signature;
-    check.indexGeneration = dependencyIndex.generation(); check.effectiveModules = result.loaded;
-    check.dependencies = result.dependencies; check.checkedUtc = QDateTime::currentDateTimeUtc();
-    check.elapsedMsecs = scan.elapsedMsecs + result.elapsedMsecs;
-    for (const MibDependencyFailure &failure : result.failures) {
-        check.unresolved.append(failure.moduleName);
-        check.failureSummaries.append(tr("%1: %2%3").arg(failure.moduleName,
-            MibDependencyFailureText(failure.kind), failure.detail.isEmpty() ? QString() : tr(" — %1").arg(failure.detail)));
-    }
-    for (const QString &module : result.loaded) dependencyIndex.recordVerification(module, true);
-    for (const MibDependencyFailure &failure : result.failures)
-        dependencyIndex.recordVerification(failure.moduleName, false, failure.detail);
-    dependencyIndex.setProfileCheck(profileId, check);
-    if (!dependencyIndex.save(error)) {
-        DiagnosticLogger::log("MIB", tr("dependency index save failed path=\"%1\" reason=\"%2\"")
-            .arg(QDir::toNativeSeparators(dependencyIndex.path()), error ? *error : QString()));
-        return check;
-    }
-    DiagnosticLogger::log("MIB", tr("dependency index save records=%1 generation=%2 path=\"%3\"")
-        .arg(dependencyIndex.files().size()).arg(dependencyIndex.generation())
-        .arg(QDir::toNativeSeparators(dependencyIndex.path())));
-    // Verification changes which indexed identities are projected into the
-    // current-session Inventory/Profile models. Rebuild that projection now;
-    // otherwise newly learned aliases only appear after process restart.
-    RebuildCandidateList();
-    DiagnosticLogger::log("MIB", tr("Dependency check profile=%1 files-scanned=%2 reused=%3 deleted=%4 modules=%5 unresolved=%6 elapsed-ms=%7")
-        .arg(profileId).arg(scan.scanned).arg(scan.reused).arg(scan.deleted)
-        .arg(check.effectiveModules.size()).arg(check.unresolved.size()).arg(check.elapsedMsecs));
-    DiagnosticLogger::log("MIB", tr("Dependency check phases profile=%1 inspection-ms=%2 semantic-ms=%3 total-ms=%4 cache=updated")
-        .arg(profileId).arg(scan.elapsedMsecs).arg(semanticTimer.elapsed()).arg(totalTimer.elapsed()));
-    Q_UNUSED(libraryWide);
-    emit inventoryChanged();
-    return check;
+        catch (const std::exception &exception) {
+            work->error = tr("Library dependency check failed: %1").arg(QString::fromLocal8Bit(exception.what()));
+        } catch (...) { work->error = tr("Library dependency check failed unexpectedly"); }
+        // Destruction drains MibEngine before destroying this object. A context-
+        // bound delivery is discarded automatically if shutdown wins the race.
+        QMetaObject::invokeMethod(this, [this, work, libraryRoot, completed] {
+            if (stopping) return;
+            const bool sameLibrary = sameRuntimePath(currentLibraryRoot(), libraryRoot);
+            if (sameLibrary) {
+                {
+                    QMutexLocker lock(&dependencyCommitMutex);
+                    dependencyIndex = work->index;
+                }
+                RebuildCandidateList(false);
+                emit inventoryChanged();
+            } else work->error = tr("The Library location changed during checking. Refresh the Library and try again.");
+            completed(work->error);
+            dependencyCheckRunning = false;
+            const bool refresh = deferredLibraryRefresh || !sameLibrary;
+            deferredLibraryRefresh = false;
+            const bool restore = work->resetParser || deferredRuntimeRequest || refresh;
+            deferredRuntimeRequest = false;
+            // The worker's final scan already incorporates deferred refreshes.
+            // Re-running RescanPath here would synchronously reread the Library
+            // and recreate the very completion-time UI stall we are avoiding.
+            if (!sameLibrary) dependencyIndexStale = true;
+            // Completion refreshes the Library and may republish a cached profile.
+            // Force restoration after those signals, honoring the latest selection.
+            if (restore) RestoreProfileRuntime();
+        }, Qt::QueuedConnection);
+    });
 }
 
 MibDependencyScanResult MibModule::RefreshDependencyIndex(QString *error)
 {
+    if (ParserCheckRunning()) {
+        deferredLibraryRefresh = true;
+        if (error) *error = tr("Library refresh is queued until MIB checking finishes");
+        return {};
+    }
     auto engineOperation=MibEngine::instance().beginOperation(QStringLiteral("dependency-refresh"));
     const QString libraryRoot = currentLibraryRoot();
     if (!sameRuntimePath(dependencyIndex.libraryRoot(), libraryRoot)) {
@@ -554,6 +667,11 @@ QStringList MibModule::LoadedModuleNames() const
 
 MibModuleRecord MibModule::ModuleMetadata(const QString &moduleName, const QString &localPath)
 {
+    if (ParserCheckRunning()) {
+        for (const auto &record : AvailableRecords)
+            if (record.name == moduleName && (localPath.isEmpty() || sameRuntimePath(record.path, localPath))) return record;
+        return {};
+    }
     auto engineOperation=MibEngine::instance().beginOperation(QStringLiteral("module-metadata"));
     SmiModule *module = smiGetModule(moduleName.toLocal8Bit().constData());
     if (!module && !localPath.isEmpty()) {
@@ -652,21 +770,13 @@ void MibModule::RemoveModule()
 
 void MibModule::ReadMibPaths()
 {
+    if (ParserCheckRunning()) { deferredLibraryRefresh = true; return; }
     auto engineOperation=MibEngine::instance().beginOperation(QStringLiteral("read-search-paths"));
-    // read in MIB path from config
-    QStringList paths;
+    // The visible Library collection is the sole source of runtime MIB folders.
+    // Historical mibpaths settings remain on disk but cannot override providers.
     QSettings settings;
-    int size = settings.beginReadArray("mibpaths");
-    for (int i = 0; i < size; ++i) {
-        settings.setArrayIndex(i);
-        paths << settings.value("dir").toString();
-    }
-
-    QSettings rootSettings;
-    const MibCollection collection(MibCollection::configuredRoot(rootSettings));
-    for (const QString &path : collection.runtimeSearchPaths())
-        if (!paths.contains(path)) paths.append(path);
-
+    const MibCollection collection(MibCollection::configuredRoot(settings));
+    const QStringList paths = collection.runtimeSearchPaths();
     smiSetPath(paths.join(SMI_PATH_SEPARATOR).toLocal8Bit().data());
 }
 
@@ -674,17 +784,83 @@ bool MibModule::ApplyProfileRuntime(const MibEffectivePlan &plan, QString *error
 {
     if(error)error->clear();
     if(!environmentManager){if(error)*error=tr("MIB Environment worker is unavailable");return false;}
+    const bool changed = latestRequestedPlan.sha256 != plan.sha256;
     requestedPlans.insert(plan.profileId,plan);latestRequestedPlan=plan;
+    if (ParserCheckRunning()) {
+        deferredRuntimeRequest |= changed;
+        if (changed) emit profileRuntimeBuildStarted(plan.profileName);
+        return true;
+    }
     environmentManager->request(plan);
     return true;
 }
 
-void MibModule::RestoreRuntimeAfterEditorValidation()
+void MibModule::StopBackgroundWork()
 {
-    const MibEffectivePlan restorePlan=hasActiveProfilePlan?activeProfilePlan:latestRequestedPlan;
+    if (stopping) return;
+    stopping = true;
+    if (environmentManager) environmentManager->shutdown();
+    // Parser operations cannot safely be interrupted. Drain while the owner and
+    // its callback context still exist; queued UI deliveries ignore shutdown.
+    MibEngine::instance().drain();
+}
+
+bool MibModule::VerifyEditorSource(const QByteArray &content,
+    const QString &sourceDirectory, MibValidationLevel level)
+{
+    if (stopping || ParserCheckRunning()) return false;
+    const QString root = currentLibraryRoot();
+    const auto snapshot = dependencyIndex;
+    editorVerificationRunning = true;
+    MibEngine::instance().submit([this, content, sourceDirectory, level, root, snapshot] {
+        MibEngineValidationResult result;
+        QStringList paths;
+        try {
+            paths = MibCollection(root).runtimeSearchPaths();
+            if (!sourceDirectory.isEmpty()) paths.append(sourceDirectory);
+            paths.removeDuplicates();
+            result = MibEngine::instance().validateSource(content, paths,
+                MibValidationErrorLevel(level), MibValidationRecursive(level), snapshot);
+        } catch (const std::exception &error) {
+            result.stagingError = QString::fromLocal8Bit(error.what());
+        } catch (...) {
+            result.stagingError = tr("Unexpected MIB verification failure");
+        }
+        // StopBackgroundWork/destruction drains the worker before this QObject
+        // can disappear. No widget or parser-owned pointer crosses threads.
+        QMetaObject::invokeMethod(this, [this, root, result = std::move(result), count = paths.size()]() mutable {
+            if (stopping) return;
+            if (!sameRuntimePath(currentLibraryRoot(), root)) {
+                result.diagnostics.clear();
+                result.stagingError = tr("The Library location changed during verification. Verify again using the current Library.");
+                deferredLibraryRefresh = true;
+            }
+            editorVerificationRunning = false;
+            // A user can select another profile or save a file during verification.
+            // Apply deferred discovery before restoring the latest requested plan.
+            const bool refresh = deferredLibraryRefresh;
+            deferredLibraryRefresh = false;
+            deferredRuntimeRequest = false;
+            if (refresh) {
+                RescanPath();
+            }
+            RestoreProfileRuntime();
+            emit editorVerificationFinished(result, count);
+        }, Qt::QueuedConnection);
+    });
+    return true;
+}
+
+void MibModule::RestoreProfileRuntime()
+{
+    if (ParserCheckRunning()) { deferredRuntimeRequest = true; return; }
+    // A selection may still be building. Restoring the previous active plan
+    // would silently undo the user's more recent selection.
+    const MibEffectivePlan restorePlan = !latestRequestedPlan.sha256.isEmpty()
+        ? latestRequestedPlan : activeProfilePlan;
     if(environmentManager&&!restorePlan.sha256.isEmpty()){requestedPlans.insert(restorePlan.profileId,restorePlan);
         environmentManager->request(restorePlan,true);return;}
-    Refresh();
+    ReadMibPaths();
 }
 
 MibEnvironmentBuildResult MibModule::BuildEnvironment(const MibEffectivePlan &plan)
@@ -701,8 +877,12 @@ MibEnvironmentBuildResult MibModule::BuildEnvironment(const MibEffectivePlan &pl
             : plan.runtimePaths.diagnostics().join(QStringLiteral("; "));
         return result;
     }
-    if (!dependencyIndex.ownsSnapshot(currentLibraryRoot(),
-                                      plan.runtimeConfiguration.libraryGeneration())) {
+    const auto ownsPlan = [&] {
+        QMutexLocker lock(&dependencyCommitMutex);
+        return dependencyIndex.ownsSnapshot(currentLibraryRoot(),
+                                            plan.runtimeConfiguration.libraryGeneration());
+    };
+    if (!ownsPlan()) {
         result.error = tr("MIB Library changed after the Profile runtime configuration was created");
         return result;
     }
@@ -746,8 +926,7 @@ MibEnvironmentBuildResult MibModule::BuildEnvironment(const MibEffectivePlan &pl
     problemInput.rootOutcomes=rootOutcomes;
     result.environment=MibEnvironmentExtractor().extract(isolatedPlan,missing,rootOutcomes,{},
                                                          MibBuildProblemReport(problemInput));
-    if (!dependencyIndex.ownsSnapshot(currentLibraryRoot(),
-                                      plan.runtimeConfiguration.libraryGeneration())) {
+    if (!ownsPlan()) {
         result.environment.reset();
         result.error = tr("MIB Library generation changed during Environment construction");
         return result;
@@ -775,6 +954,10 @@ MibEnvironmentBuildResult MibModule::BuildEnvironment(const MibEffectivePlan &pl
 bool MibModule::ValidateModuleFile(const QString &path, QString *error,
                                    MibValidationLevel level)
 {
+    if (ParserCheckRunning()) {
+        if (error) *error = tr("Wait for MIB checking to finish before validating downloaded files");
+        return false;
+    }
     auto engineOperation=MibEngine::instance().beginOperation(QStringLiteral("module-validation"));
     DiagnosticLogger::log("MIB", QStringLiteral("Downloaded MIB validation begin file=%1")
                           .arg(path));
@@ -802,6 +985,7 @@ bool MibModule::ValidateModuleFile(const QString &path, QString *error,
 
 void MibModule::Refresh()
 {
+    if (ParserCheckRunning()) { deferredLibraryRefresh = true; return; }
     std::unique_ptr<char, decltype(&std::free)> old_smipath{nullptr,std::free};
     {auto operation=MibEngine::instance().beginOperation(QStringLiteral("refresh-old-path"));old_smipath.reset(smiGetPath());}
     ReadMibPaths();
@@ -812,11 +996,12 @@ void MibModule::Refresh()
         RebuildCandidateList();
     }
 
-    if (hasActiveProfilePlan) ApplyProfileRuntime(activeProfilePlan);
+    RestoreProfileRuntime();
 }
 
 void MibModule::RescanPath()
 {
+    if (ParserCheckRunning()) { deferredLibraryRefresh = true; return; }
     ReadMibPaths();
     RebuildCandidateList();
     RebuildLoadedList();

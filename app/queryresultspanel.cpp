@@ -63,13 +63,13 @@ public:
 QueryResultsPanel::QueryResultsPanel(QWidget *parent) : QWidget(parent)
 {
     setObjectName("WorkbenchResultsPage");
-    auto *layout = new QVBoxLayout(this); layout->setContentsMargins(4, 4, 4, 4);
+    auto *layout = new QVBoxLayout(this); layout->setContentsMargins(10, 10, 10, 10);
     auto *tools = new QHBoxLayout; controls = tools;
-    summary = new QLabel(tr("No query results"), this); summary->setObjectName("ResultsSummary");
-    summary->setTextFormat(Qt::PlainText); summary->setWordWrap(true); tools->addWidget(summary, 1);
+    summary = new QLabel(tr("Right-click a MIB object to start a query."), this); summary->setObjectName("ResultsSummary");
+    summary->setTextFormat(Qt::PlainText); summary->setWordWrap(true); layout->addWidget(summary);
     filter = new QLineEdit(this); filter->setObjectName("ResultsFilter");
     filter->setPlaceholderText(tr("Filter results…")); filter->setClearButtonEnabled(true); filter->setMinimumWidth(180);
-    filter->setAccessibleName(tr("Filter results")); tools->addWidget(filter);
+    filter->setAccessibleName(tr("Filter results")); tools->addWidget(filter, 1);
     display = new QComboBox(this); display->setObjectName("ResultsDisplayMode");
     display->addItems({tr("Interpreted"), tr("Raw")}); display->setAccessibleName(tr("Value display"));
     tools->addWidget(display); layout->addLayout(tools);
@@ -86,6 +86,7 @@ QueryResultsPanel::QueryResultsPanel(QWidget *parent) : QWidget(parent)
     results->horizontalHeader()->setContextMenuPolicy(Qt::CustomContextMenu);
     results->horizontalHeader()->setToolTip(tr("Right-click to choose which columns are shown."));
     layout->addWidget(results, 1);
+    setProperty("workbenchFocusTarget", QStringLiteral("StructuredQueryResults"));
     connect(results, &QWidget::customContextMenuRequested, this, &QueryResultsPanel::showValueMenu);
     connect(results->horizontalHeader(), &QWidget::customContextMenuRequested, this, &QueryResultsPanel::showColumnMenu);
     auto *debounce = new QTimer(this); debounce->setSingleShot(true); debounce->setInterval(100);
@@ -231,7 +232,7 @@ void QueryResultsPanel::filterRows()
 }
 void QueryResultsPanel::updateSummary()
 {
-    if (!elapsed.isValid()) { summary->setText(tr("No query results")); return; }
+    if (!elapsed.isValid()) { summary->setText(tr("Right-click a MIB object to start a query.")); return; }
     int visible = results->rowCount();
     if (!filter->text().trimmed().isEmpty()) {
         visible = 0; for (int row = 0; row < results->rowCount(); ++row) visible += !results->isRowHidden(row);
@@ -242,6 +243,10 @@ void QueryResultsPanel::updateSummary()
     if (!queryObject.isEmpty()) parts << queryObject;
     if (!queryOid.isEmpty()) parts << queryOid;
     parts << rows << (finishedMs < 0 ? tr("Running…") : tr("%1 s").arg(finishedMs/1000.0, 0, 'f', 2));
+    if (visible == 0 && results->rowCount() > 0)
+        parts << tr("No rows match the filter. Clear the filter to see all results.");
+    else if (results->rowCount() == 0 && finishedMs < 0)
+        parts << tr("Waiting for the first response…");
     summary->setText(parts.join(QStringLiteral("  |  ")));
 }
 QString QueryResultsPanel::oidAt(int row, int column) const

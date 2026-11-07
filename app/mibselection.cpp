@@ -1,3 +1,4 @@
+#include "dialoglayout.h"
 /*
     Copyright (C) 2004-2011 Martin Jolicoeur (snmpb1@gmail.com) 
 
@@ -23,6 +24,8 @@
 #include <QValidator>
 
 #include "mibselection.h"
+#include "mibmodelview.h"
+#include "mibtreemodel.h"
 #include <QLineEdit>
 #include "agent.h"
 #include "mibenvironmentregistry.h"
@@ -40,27 +43,35 @@ MibSelection::MibSelection(Snmpb *snmpb, QWidget *parent, QString title, int _fl
     environment = MibEnvironmentRegistry::active();
     flags = _flags;
 
-    dprompt = new QDialog(parent, Qt::WindowTitleHint);
+    dprompt = new QDialog(parent);
+    dprompt->setObjectName("OidChooserDialog");
     dprompt->resize(400, 500);
 
     gl = new QGridLayout(dprompt);
-    oidlabel = new QLabel(tr("<b>OID:</b>"), dprompt);
+    oidlabel = new QLabel(tr("&OID"), dprompt);
     gl->addWidget(oidlabel, 1, 0, 1, 1);
 
     oid_le = new QLineEdit("", dprompt);
+    oid_le->setObjectName("OidChooserAddress"); oidlabel->setBuddy(oid_le);
+    oid_le->setPlaceholderText(tr("Object OID, with instance if needed"));
     connect(oid_le, SIGNAL(editingFinished(void)), 
             this, SLOT(GetOidLe(void)));
     gl->addWidget(oid_le, 2, 0, 1, 1);
 
-    bmv = new BasicMibView(dprompt);
-    bmv->RegisterToLoader(s->MibLoaderObj());
+    bmv = new MibModelView(dprompt, MibModelView::Mode::OidSelection);
+    bmv->setObjectName(QStringLiteral("OidChooserTree"));
+    // Capture the same immutable context as the varbind editor. A later Profile
+    // publication must not replace this chooser's tree underneath its selection.
+    auto *treeModel = new MibTreeModel(bmv);
+    treeModel->setSnapshot(s->MibLoaderObj()->TreeSnapshot());
+    bmv->setTreeModel(treeModel);
     bmv->Populate();
     gl->addWidget(bmv, 3, 0, 1, 1);
 
-    syntaxlabel = new QLabel(tr("<b>Syntax:</b>"), dprompt);
+    syntaxlabel = new QLabel(tr("&Syntax"), dprompt);
     gl->addWidget(syntaxlabel, 4, 0, 1, 1);
 
-    syntax_cb = new QComboBox(dprompt);
+    syntax_cb = new QComboBox(dprompt); syntaxlabel->setBuddy(syntax_cb);
     gl->addWidget(syntax_cb, 5, 0, 1, 1);
     syntax_cb->addItem("Integer32", QVariant(sNMP_SYNTAX_INT32));
     syntax_cb->addItem("UInteger32", QVariant(sNMP_SYNTAX_UINT32));
@@ -83,10 +94,10 @@ MibSelection::MibSelection(Snmpb *snmpb, QWidget *parent, QString title, int _fl
 
     if (flags & MIBSELECTION_VALUE)
     {
-        vallabel = new QLabel(tr("<b>Value:</b>"), dprompt);
+        vallabel = new QLabel(tr("&Value"), dprompt);
         gl->addWidget(vallabel, 6, 0, 1, 1);
 
-        val_le = new QLineEdit(dprompt);
+        val_le = new QLineEdit(dprompt); vallabel->setBuddy(val_le);
         gl->addWidget(val_le, 7, 0, 1, 1);
     }
     else
@@ -97,7 +108,7 @@ MibSelection::MibSelection(Snmpb *snmpb, QWidget *parent, QString title, int _fl
 
     if (flags & (MIBSELECTION_SET|MIBSELECTION_TYPE))
     {
-        infolabel = new QLabel("");
+        infolabel = new QLabel("", dprompt); infolabel->setWordWrap(true);
         gl->addWidget(infolabel, 9, 0, 1, 1);
     }
     else
@@ -109,6 +120,8 @@ MibSelection::MibSelection(Snmpb *snmpb, QWidget *parent, QString title, int _fl
     gl->addWidget(box, 10, 0, 1, 1);
     connect(box, SIGNAL(accepted()), this, SLOT(OKButtonPressed()));
     connect(box, SIGNAL(rejected()), dprompt, SLOT(reject()));
+    gl->setRowStretch(3, 1);
+    DialogLayout::initialize(*dprompt, QSize(480, 580));
     QMetaObject::connectSlotsByName(dprompt);
 }
 
@@ -361,7 +374,8 @@ void MibSelection::SetOidInfoType(const QString& oid)
     {
         QStringList suffix;
         const auto *thenode=environment?environment->longestPrefixNode(oid,&suffix):nullptr;
-        if (thenode && (suffix.isEmpty() || thenode->kind==MibEnvironmentNodeKind::Column))
+        if (thenode && (suffix.isEmpty() || thenode->kind == MibEnvironmentNodeKind::Column ||
+            (thenode->kind == MibEnvironmentNodeKind::Scalar && suffix == QStringList{QStringLiteral("0")})))
         {
             // If a column object, ask the user to select the instance ...
             if ((thenode->kind == MibEnvironmentNodeKind::Column) && suffix.isEmpty())
@@ -490,12 +504,11 @@ bool MibSelection::run(const QString& init_oid, int init_syntax, const QString& 
 {
     bool status = false;
 
-    bmv->SelectFromOid(init_oid);
+    SetOidInfoType(init_oid);
+    bmv->SelectFromOid(semanticOid.isEmpty() ? init_oid : semanticOid);
 
-    connect( bmv, SIGNAL( SelectedOid(const QString&) ), 
-             this, SLOT( GetSelectedOid(const QString&) ));
-
-    SetOidInfoType(init_oid); 
+    const auto selectionConnection = connect(bmv, &MibModelView::CurrentObjectChanged,
+                                             this, &MibSelection::GetSelectedOid);
     SetSyntax(init_syntax);
 
     // Do we draw the value box ?
@@ -533,7 +546,7 @@ bool MibSelection::run(const QString& init_oid, int init_syntax, const QString& 
         status = true;
     }
 
-    disconnect( bmv, SIGNAL( SelectedOid(const QString&) ), 0, 0);
+    disconnect(selectionConnection);
     bmv->clearSelection();
 
     return status;
@@ -541,8 +554,8 @@ bool MibSelection::run(const QString& init_oid, int init_syntax, const QString& 
 
 void MibSelection::bgrun(const QString& oid)
 {
-    bmv->SelectFromOid(oid);
-    SetOidInfoType(oid); 
+    SetOidInfoType(oid);
+    bmv->SelectFromOid(semanticOid.isEmpty() ? oid : semanticOid);
     SetSyntax();
     OKButtonPressed();
 

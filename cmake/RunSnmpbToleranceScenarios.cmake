@@ -4,6 +4,7 @@
 # in launch-smoke mode, and checks the Environment status and problem report that the application
 # writes to launch-smoke.log. Nothing here touches the user's real settings or MIB folders.
 #
+# Optional: SNMPB_TOLERANCE_ONLY selects one named scenario for a focused run.
 # Required: SNMPB_EXECUTABLE SNMPB_QT_BIN_DIR SNMPB_SOURCE_DIR SNMPB_TOLERANCE_DIR
 
 # Script mode starts with old policies; IN_LIST and the list() operations below need newer ones.
@@ -196,7 +197,13 @@ END
 #   REQUIRE_EXIT_ZERO | ALLOW_EXIT_ONE
 #   EXPECT <regex> ...)                    each must match launch-smoke.log
 function(run_scenario name)
-    cmake_parse_arguments(S "REQUIRE_EXIT_ZERO;ALLOW_EXIT_ONE;LIVE;LIVE_SINGLE;NO_STANDARDS_SCOPE;BROKEN_SMI" ""
+    if(DEFINED SNMPB_TOLERANCE_ONLY)
+        if(NOT name STREQUAL SNMPB_TOLERANCE_ONLY)
+            return()
+        endif()
+        set(SNMPB_TOLERANCE_SELECTED TRUE PARENT_SCOPE)
+    endif()
+    cmake_parse_arguments(S "DEPENDENCY_CHECK;REQUIRE_EXIT_ZERO;ALLOW_EXIT_ONE;LIVE;LIVE_SINGLE;NO_STANDARDS_SCOPE;BROKEN_SMI" ""
         "FILES;ROOTS;MODIFIED_ROOTS;UNRESOLVED;EXPECT;REJECT;EDIT_FILE;EDIT_FROM;EDIT_TO;LIVE_TABLE;LIVE_WALK;LIVE_BIGWALK;LIVE_CREDENTIAL" ${ARGN})
     set(dir "${SNMPB_TOLERANCE_DIR}/${name}")
     set(library "${dir}/MIB-Library")
@@ -283,6 +290,14 @@ function(run_scenario name)
     if(S_LIVE_CREDENTIAL)
         set(live_credential "${S_LIVE_CREDENTIAL}")
     endif()
+    set(scenario_timeout 90)
+    if(S_DEPENDENCY_CHECK)
+        file(WRITE "${dir}/extra-fixture.mib" "${EXTRA_MIB}")
+        list(APPEND app_command --smoke-dependency-check)
+        # This workflow performs repeated full Library checks and profile restores,
+        # rather than the usual single launch. Leave room for parallel CTest jobs.
+        set(scenario_timeout 180)
+    endif()
     set(live_table_args "")
     if(S_LIVE_TABLE)
         set(live_table_args --smoke-live-table "${S_LIVE_TABLE}")
@@ -318,7 +333,7 @@ function(run_scenario name)
             WORKING_DIRECTORY "${dir}"
             RESULT_VARIABLE exit_code
             OUTPUT_VARIABLE out ERROR_VARIABLE err
-            TIMEOUT 90)
+            TIMEOUT ${scenario_timeout})
     endif()
 
     set(problems "")
@@ -354,6 +369,16 @@ endfunction()
 
 # ---- scenarios --------------------------------------------------------------------------------
 # 1. Control: everything is fine.
+string(REPLACE "GOOD-MIB" "EXTRA-MIB" EXTRA_MIB "${GOOD_MIB}")
+string(REPLACE "good" "extra" EXTRA_MIB "${EXTRA_MIB}")
+string(REPLACE "Good" "Extra" EXTRA_MIB "${EXTRA_MIB}")
+string(REPLACE "90001" "90009" EXTRA_MIB "${EXTRA_MIB}")
+run_scenario(dependency-check-isolation REQUIRE_EXIT_ZERO DEPENDENCY_CHECK
+    FILES Prod/GOOD-MIB=GOOD_MIB Copies/good-copy.mib=GOOD_MIB
+    ROOTS GOOD-MIB@Prod/GOOD-MIB
+    EXPECT "DEPENDENCY-CHECK completed"
+    REJECT "launch-smoke: FAIL")
+
 run_scenario(good REQUIRE_EXIT_ZERO
     FILES "Prod/GOOD-MIB=GOOD_MIB" ROOTS "GOOD-MIB@Prod/GOOD-MIB"
     EXPECT "ENVIRONMENT status=Complete loaded=2 failed=0 errors=0 warnings=0")
@@ -520,12 +545,15 @@ if(SNMPB_PYTHON)
                "PASS: live: a wrong-type answer shows a plain-English warning naming both types"
                "PASS: live: the Results table shows the received type and raw value beside the interpretation"
         REJECT "FAIL")
-    set(agent_log "")
-    if(EXISTS "${SNMPB_TOLERANCE_DIR}/live-get-through-connection-bar/agent.log")
-        file(READ "${SNMPB_TOLERANCE_DIR}/live-get-through-connection-bar/agent.log" agent_log)
-    endif()
-    if(NOT agent_log MATCHES "request type=0xa0 version=1 community=smokero oid=1.3.6.1.2.1.1.1.0")
-        message(SEND_ERROR "live scenario: the agent did not see an SNMPv2c Get with the saved community:\n${agent_log}")
+    if(NOT DEFINED SNMPB_TOLERANCE_ONLY OR
+       SNMPB_TOLERANCE_ONLY STREQUAL "live-get-through-connection-bar")
+        set(agent_log "")
+        if(EXISTS "${SNMPB_TOLERANCE_DIR}/live-get-through-connection-bar/agent.log")
+            file(READ "${SNMPB_TOLERANCE_DIR}/live-get-through-connection-bar/agent.log" agent_log)
+        endif()
+        if(NOT agent_log MATCHES "request type=0xa0 version=1 community=smokero oid=1.3.6.1.2.1.1.1.0")
+            message(SEND_ERROR "live scenario: the agent did not see an SNMPv2c Get with the saved community:\n${agent_log}")
+        endif()
     endif()
 else()
     message(STATUS "Scenario live-get-through-connection-bar: skipped (no Python interpreter)")
@@ -651,4 +679,8 @@ endif()
 
 if(failures)
     message(FATAL_ERROR "Tolerance scenarios failed")
+endif()
+
+if(DEFINED SNMPB_TOLERANCE_ONLY AND NOT SNMPB_TOLERANCE_SELECTED)
+    message(FATAL_ERROR "Unknown tolerance scenario: ${SNMPB_TOLERANCE_ONLY}")
 endif()

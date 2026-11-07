@@ -97,7 +97,8 @@ void LogSnmpb::SetLoggingState ( int state )
     else 
     if (state == Qt::Unchecked)
     {
-        s->MainUI()->LogOutput->setEnabled(false);
+        // Application diagnostics remain readable even when SNMP library logging is off.
+        s->MainUI()->LogOutput->setEnabled(true);
         s->MainUI()->LogLevels->setEnabled(false);
 
         for (int i = 1; i <= LOG_TYPES; i++)

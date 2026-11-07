@@ -1,3 +1,4 @@
+#include "dialoglayout.h"
 /*
     Copyright (C) 2004-2011 Martin Jolicoeur (snmpb1@gmail.com) 
 
@@ -172,8 +173,12 @@ void BasicMibView::FindFromNode(void)
     QDialog d(this);
 
     find_uid.setupUi(&d);
-    connect( find_uid.buttonFindNext, SIGNAL( clicked() ), 
-             this, SLOT( ExecuteFind() ));
+    auto *findNext = DialogLayout::action(find_uid.buttonBox, tr("Find Next"), "buttonFindNext", true);
+    connect(findNext, &QPushButton::clicked, this, &BasicMibView::ExecuteFind);
+    connect(find_uid.comboFind, &QComboBox::editTextChanged, findNext,
+            [findNext](const QString &text) { findNext->setEnabled(!text.isEmpty()); });
+    findNext->setEnabled(false);
+    DialogLayout::initialize(d, QSize(460, 280));
     find_uid.comboFind->setFocus(Qt::TabFocusReason);
 
     find_uid.comboFind->addItems(find_strings);
@@ -668,7 +673,15 @@ MibViewLoader::MibViewLoader ()
 void MibViewLoader::SetEnvironment(MibEnvironmentPtr value, const QStringList &modules)
 {
     environment = std::move(value); loadedModuleNames = modules;
-    for (BasicMibView *view : std::as_const(views)) { view->SetDirty(); view->clear(); }
+    views.removeIf([](const auto &view) { return view.isNull(); });
+    // Chooser dialogs own their trees. A closed chooser is no longer a target;
+    // clearing a live tree can also emit signals that close another chooser.
+    const auto currentViews = views;
+    for (const auto &view : currentViews) {
+        if (!view) continue;
+        view->SetDirty();
+        view->clear();
+    }
     treeSnapshot = {}; treeSnapshot.oid = QStringLiteral("1"); treeSnapshot.name = QStringLiteral("MIB Tree");
     std::function<MibTreeNodeRecord(const MibEnvironmentNodeRecord &)> project;
     project = [this, &project](const MibEnvironmentNodeRecord &node) {
@@ -697,7 +710,8 @@ void MibViewLoader::SetEnvironment(MibEnvironmentPtr value, const QStringList &m
 
 void MibViewLoader::RegisterView(BasicMibView* view)
 {
-    views.append(view);
+    views.removeIf([](const auto &registered) { return registered.isNull(); });
+    if (view && !views.contains(view)) views.append(view);
 }
 
 int MibViewLoader::IsPartOfLoadedModules(const MibEnvironmentNodeRecord &node)

@@ -26,6 +26,7 @@
 #include <qtimer.h>
 #include <qpixmap.h>
 #include <QContextMenuEvent>
+#include <QPointer>
 #include <qtreewidget.h>
 #include <qheaderview.h>
 #include "ui_find.h"
@@ -170,7 +171,7 @@ private:
     int ignoreconformance;
     int ignoreleafs;
     
-    QList<BasicMibView*> views;
+    QList<QPointer<BasicMibView>> views;
     MibTreeNodeRecord treeSnapshot;
     MibTreeModel *treeModel;
     MibEnvironmentPtr environment;

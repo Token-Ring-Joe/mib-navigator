@@ -101,7 +101,8 @@ public:
     static MibDependencyIndex forLibraryRoot(const QString &libraryRoot);
     bool load(QString *error = nullptr);
     bool save(QString *error = nullptr) const;
-    MibDependencyScanResult update(const QStringList &searchPaths, QString *error = nullptr);
+    MibDependencyScanResult update(const QStringList &searchPaths, QString *error = nullptr,
+                                   bool persist = true);
     MibDependencyInspection inspect(const QStringList &searchPaths) const;
     MibProviderResolution provider(const QString &moduleName) const;
     QList<MibIndexedProvider> providersFor(const QString &moduleName) const;

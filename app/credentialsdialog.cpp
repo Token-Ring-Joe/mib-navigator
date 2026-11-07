@@ -1,8 +1,10 @@
+#include "dialoglayout.h"
 #include "credentialsdialog.h"
 #include "communitycredentialservice.h"
 #include "usmcredentialservice.h"
 #include "snmp_pp/snmp_pp.h"
 #include <QListWidget>
+#include <QApplication>
 #include <QLineEdit>
 #include <QComboBox>
 #include <QLabel>
@@ -11,12 +13,50 @@
 #include <QToolButton>
 #include <QMenu>
 #include <QFormLayout>
+#include <QScrollArea>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QDialogButtonBox>
 #include <QSignalBlocker>
 #include <QMessageBox>
 #include <QUuid>
+#include <QStyledItemDelegate>
+#include <QPainter>
+#include <QStyle>
+
+namespace {
+constexpr int credentialNameRole = Qt::UserRole + 2;
+constexpr int credentialVersionRole = Qt::UserRole + 3;
+int versionWidth(const QFontMetrics &metrics) { return metrics.horizontalAdvance(QStringLiteral("SNMPv1 / v2c")) + 20; }
+class CredentialColumns final : public QStyledItemDelegate
+{
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+    void paint(QPainter *painter, const QStyleOptionViewItem &option, const QModelIndex &index) const override
+    {
+        QStyleOptionViewItem item(option); initStyleOption(&item, index); item.text.clear();
+        const QStyle *style = item.widget ? item.widget->style() : QApplication::style();
+        style->drawControl(QStyle::CE_ItemViewItem, &item, painter, item.widget);
+        const int width = versionWidth(item.fontMetrics);
+        QRect name = item.rect.adjusted(10, 0, -width, 0);
+        QRect version = item.rect.adjusted(qMax(0, item.rect.width() - width), 0, -8, 0);
+        const auto group = !(item.state & QStyle::State_Enabled) ? QPalette::Disabled : QPalette::Active;
+        painter->save(); painter->setFont(item.font);
+        painter->setPen(item.palette.color(group, item.state & QStyle::State_Selected ? QPalette::HighlightedText : QPalette::Text));
+        painter->drawText(name, Qt::AlignLeft | Qt::AlignVCenter,
+            item.fontMetrics.elidedText(index.data(credentialNameRole).toString(), Qt::ElideRight, qMax(0, name.width()-8)));
+        painter->drawText(version, Qt::AlignRight | Qt::AlignVCenter, index.data(credentialVersionRole).toString());
+        painter->restore();
+    }
+};
+void setCredentialLabel(QListWidgetItem *item, const QString &name, const QString &version)
+{
+    item->setText(name);
+    item->setData(credentialNameRole, name); item->setData(credentialVersionRole, version);
+    item->setData(Qt::AccessibleTextRole, QObject::tr("%1, %2").arg(name, version));
+    item->setToolTip(QObject::tr("%1 · %2").arg(name, version));
+}
+}
 
 CredentialsDialog::CredentialsDialog(CommunityCredentialService *community,
     UsmCredentialService *service, QWidget *parent)
@@ -44,10 +84,18 @@ CredentialsDialog::CredentialsDialog(CommunityCredentialService *community,
     removeButton->setObjectName("CredentialDelete"); actions->addWidget(removeButton);
     left->addLayout(actions);
     list = new QListWidget(this); list->setObjectName("CredentialList");
-    list->setMinimumWidth(220); left->addWidget(list); body->addLayout(left, 1);
+    list->setMinimumWidth(230); list->setItemDelegate(new CredentialColumns(list));
+    list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    auto *headings = new QHBoxLayout; headings->setContentsMargins(10, 0, 8, 0);
+    auto *nameHeading = new QLabel(tr("Name"), this); nameHeading->setProperty("caption", true);
+    auto *versionHeading = new QLabel(tr("Version"), this); versionHeading->setProperty("caption", true);
+    versionHeading->setFixedWidth(versionWidth(versionHeading->fontMetrics())); versionHeading->setAlignment(Qt::AlignRight);
+    headings->addWidget(nameHeading, 1); headings->addWidget(versionHeading); left->addLayout(headings);
+    left->addWidget(list); body->addLayout(left, 1);
     editor = new QWidget(this);
     auto *right = new QVBoxLayout(editor);
-    auto *common = new QFormLayout;
+    right->setContentsMargins(0, 0, 0, 0); right->setSpacing(12);
+    auto *common = new QFormLayout; common->setVerticalSpacing(12); common->setHorizontalSpacing(16);
     displayName = new QLineEdit(editor); displayName->setObjectName("CredentialDisplayName");
     versionLabel = new QLabel(editor); versionLabel->setObjectName("CredentialVersion");
     common->addRow(tr("Display name"), displayName); common->addRow(tr("Version"), versionLabel);
@@ -85,7 +133,17 @@ CredentialsDialog::CredentialsDialog(CommunityCredentialService *community,
     userForm->addRow(tr("Privacy"), privacyProtocol); userForm->addRow(tr("Privacy secret"), privacySecret);
     auto *hint = new QLabel(tr("The display name identifies this saved credential. The USM username is sent to the device and may be shared by several credentials."), userPage);
     hint->setWordWrap(true); userForm->addRow(hint); pages->addWidget(userPage);
-    right->addWidget(pages); right->addStretch(); body->addWidget(editor, 2); outer->addLayout(body, 1);
+    for (auto *form : {common, communityForm, userForm}) {
+        form->setContentsMargins(0, 0, 0, 0);
+        form->setVerticalSpacing(12); form->setHorizontalSpacing(16);
+        form->setRowWrapPolicy(QFormLayout::WrapLongRows);
+    }
+    right->addWidget(pages); right->addStretch();
+    auto *scroll = new QScrollArea(this); scroll->setObjectName("CredentialEditorScroll");
+    scroll->setWidgetResizable(true); scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setMinimumWidth(260); scroll->setWidget(editor);
+    body->setSpacing(16); body->addWidget(scroll, 2); outer->addLayout(body, 1);
+    duplicateButton->setAutoDefault(false); removeButton->setAutoDefault(false);
     status = new QLabel(this); status->setObjectName("CredentialStatus"); status->setWordWrap(true); outer->addWidget(status);
     buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
     outer->addWidget(buttons);
@@ -100,6 +158,7 @@ CredentialsDialog::CredentialsDialog(CommunityCredentialService *community,
     });
     connect(privacyProtocol, &QComboBox::currentIndexChanged, this, &CredentialsDialog::updateSecurityFields);
     connect(displayName, &QLineEdit::editingFinished, this, &CredentialsDialog::storeFields);
+    DialogLayout::initialize(*this, QSize(860, 560));
 }
 
 void CredentialsDialog::prepare(Tab preferred)
@@ -134,7 +193,7 @@ void CredentialsDialog::storeFields()
         auto *item = list->item(row);
         if (item->data(Qt::UserRole).toString() == currentId &&
             item->data(Qt::UserRole + 1).toInt() == static_cast<int>(currentKind))
-            item->setText(tr("%1 — %2").arg(displayName->text(), versionLabel->text()));
+            setCredentialLabel(item, displayName->text(), versionLabel->text());
     }
 }
 
@@ -183,7 +242,8 @@ void CredentialsDialog::rebuildList(const QString &selectedId, CredentialKind ki
     {
         QSignalBlocker block(list); list->clear();
         const auto append = [this](const QString &id, CredentialKind kind, const QString &name, const QString &version) {
-            auto *item = new QListWidgetItem(tr("%1 — %2").arg(name, version), list);
+            auto *item = new QListWidgetItem(list);
+            setCredentialLabel(item, name, version);
             item->setData(Qt::UserRole, id); item->setData(Qt::UserRole + 1, static_cast<int>(kind));
         };
         for (const auto &r : communities) append(r.identity.credentialId, CredentialKind::Community, r.displayName,

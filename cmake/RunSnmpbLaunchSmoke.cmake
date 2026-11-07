@@ -11,6 +11,16 @@ set(settings_dir "${SNMPB_SMOKE_DIR}/snmpb.sourceforge.net")
 set(library_root "${SNMPB_SMOKE_DIR}/MIB-Library")
 file(MAKE_DIRECTORY "${settings_dir}")
 file(MAKE_DIRECTORY "${library_root}/Standards")
+file(MAKE_DIRECTORY "${library_root}/Unassigned" "${SNMPB_SMOKE_DIR}/editor")
+file(WRITE "${library_root}/Unassigned/editor-dependency.txt"
+    "SMOKE-EDITOR-DEPENDENCY-MIB DEFINITIONS ::= BEGIN\nIMPORTS enterprises FROM SNMPv2-SMI;\nsmokeEditorBranch OBJECT IDENTIFIER ::= { enterprises 64993 }\nEND\n")
+set(editor_fixture "${SNMPB_SMOKE_DIR}/editor/outside-profile.mib")
+file(WRITE "${editor_fixture}"
+    "SMOKE-EDITOR-ROOT-MIB DEFINITIONS ::= BEGIN\nIMPORTS smokeEditorBranch FROM SMOKE-EDITOR-DEPENDENCY-MIB;\nsmokeEditorLeaf OBJECT IDENTIFIER ::= { smokeEditorBranch 1 }\nEND\n")
+set(legacy_root "${SNMPB_SMOKE_DIR}/Legacy-only-MIBs")
+file(MAKE_DIRECTORY "${legacy_root}")
+file(WRITE "${legacy_root}/legacy-only.mib"
+    "LEGACY-ONLY-MIB DEFINITIONS ::= BEGIN\nIMPORTS enterprises FROM SNMPv2-SMI;\nlegacyOnly OBJECT IDENTIFIER ::= { enterprises 900099 }\nEND\n")
 file(WRITE "${settings_dir}/SnmpB.ini"
 "[ui]\n"
 "theme=dark\n"
@@ -18,6 +28,10 @@ file(WRITE "${settings_dir}/SnmpB.ini"
 "[mib-library]\n"
 "root=${library_root}\n"
 "current-profile=builtin.standards-mib2\n"
+"\n"
+"[mibpaths]\n"
+"1\\dir=${legacy_root}\n"
+"size=1\n"
 "\n"
 "[mibpreloads]\n"
 "1\\mib=SNMPv2-MIB\n"
@@ -42,7 +56,7 @@ execute_process(
         "PATH=${SNMPB_QT_BIN_DIR};$ENV{PATH}"
         "${SNMPB_EXECUTABLE}"
         --launch-smoke-test "${SNMPB_SMOKE_DIR}"
-        --smoke-mib "${SNMPB_RUNTIME_DATA_DIR}/mibs/SNMPv2-MIB"
+        --smoke-mib "${editor_fixture}"
     WORKING_DIRECTORY "${SNMPB_SMOKE_DIR}"
     RESULT_VARIABLE smoke_result
     OUTPUT_VARIABLE smoke_stdout
@@ -70,7 +84,7 @@ execute_process(
         "PATH=${SNMPB_QT_BIN_DIR};$ENV{PATH}"
         "${SNMPB_EXECUTABLE}"
         --launch-smoke-test "${SNMPB_SMOKE_DIR}"
-        --smoke-mib "${SNMPB_RUNTIME_DATA_DIR}/mibs/SNMPv2-MIB"
+        --smoke-mib "${editor_fixture}"
     WORKING_DIRECTORY "${SNMPB_SMOKE_DIR}"
     RESULT_VARIABLE reload_result
     TIMEOUT 45
@@ -102,12 +116,20 @@ foreach(retired_file agents.conf device-tree.conf profile-metadata.conf credenti
 endforeach()
 
 file(READ "${settings_dir}/SnmpB.ini" saved_settings)
-foreach(runtime_subdir IN ITEMS mibs pibs)
-    string(FIND "${saved_settings}"
-        "${SNMPB_RUNTIME_DATA_DIR}/${runtime_subdir}" runtime_path_index)
-    if(runtime_path_index EQUAL -1)
-        message(FATAL_ERROR
-            "Fresh configuration did not persist the runtime ${runtime_subdir} path"
-        )
+# The Library owns live paths; old settings are retained without writing bundled
+# install folders back into the retired preference array.
+string(FIND "${saved_settings}" "${legacy_root}" retained_legacy_path)
+if(retained_legacy_path EQUAL -1)
+    message(FATAL_ERROR "Retired legacy path settings were overwritten or discarded")
+endif()
+file(READ "${settings_dir}/smi.conf" parser_configuration)
+foreach(folder IN ITEMS "${library_root}/Standards" "${library_root}/Unassigned")
+    string(FIND "${parser_configuration}" "${folder}" library_path_index)
+    if(library_path_index EQUAL -1)
+        message(FATAL_ERROR "Startup parser configuration omits Library folder: ${folder}")
     endif()
 endforeach()
+string(FIND "${parser_configuration}" "${legacy_root}" active_legacy_path)
+if(NOT active_legacy_path EQUAL -1)
+    message(FATAL_ERROR "Retired legacy path still controls the startup parser")
+endif()

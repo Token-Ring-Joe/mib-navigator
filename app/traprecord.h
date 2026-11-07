@@ -4,14 +4,15 @@
 #include <QDateTime>
 #include <QList>
 #include <QString>
+#include "snmp_pp/snmp_pp.h"
 
 enum class TrapSnmpVersion { Unknown, V1, V2c, V3 };
 
 struct TrapVarbind
 {
-    QString oid;
-    int syntax = 0;
-    QString printableValue;
+    // SNMP++ Vb owns a deep copy of the received typed value, including binary
+    // octets. Never reconstruct wire values from printable or MIB-rendered text.
+    Vb value;
     bool valid = true;
 };
 

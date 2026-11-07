@@ -3,6 +3,7 @@
 #include <QAbstractItemView>
 #include <QAction>
 #include <QBoxLayout>
+#include <QComboBox>
 #include <QDockWidget>
 #include <QGridLayout>
 #include <QLabel>
@@ -30,6 +31,37 @@ constexpr auto panelVisibleKey = "workbench/panel-visible";
 constexpr auto panelTabKey = "workbench/panel-tab";
 constexpr auto panelHeightKey = "workbench/panel-height";
 constexpr auto mibPanelTabKey = "workbench/mib-panel-tab";
+
+// Reacquire visible controls when invoked; never retain an index or a hidden page's focus.
+void focusContent(QWidget *page)
+{
+    if (!page) return;
+    const QString name = page->property("workbenchFocusTarget").toString();
+    if (!name.isEmpty()) {
+        if (auto *control = page->findChild<QWidget *>(name); control && control->isVisible() && control->isEnabled()) {
+            control->setFocus(Qt::ShortcutFocusReason);
+            return;
+        }
+    }
+    if (auto *tabs = qobject_cast<QTabWidget *>(page)) {
+        focusContent(tabs->currentWidget());
+        return;
+    }
+    for (auto *tabs : page->findChildren<QTabWidget *>()) {
+        if (tabs->isVisible()) { focusContent(tabs->currentWidget()); return; }
+    }
+    if (auto *previous = page->focusWidget(); previous && previous != page &&
+        previous->isVisible() && previous->isEnabled() && (previous->focusPolicy() & Qt::TabFocus)) {
+        previous->setFocus(Qt::ShortcutFocusReason);
+        return;
+    }
+    for (auto *child : page->findChildren<QWidget *>()) {
+        if (child->isVisible() && child->isEnabled() && (child->focusPolicy() & Qt::TabFocus)) {
+            child->setFocus(Qt::ShortcutFocusReason);
+            return;
+        }
+    }
+}
 }
 
 WorkbenchShell::WorkbenchShell(QMainWindow *window, QWidget *,
@@ -40,6 +72,7 @@ WorkbenchShell::WorkbenchShell(QMainWindow *window, QWidget *,
 {
     workspaceTabs->setObjectName(QStringLiteral("WorkbenchDocuments"));
     workspaceTabs->setDocumentMode(true);
+    workspaceTabs->tabBar()->setObjectName(QStringLiteral("WorkspaceNavigation"));
     workspaceTabs->setTabsClosable(false);
     workspaceTabs->setMovable(false);
     while (workspaceTabs->count()) workspaceTabs->removeTab(0);
@@ -77,7 +110,7 @@ WorkbenchShell::WorkbenchShell(QMainWindow *window, QWidget *,
     contentSplitter->setStretchFactor(0, 0);
     contentSplitter->setStretchFactor(1, 1);
     contentSplitter->setSizes({300, 900});
-    queryLayout->addWidget(contentSplitter);
+    queryLayout->addWidget(contentSplitter, 1);
 
     const QList<std::pair<QWidget *, QString>> top{{queryPage, tr("Query")},
         {pages.library, tr("MIBs")}, {pages.traps, tr("Traps")}};
@@ -138,7 +171,8 @@ WorkbenchShell::WorkbenchShell(QMainWindow *window, QWidget *,
     auto *controls = new QWidget(header);
     controls->setObjectName(QStringLiteral("WorkbenchPanelControls"));
     auto *controlsLayout = new QHBoxLayout(controls);
-    controlsLayout->setContentsMargins(0, 0, 0, 0);
+    controlsLayout->setContentsMargins(4, 0, 4, 0);
+    controlsLayout->setSpacing(8);
     activityStatus = new QLabel(controls);
     activityStatus->setObjectName(QStringLiteral("WorkbenchActivityStatus"));
     activityStatus->setAccessibleName(tr("Activity status"));
@@ -153,12 +187,14 @@ WorkbenchShell::WorkbenchShell(QMainWindow *window, QWidget *,
     connect(panelButton, &QToolButton::toggled, this, &WorkbenchShell::setPanelExpanded);
     connect(bottomPanel, &QDockWidget::visibilityChanged, this, &WorkbenchShell::updatePanelControls);
 
-    const auto focusAction = [this, window](const QString &name, const QString &title,
+    QList<QAction *> navigationActions;
+    const auto focusAction = [this, window, &navigationActions](const QString &name, const QString &title,
         const QString &shortcut, const std::function<void()> &run) {
         auto *action = new QAction(title, window);
         action->setObjectName(name);
         action->setShortcut(QKeySequence(shortcut));
         window->addAction(action);
+        navigationActions.append(action);
         connect(action, &QAction::triggered, this, run);
     };
     focusAction("WorkbenchFocusTree", tr("Focus MIB Tree"), "Ctrl+0", [this, treePane]() {
@@ -166,16 +202,18 @@ WorkbenchShell::WorkbenchShell(QMainWindow *window, QWidget *,
         if (auto *tree = treePane->findChild<QAbstractItemView *>()) tree->setFocus(Qt::ShortcutFocusReason);
     });
     focusAction("WorkbenchFocusDocument", tr("Focus Work Area"), "Ctrl+1", [this]() {
-        if (auto *page = workspaceTabs->currentWidget()) page->setFocus(Qt::ShortcutFocusReason);
+        focusContent(workspaceTabs->currentWidget() == queryPage ? queryTabs->currentWidget()
+                                                                 : workspaceTabs->currentWidget());
     });
     focusAction("WorkbenchFocusInspector", tr("Focus Inspector"), "Ctrl+Alt+2", [this]() {
         workspaceTabs->setCurrentWidget(queryPage);
         inspectorPanel->show();
-        inspectorPanel->widget()->setFocus(Qt::ShortcutFocusReason);
+        inspectorShown = true;
+        focusContent(inspectorPanel->widget());
     });
     focusAction("WorkbenchFocusBottom", tr("Focus Panel"), "Ctrl+`", [this]() {
         setPanelExpanded(true);
-        if (auto *page = bottomTabs->currentWidget()) page->setFocus(Qt::ShortcutFocusReason);
+        focusContent(bottomTabs->currentWidget());
     });
     focusAction("WorkbenchGlobalSearch", tr("Search MIBs"), "Ctrl+Shift+F", [this]() {
         workspaceTabs->setCurrentWidget(queryPage);
@@ -188,7 +226,23 @@ WorkbenchShell::WorkbenchShell(QMainWindow *window, QWidget *,
         if (workspaceTabs->currentWidget() == workbenchPages.library) mibPanelId = id;
         else sharedPanelId = id;
     });
+    focusAction("WorkbenchFocusTarget", tr("Focus Target"), "Ctrl+L", [this]() {
+        if (auto *target = mainWindow->findChild<QComboBox *>("ConnectionTarget")) {
+            target->setFocus(Qt::ShortcutFocusReason);
+            if (target->lineEdit()) target->lineEdit()->selectAll();
+        }
+    });
+    focusAction("WorkbenchFocusOid", tr("Go to OID"), "Ctrl+Shift+L", [this]() {
+        workspaceTabs->setCurrentWidget(queryPage);
+        if (auto *oid = mainWindow->findChild<QLineEdit *>("QueryObjectAddress")) {
+            oid->setFocus(Qt::ShortcutFocusReason); oid->selectAll();
+        }
+    });
     buildViewMenu(window);
+    view->addSeparator();
+    auto *navigation = view->addMenu(tr("Keyboard Navigation"));
+    navigation->setObjectName("WorkbenchKeyboardNavigation");
+    navigation->addActions(navigationActions);
     connect(workspaceTabs, &QTabWidget::currentChanged, this, &WorkbenchShell::updateWorkspace);
     if (bottom.problems) setBottomPageVisible(bottom.problems, false);
     setActivityCounts(0, 0);
@@ -198,10 +252,14 @@ WorkbenchShell::WorkbenchShell(QMainWindow *window, QWidget *,
 void WorkbenchShell::buildViewMenu(QMainWindow *window)
 {
     auto *bar = window->menuBar();
-    view = new QMenu(tr("&View"), bar);
-    view->setObjectName(QStringLiteral("WorkbenchViewMenu"));
-    const auto top = bar->actions();
-    bar->insertMenu(top.size() > 1 ? top[1] : nullptr, view);
+    // The main UI owns menu order; populate its View menu without creating a duplicate.
+    view = bar->findChild<QMenu *>(QStringLiteral("WorkbenchViewMenu"));
+    if (!view) {
+        view = new QMenu(tr("&View"), bar);
+        view->setObjectName(QStringLiteral("WorkbenchViewMenu"));
+        const auto top = bar->actions();
+        bar->insertMenu(top.size() > 1 ? top[1] : nullptr, view);
+    }
     const auto add = [this](const QString &name, const QString &title, const std::function<void()> &run) {
         auto *action = view->addAction(title);
         action->setObjectName(name);
@@ -343,10 +401,12 @@ void WorkbenchShell::setBottomPageNote(QWidget *page, const QString &note)
         : QStringLiteral("%1 (%2)").arg(bottomTitles.value(page), note));
 }
 
-void WorkbenchShell::setFullPageHiddenWidgets(const QList<QWidget *> &widgets)
+void WorkbenchShell::setQueryControls(QWidget *controls)
 {
-    queryOnlyWidgets = widgets;
-    for (auto *widget : queryOnlyWidgets) widget->setVisible(!outsideQuery);
+    if (!controls) return;
+    controls->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    qobject_cast<QVBoxLayout *>(queryPage->layout())->insertWidget(0, controls);
+    controls->show(); // Reparenting a previously hidden child must not leave Query controls hidden.
 }
 
 void WorkbenchShell::updateWorkspace()
@@ -358,7 +418,6 @@ void WorkbenchShell::updateWorkspace()
     outsideQuery = wanted;
     inspectorPanel->setVisible(!wanted && inspectorShown);
     inspectorPanel->toggleViewAction()->setEnabled(!wanted);
-    for (auto *widget : queryOnlyWidgets) widget->setVisible(!wanted);
 }
 
 void WorkbenchShell::setPanelExpanded(bool expanded)
@@ -376,7 +435,9 @@ void WorkbenchShell::updatePanelControls()
     const QSignalBlocker blocked(panelButton);
     panelButton->setChecked(expanded);
     const QString text = expanded ? tr("Hide panel") : tr("Show panel");
-    panelButton->setText(text);
+    panelButton->setText(tr("Operations"));
+    panelButton->setAccessibleName(tr("Operations panel"));
+    panelButton->setToolTip(expanded ? tr("Hide Output, Log and MIB Problems") : tr("Show Output, Log and MIB Problems"));
     if (auto *action = mainWindow->findChild<QAction *>("WorkbenchToggleBottom")) action->setText(text);
 }
 
@@ -387,7 +448,7 @@ void WorkbenchShell::setActivityCounts(int running, int problems)
     if (running) parts << tr("%1 running").arg(running);
     if (problems) parts << (problems == 1 ? tr("1 problem") : tr("%1 problems").arg(problems));
     activityStatus->setText(parts.isEmpty() ? tr("Idle") : parts.join(QStringLiteral(" · ")));
-    activityStatus->setToolTip(tr("Running SNMP requests and MIB environment builds. Inspect Log for failed requests and MIBs > Problems for MIB errors or warnings."));
+    activityStatus->setToolTip(tr("Running SNMP requests, MIB verification, Library operations and profile builds. MIBs > Problems lists MIB errors and warnings."));
 }
 
 void WorkbenchShell::restorePresentationState()
@@ -399,7 +460,10 @@ void WorkbenchShell::restorePresentationState()
     inspectorShown = settings.value(inspectorKey, true).toBool();
     inspectorPanel->setVisible(inspectorShown);
     const auto state = settings.value(splitterKey).toByteArray();
-    if (!state.isEmpty()) contentSplitter->restoreState(state);
+    if (!state.isEmpty() && !contentSplitter->restoreState(state)) contentSplitter->setSizes({300, 900});
+    // Old or damaged state must not turn the horizontal Query layout vertical.
+    contentSplitter->setOrientation(Qt::Horizontal);
+    contentSplitter->setChildrenCollapsible(false);
     panelHeight = qBound(130, settings.value(panelHeightKey, 300).toInt(), 10000);
     pendingPanelId.clear();
     // Keep old settings until normal save. The former shared Problems selection

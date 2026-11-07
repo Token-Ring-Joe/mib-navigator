@@ -1,60 +1,56 @@
 # Manual real-device acceptance checklist
 
-This checklist applies to **MIB Navigator 1.0.0-rc1**. Before testing, record the
-exact archive filename and SHA-256, About-box version, OS, device
-model/firmware, profile, tester, and test time. Mark every applicable item PASS,
-FAIL, or N/A. Use only authorized lab devices and a deliberately safe writable
-object for SET.
+Current redesign: 2026-11-07. Perform only the applicable checks on devices
+explicitly authorized for this acceptance session. This checklist grants no
+network authorization. Record build identity from About, OS, device/firmware,
+Target, credential display name and MIB Profile; never record credential secrets.
+Use a deliberately safe writable object for any specifically authorized SET test.
 
-## SNMP operations
+## Connection and SNMP
 
-- [ ] v1: GET returns expected value and type.
-- [ ] v1: GET-NEXT advances once; WALK terminates at subtree boundary.
-- [ ] v1: table view completes with correct rows and ordering.
-- [ ] v1: a numeric graph series starts, samples, stops, and clears.
-- [ ] v2c: GET and GET-NEXT return expected values.
-- [ ] v2c: GET-BULK honors non-repeaters/max-repetitions.
-- [ ] v2c: WALK and table view terminate correctly.
-- [ ] v2c: authorized safe SET succeeds and reread confirms the value.
-- [ ] v2c: one-series and multiple-series graphs sample correctly.
-- [ ] v3 noAuthNoPriv: Query succeeds.
-- [ ] v3 authNoPriv: Query succeeds and bad authentication fails safely.
-- [ ] v3 authPriv: Query succeeds and bad privacy credentials fail safely.
-- [ ] v3: table and Graph operate with each applicable security level.
+- [ ] Type a Target and choose a reusable Credential and MIB Profile independently.
+- [ ] SNMPv1/v2c GET, GETNEXT, GETBULK where applicable, and Walk return expected
+      values/types; Walk ends at its boundary and Stop remains responsive.
+- [ ] Sparse table grids include rows with missing cells; decoded string/IP,
+      IMPLIED and AUGMENTS indexes match the device's data where available.
+- [ ] Query Table > Select Instance retrieves exactly that row; Cancel preserves
+      previous results and does not start retrieval.
+- [ ] Applicable SNMPv3 security levels work; rejected credentials receive a clear
+      explanation. Current requests use the default empty SNMPv3 context.
+- [ ] A separately authorized safe single-object SET succeeds and reread confirms it.
+- [ ] Results, Output and Log agree on completion/failure. CSV includes the
+      expected rows, columns and missing cells.
 
-## Device Manager and Discovery
+## Watch and profile detection
 
-- [ ] Create, edit, duplicate, and delete a test profile.
-- [ ] Selecting a device updates Query without changing its stored profile.
-- [ ] Reusable community and USM credentials resolve correctly.
-- [ ] Rename preserves identity/references; duplicate receives independent identity.
-- [ ] Folder creation, drag/drop move, persistence, and restart behavior are correct.
-- [ ] Notes/tags metadata survives edit and restart.
-- [ ] Preferred MIB association is retained and loads the expected module.
-- [ ] Discovery scans a known small range and Stop halts further work.
-- [ ] Discovery places profiles in the selected destination folder.
-- [ ] Discovery-created profiles retain the intended credential binding.
+- [ ] Start Watch from the Tree or Results; inspect value/change/rate and raw data.
+- [ ] Change the connection bar; the original Watch row keeps its captured Target
+      and Credential reference. Pause, Resume and Remove work.
+- [ ] Counter wrap/restart does not create a false rate spike, if a controlled
+      fixture is available. Watches are not restored after application restart.
+- [ ] Click Detect only against the authorized Target; the proposed Profile is
+      appropriate. A timeout/no match leaves the selection unchanged.
 
-## Traps, MIBs, and graphs
+## MIBs and notifications
 
-- [ ] Receive and render an authorized v1 trap.
-- [ ] Receive and render a v2c notification.
-- [ ] Receive and render a v3 notification when a test sender is available.
-- [ ] Trap history limit is enforced; Clear History empties the view.
-- [ ] Known notification/varbind OIDs use MIB-aware formatting.
-- [ ] Bundled module loads; vendor module loads from an added path.
-- [ ] Malformed module produces attributable diagnostics without a crash.
-- [ ] MIB filtering and details remain correct after load/unload operations.
-- [ ] Graph one and multiple series, TimeTicks, Counter, and Gauge values.
-- [ ] Graph Start/Stop/Clear and restart persistence work.
-- [ ] One invalid graph series does not suppress valid series.
-- [ ] Graph history remains within its configured bound.
-- [ ] Missing/unreachable agent reports failure and does not overlap polls.
+- [ ] Refresh product MIB folders; Automatic Profiles follow the collection.
+      Inspecting a different profile in Profiles does not activate it in Query.
+- [ ] Open and Verify a vendor MIB; diagnostics identify the source/line and the
+      application remains responsive. Problems are visible only inside MIBs.
+- [ ] Receive authorized v1/v2c/v3 notifications where a sender is available.
+      Raw/interpreted values, warnings and Copy source IP are correct.
+- [ ] Changing the active MIB Profile reinterprets retained trap history without
+      changing the selected record. Clear History and the history bound work.
 
-## Lifecycle
+## Desktop and lifecycle
 
-- [ ] Close while a graph is running; restart shows consistent stored state.
-- [ ] Close while Discovery is running; no work remains after exit.
-- [ ] Close with Trap receiver active; restart can bind normally.
-- [ ] Restart preserves expected preferences, profile selection, and UI state.
-- [ ] No credentials, device inventory, or logs appear in the install folder.
+- [ ] Preferences, Credentials and Editor Find/Replace/Go to Line remain usable
+      when resized. Keyboard Navigation reaches usable content controls.
+- [ ] Restart restores window position, Query pane sizes, Inspector visibility and
+      Operations panel state. A changed monitor layout leaves the window accessible.
+- [ ] Close during an operation/verification and restart normally. Parser shutdown
+      may wait for a running parse. The trap listener can bind again.
+- [ ] User configuration/credentials stay outside the install tree.
+
+Graphs, Discovery and saved-device management are retired and are not acceptance
+workflows. Query Macros and Watch-all/table expansion are not implemented.

@@ -152,6 +152,20 @@ int main(int argc, char **argv)
               "legacy canonical network settings do not produce a false restart");
     }
 
+    {
+        QSettings legacy(legacyFile, QSettings::IniFormat);
+        const QVariant pathsSize = legacy.value("mibpaths/size");
+        const QVariant firstPath = legacy.value("mibpaths/1/dir");
+        auto edited = PreferencesSettings::load(legacy);
+        edited.mibPaths = {"replacement-must-not-be-written"};
+        edited.mibPreloads = {"replacement-must-not-be-written"};
+        edited.save(legacy, true, true);
+        check(legacy.value("mibpaths/size") == pathsSize &&
+              legacy.value("mibpaths/1/dir") == firstPath &&
+              PreferencesSettings::load(legacy).mibPreloads == QStringList{"IF-MIB"},
+              "saving preferences preserves retired paths and preload settings");
+    }
+
     if (failures == 0)
         QTextStream(stdout) << "All Preferences settings tests passed." << Qt::endl;
     return failures == 0 ? 0 : 1;

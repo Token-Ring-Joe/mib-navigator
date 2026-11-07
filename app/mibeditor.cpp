@@ -1,3 +1,4 @@
+#include "dialoglayout.h"
 /*
     Copyright (C) 2004-2011 Martin Jolicoeur (snmpb1@gmail.com) 
 
@@ -34,8 +35,10 @@
 #include "mibengine.h"
 #include "mibmodule.h"
 #include "miblibrary.h"
+#include "mibcollection.h"
+#include "diagnosticlogger.h"
 
-MibEditor::MibEditor(Snmpb *snmpb)
+MibEditor::MibEditor(Snmpb *snmpb) : QObject(snmpb)
 {
     s = snmpb;
 
@@ -71,6 +74,9 @@ MibEditor::MibEditor(Snmpb *snmpb)
              this, SLOT( VerifyMIB() ) );
     connect( s->MainUI()->actionExtractMIBfromRFC, SIGNAL( triggered() ),
              this, SLOT( ExtractMIBfromRFC() ) );
+    connect(s->MibModuleObj(), &MibModule::editorVerificationFinished,
+            this, &MibEditor::CompleteVerification);
+    connect(s->MainUI()->MIBFile, &QTextEdit::textChanged, this, [this] { ++documentGeneration; });
     diagnosticModel = new MibDiagnosticModel(this);
     diagnosticFilter = new QSortFilterProxyModel(this);
     diagnosticFilter->setSourceModel(diagnosticModel);
@@ -149,6 +155,7 @@ MibEditor::MibEditor(Snmpb *snmpb)
 
 void MibEditor::SetCurrentFileName(const QString &FileName)
 {
+    ++documentGeneration;
     LoadedFile = FileName;
     s->MainUI()->MIBFile->document()->setModified(false);
     MibFileModified(false);
@@ -182,10 +189,11 @@ void MibEditor::GotoLine(void)
     QDialog d(s->MainUI()->MIBFile);
 
     goto_uid.setupUi(&d);
-    connect( goto_uid.PushButton2, SIGNAL( clicked() ), 
-             this, SLOT( ExecuteGotoLine() ));
-    connect( goto_uid.PushButton2, SIGNAL( clicked() ), 
-             &d, SLOT( accept() ));
+    goto_uid.buttonBox->button(QDialogButtonBox::Ok)->setText(tr("Go to Line"));
+    connect(goto_uid.buttonBox, &QDialogButtonBox::accepted, &d, [&]() {
+        ExecuteGotoLine(); d.accept();
+    });
+    DialogLayout::initialize(d, QSize(360, 140));
     goto_uid.spinLine->setFocus(Qt::TabFocusReason);
     d.exec();
 }
@@ -239,8 +247,12 @@ void MibEditor::Find(void)
     QDialog d(s->MainUI()->MIBFile);
 
     find_uid.setupUi(&d);
-    connect( find_uid.buttonFindNext, SIGNAL( clicked() ), 
-             this, SLOT( ExecuteFind() ));
+    auto *findNext = DialogLayout::action(find_uid.buttonBox, tr("Find Next"), "buttonFindNext", true);
+    connect(findNext, &QPushButton::clicked, this, &MibEditor::ExecuteFind);
+    connect(find_uid.comboFind, &QComboBox::editTextChanged, findNext,
+            [findNext](const QString &text) { findNext->setEnabled(!text.isEmpty()); });
+    findNext->setEnabled(false);
+    DialogLayout::initialize(d, QSize(460, 280));
     find_uid.comboFind->setFocus(Qt::TabFocusReason);
 
     find_uid.comboFind->addItems(find_strings);
@@ -294,12 +306,18 @@ void MibEditor::Replace(void)
     QDialog d(s->MainUI()->MIBFile);
 
     replace_uid.setupUi(&d);
-    connect( replace_uid.buttonReplace, SIGNAL( clicked() ), 
-             this, SLOT( ExecuteReplace() ));
-    connect( replace_uid.buttonFindNext, SIGNAL( clicked() ), 
-             this, SLOT( ExecuteFindNextReplace() ));
-    connect( replace_uid.buttonReplaceAll, SIGNAL( clicked() ), 
-             this, SLOT( ExecuteReplaceAll() ));
+    auto *replace = DialogLayout::action(replace_uid.buttonBox, tr("Replace"), "buttonReplace", true);
+    auto *findNext = DialogLayout::action(replace_uid.buttonBox, tr("Find Next"), "buttonFindNext");
+    auto *replaceAll = DialogLayout::action(replace_uid.buttonBox, tr("Replace All"), "buttonReplaceAll");
+    connect(replace, &QPushButton::clicked, this, &MibEditor::ExecuteReplace);
+    connect(findNext, &QPushButton::clicked, this, &MibEditor::ExecuteFindNextReplace);
+    connect(replaceAll, &QPushButton::clicked, this, &MibEditor::ExecuteReplaceAll);
+    const auto updateActions = [replace, findNext, replaceAll](const QString &text) {
+        for (auto *button : {replace, findNext, replaceAll}) button->setEnabled(!text.isEmpty());
+    };
+    connect(replace_uid.comboFind, &QComboBox::editTextChanged, &d, updateActions);
+    updateActions({});
+    DialogLayout::initialize(d, QSize(560, 330));
     replace_uid.comboFind->setFocus(Qt::TabFocusReason);
 
     replace_uid.comboFind->addItems(find_strings);
@@ -484,6 +502,11 @@ void MibEditor::ErrorHandler(char *path, int line, int severity,
 
 void MibEditor::VerifyMIB(void)
 {
+    if (verificationRunning) return;
+    if (s->MibModuleObj()->DependencyCheckRunning()) {
+        s->MainUI()->MIBLogL->setText(tr("Wait for Library dependency checking to finish before verifying editor content."));
+        return;
+    }
     const auto level = static_cast<MibValidationLevel>(validationLevel->currentData().toInt());
     diagnostics.clear();
     diagnosticModel->setDiagnostics(diagnostics);
@@ -493,21 +516,39 @@ void MibEditor::VerifyMIB(void)
 
     s->MainUI()->MIBLogL->setText(tr("Verification diagnostics — running..."));
 
-    const auto result=MibEngine::instance().validateSource(
-        s->MainUI()->MIBFile->toPlainText().toUtf8(),QFileInfo(LoadedFile).absolutePath(),
-        MibValidationErrorLevel(level),MibValidationRecursive(level));
+    verifiedGeneration = documentGeneration;
+    verifiedFile = LoadedFile;
+    verificationRunning = s->MibModuleObj()->VerifyEditorSource(
+        s->MainUI()->MIBFile->toPlainText().toUtf8(),
+        LoadedFile.isEmpty() ? QString() : QFileInfo(LoadedFile).absolutePath(), level);
+    s->MainUI()->actionVerifyMIB->setEnabled(!verificationRunning);
+    validationLevel->setEnabled(!verificationRunning);
+    if (!verificationRunning)
+        s->MainUI()->MIBLogL->setText(tr("Verification could not start. Wait for the current MIB check to finish."));
+}
+
+void MibEditor::CompleteVerification(const MibEngineValidationResult &result, int pathCount)
+{
+    if (!verificationRunning) return;
+    verificationRunning = false;
+    validationLevel->setEnabled(true);
+    s->TabSelected();
+    if (documentGeneration != verifiedGeneration || LoadedFile != verifiedFile) {
+        s->MainUI()->MIBLogL->setText(tr("Document changed during verification. Verify again to check the current content."));
+        emit VerificationFinished(false);
+        return;
+    }
     diagnostics=result.diagnostics;
-    // Verification parses a staged copy of the editor text next to the real file. Show the
-    // real file to the user, never the internal staging name.
-    const QString stagingDir=QFileInfo(LoadedFile).absolutePath();
-    const QRegularExpression stagedName(
-        QStringLiteral("(%1/)?mib-navigator-verify-[A-Za-z0-9]+\\.mib")
-            .arg(QRegularExpression::escape(stagingDir)));
     const QString shownName = LoadedFile.isEmpty() ? tr("(unsaved editor content)") : LoadedFile;
-    for(auto &diagnostic:diagnostics){
-        diagnostic.sourcePath.replace(stagedName,shownName);
-        diagnostic.message.replace(stagedName,shownName);
-        diagnostic.rawText.replace(stagedName,shownName);}
+    if (!result.stagedSourcePath.isEmpty()) {
+        QStringList stagedNames{result.stagedSourcePath, QDir::toNativeSeparators(result.stagedSourcePath)};
+        stagedNames.removeDuplicates();
+        for (auto &diagnostic : diagnostics) for (const auto &name : stagedNames) {
+            diagnostic.sourcePath.replace(name, shownName);
+            diagnostic.message.replace(name, shownName);
+            diagnostic.rawText.replace(name, shownName);
+        }
+    }
     for(const auto &diagnostic:std::as_const(diagnostics)){
         if(diagnostic.severity<=3)++num_error;else if(diagnostic.severity<=5)++num_warning;else ++num_info;}
     diagnosticModel->setDiagnostics(diagnostics);
@@ -518,15 +559,17 @@ void MibEditor::VerifyMIB(void)
                           .arg(tr("%n warnings", "", num_warning))
                           .arg(tr("%n infos", "", num_info))
                           ;
-    s->MainUI()->MIBLogL->setText(stop_msg);
+    s->MainUI()->MIBLogL->setText(result.stagingError.isEmpty() ? stop_msg :
+        tr("Verification failed: %1").arg(result.stagingError));
+    DiagnosticLogger::log("MIB", tr("Editor verification paths=%1 errors=%2 warnings=%3 elapsed_ms=%4")
+        .arg(pathCount).arg(num_error).arg(num_warning).arg(result.elapsedMilliseconds));
 
-    // Validation temporarily uses the one parser context. Restore its current
-    // runtime asynchronously while the published immutable Environment remains usable.
-    s->MibModuleObj()->RestoreRuntimeAfterEditorValidation();
+    emit VerificationFinished(true);
 }
 
 void MibEditor::ExtractMIBfromRFC(void)
 {
+    s->ShowEditorDocument();
     QRegularExpression module_regexp("^[ \\t]*([A-Za-z0-9-]*) *(PIB-)?DEFINITIONS *(::=)? *(BEGIN)? *$");
     QRegularExpression page_regexp("\\[[pP]age [iv0-9]*\\] *");
     QRegularExpression macro_regexp("^[ \\t]*[A-Za-z0-9-]* *MACRO *::=");

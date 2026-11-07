@@ -124,7 +124,6 @@ public slots:
     void TableRowSelectFrom(const QString& oid);
     void Varbinds(void);
     void VarbindsFrom(const QString& oid);
-    void GetTypedTableInstance(void);
     void StopTimer(void);
     void Shutdown();
 
@@ -162,8 +161,6 @@ private:
     QString msg;
     Oid theoid;
 
-    QLineEdit *le;
-    QString tinstresult;
  
     bool stop;
 

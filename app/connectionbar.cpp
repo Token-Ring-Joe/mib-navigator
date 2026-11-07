@@ -1,4 +1,3 @@
-#include "appearancecolors.h"
 #include "connectionbar.h"
 
 #include "communitycredentialservice.h"
@@ -8,6 +7,7 @@
 #include <QAction>
 #include <QComboBox>
 #include <QHBoxLayout>
+#include <QVBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QToolButton>
@@ -20,27 +20,40 @@ ConnectionBar::ConnectionBar(CommunityCredentialService *communityService,
 {
     setObjectName(QStringLiteral("ConnectionBar"));
     auto *layout = new QHBoxLayout(this);
-    layout->setContentsMargins(10, 6, 10, 6);
-    layout->setSpacing(6);
+    layout->setContentsMargins(12, 10, 8, 10);
+    layout->setSpacing(12);
 
-    layout->addWidget(new QLabel(tr("Target"), this));
+    const auto addField = [this, layout](const QString &title, QComboBox *combo, QToolButton *action) {
+        auto *group = new QWidget(this);
+        auto *column = new QVBoxLayout(group);
+        column->setContentsMargins(0, 0, 0, 0); column->setSpacing(4);
+        auto *caption = new QLabel(title, group);
+        caption->setProperty("caption", true); caption->setBuddy(combo);
+        combo->setAccessibleName(title);
+        column->addWidget(caption);
+        auto *row = new QHBoxLayout; row->setSpacing(6);
+        row->addWidget(combo, 1);
+        if (action) row->addWidget(action);
+        column->addLayout(row);
+        combo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        combo->setMinimumContentsLength(12);
+        layout->addWidget(group, 1);
+    };
     targetCombo = new QComboBox(this);
     targetCombo->setObjectName(QStringLiteral("ConnectionTarget"));
     targetCombo->setEditable(true);
     targetCombo->setInsertPolicy(QComboBox::NoInsert);
-    targetCombo->setMinimumWidth(190);
+    targetCombo->setMinimumWidth(140);
     targetCombo->lineEdit()->setPlaceholderText(tr("IP address or host name"));
     targetCombo->lineEdit()->setClearButtonEnabled(true);
     targetCombo->setToolTip(tr("Who to talk to: an IP address or host name, optionally :port.\n"
                                "Recent targets are listed. Delete removes the highlighted entry."));
-    layout->addWidget(targetCombo, 2);
+    addField(tr("Target"), targetCombo, nullptr);
 
-    layout->addWidget(new QLabel(tr("Credential"), this));
     credentialCombo = new QComboBox(this);
     credentialCombo->setObjectName(QStringLiteral("ConnectionCredential"));
-    credentialCombo->setMinimumWidth(190);
+    credentialCombo->setMinimumWidth(150);
     credentialCombo->setToolTip(tr("How to authenticate. Use Manage… to add or edit saved credentials."));
-    layout->addWidget(credentialCombo, 2);
     auto *manage = new QToolButton(this);
     manage->setObjectName(QStringLiteral("ConnectionManageCredentials"));
     manage->setText(tr("Manage…"));
@@ -49,25 +62,18 @@ ConnectionBar::ConnectionBar(CommunityCredentialService *communityService,
     connect(manage, &QToolButton::clicked, this, [this]() {
         emit manageCredentialsRequested(credentialProtocol());
     });
-    layout->addWidget(manage);
+    addField(tr("Credential"), credentialCombo, manage);
 
-    layout->addWidget(new QLabel(tr("MIB Profile"), this));
     mibProfileCombo->setParent(this);
-    mibProfileCombo->setMinimumWidth(190);
+    mibProfileCombo->setMinimumWidth(170);
     mibProfileCombo->setToolTip(tr("How to interpret what comes back."));
-    layout->addWidget(mibProfileCombo, 2);
     detectButton = new QToolButton(this);
     detectButton->setObjectName(QStringLiteral("ConnectionDetect"));
     detectButton->setText(tr("Detect"));
     detectButton->setToolTip(tr("Ask the device what it is (sysObjectID and sysDescr, one request) and pick the MIB Profile "
                                 "that holds its MIBs. Nothing is sent unless you click this."));
     connect(detectButton, &QToolButton::clicked, this, &ConnectionBar::detectRequested);
-    layout->addWidget(detectButton);
-
-    hint = new AppearanceColors::SemanticLabel({}, AppearanceColors::SemanticLabel::ConnectionWarning, this);
-    hint->setObjectName(QStringLiteral("ConnectionHint"));
-    hint->hide();
-    layout->addWidget(hint);
+    addField(tr("MIB Profile"), mibProfileCombo, detectButton);
 
     // Delete removes the highlighted history entry from the drop-down list.
     auto *removeEntry = new QAction(this);
@@ -87,6 +93,10 @@ ConnectionBar::ConnectionBar(CommunityCredentialService *communityService,
     targetCombo->view()->setContextMenuPolicy(Qt::ActionsContextMenu);
     removeEntry->setText(tr("Remove from recent targets"));
 
+    QWidget::setTabOrder(targetCombo, credentialCombo);
+    QWidget::setTabOrder(credentialCombo, manage);
+    QWidget::setTabOrder(manage, mibProfileCombo);
+    QWidget::setTabOrder(mibProfileCombo, detectButton);
     refreshCredentials();
     reloadHistory();
     applyHistoryCredential();
@@ -190,11 +200,9 @@ void ConnectionBar::refreshCredentials()
     updating = false;
     credentialCombo->setPlaceholderText(choices.isEmpty() ? tr("No saved credentials")
                                                           : tr("Choose a credential"));
-    if (choices.isEmpty()) {
-        hint->setText(tr("No saved credentials: use Manage…"));
-        hint->show();
-    } else {
-        hint->hide();
-    }
+    credentialCombo->setToolTip(choices.isEmpty()
+        ? tr("No saved credentials. Use Manage… to add an SNMPv1/v2c community or SNMPv3 user.")
+        : tr("How to authenticate. Use Manage… to add or edit saved credentials."));
+    credentialCombo->setAccessibleDescription(credentialCombo->toolTip());
     emit selectionChanged();
 }

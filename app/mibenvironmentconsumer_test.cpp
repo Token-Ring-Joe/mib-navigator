@@ -23,6 +23,62 @@ QModelIndex findOid(QAbstractItemModel*m,const QString&oid,const QModelIndex&p={
 
 int main(int argc,char**argv){QApplication app(argc,argv);const bool large=app.arguments().contains("--large");const QString root=SNMPB_SOURCE_DIR;const QStringList paths={root+"/libsmi/mibs/ietf",root+"/libsmi/mibs/iana",root+"/libsmi/mibs/irtf",root+"/libsmi/mibs/site",root+"/libsmi/mibs/tubs"};const QByteArray path=paths.join(QDir::listSeparator()).toLocal8Bit();smiInit("phase3-consumers");smiSetFlags((smiGetFlags()|SMI_FLAG_ERRORS)&~SMI_FLAG_NODESCR);smiSetPath(path.constData());for(const char*m:{"SNMPv2-MIB","IF-MIB","ACCOUNTING-CONTROL-MIB"})check(smiLoadModule(m)!=nullptr,m);if(large)for(const QString&directory:paths)for(const QString&file:QDir(directory).entryList(QDir::Files,QDir::Name))smiLoadModule(QDir::toNativeSeparators(QDir(directory).filePath(file)).toLocal8Bit().constData());const int parserTreeCount=liveCount(smiGetNode(nullptr,"iso"));const MibEffectivePlan allPlan=plan();auto environment=MibEnvironmentExtractor().extract(allPlan);MibEffectivePlan partialPlan=allPlan;partialPlan.effectiveModules<<"NO-SUCH-MIB";auto partialEnvironment=MibEnvironmentExtractor().extract(partialPlan,{"NO-SUCH-MIB"});auto extremeEnvironment=std::make_shared<MibEnvironment>(*environment);auto extremeBEnvironment=std::make_shared<MibEnvironment>(*environment);MibEnvironmentRegistry::publish(environment);smiExit();
 QElapsedTimer timer;timer.start();QStringList modules;for(const auto&m:environment->modules())modules<<m.identity;MibViewLoader loader;loader.SetEnvironment(environment,modules);check(!loader.TreeSnapshot().children.isEmpty(),"Tree projects after smiExit");check(snapshotCount(loader.TreeSnapshot())==parserTreeCount+1,"Tree structure parity");const qint64 treeMs=timer.elapsed();
+// Exercise the chooser with a normal MIB-II scope even in the all-MIB stress run.
+// A closed OID chooser must not remain a target of later profile publication.
+const QStringList chooserModules = {"SNMPv2-MIB", "IF-MIB"};
+loader.SetEnvironment(environment, chooserModules);
+{
+    QWidget dialog;
+    auto *chooserTree = new BasicMibView(&dialog);
+    chooserTree->RegisterToLoader(&loader);
+    chooserTree->Populate();
+    check(chooserTree->topLevelItemCount() > 0, "temporary OID chooser populated");
+}
+loader.SetEnvironment(environment, chooserModules);
+BasicMibView survivingChooser;
+survivingChooser.RegisterToLoader(&loader);
+survivingChooser.Populate();
+loader.SetEnvironment(environment, chooserModules);
+check(survivingChooser.topLevelItemCount() == 0, "live OID chooser invalidated on publication");
+survivingChooser.Populate();
+check(survivingChooser.topLevelItemCount() > 0, "live OID chooser repopulates after publication");
+survivingChooser.setCurrentItem(survivingChooser.topLevelItem(0));
+QPointer<BasicMibView> closingChooser = new BasicMibView;
+closingChooser->RegisterToLoader(&loader);
+closingChooser->Populate();
+const auto closeOnReset = QObject::connect(&survivingChooser, &QTreeWidget::currentItemChanged,
+    &survivingChooser, [&] { delete closingChooser.data(); });
+loader.SetEnvironment(environment, chooserModules);
+check(closingChooser.isNull(), "publication tolerates another chooser closing during selection reset");
+QObject::disconnect(closeOnReset);
+loader.SetEnvironment(environment, modules);
+// Use the complete stress snapshot here: opening the chooser must avoid eager
+// QTreeWidgetItem/icon construction even for a large, already-built environment.
+QElapsedTimer chooserTimer;
+chooserTimer.start();
+MibTreeModel frozenChooserModel;
+frozenChooserModel.setSnapshot(loader.TreeSnapshot());
+MibModelView chooserView(nullptr, MibModelView::Mode::OidSelection);
+chooserView.setTreeModel(&frozenChooserModel);
+chooserView.Populate();
+chooserView.SelectFromOid("1.3.6.1.2.1.2.2.1.2.27");
+const qint64 chooserMs = chooserTimer.elapsed();
+check(chooserMs < 2000, "complete-library chooser construction and OID selection stay below two seconds");
+check(chooserView.selectedOid() == "1.3.6.1.2.1.2.2.1.2", "chooser selects a column from its instance OID");
+QPersistentModelIndex frozenSelection(chooserView.currentIndex());
+loader.SetEnvironment({}, {});
+check(frozenSelection.isValid() && chooserView.selectedOid() == "1.3.6.1.2.1.2.2.1.2",
+      "profile changes cannot retarget an open chooser's frozen tree");
+int networkActions = 0;
+QObject::connect(&chooserView, &MibModelView::WalkFromOid, [&] { ++networkActions; });
+QObject::connect(&chooserView, &MibModelView::GetFromOid, [&] { ++networkActions; });
+QObject::connect(&chooserView, &MibModelView::SetFromOid, [&] { ++networkActions; });
+chooserView.SetQueryPrerequisitesAvailable(true);
+chooserView.WalkCurrent(); chooserView.QueryCurrent(0); chooserView.SetCurrent(); chooserView.QueryTableFromCurrent();
+check(!chooserView.queryTableAvailable(), "OID chooser cannot enable table queries");
+check(networkActions == 0, "OID-only chooser exposes no network commands");
+loader.SetEnvironment(environment, modules);
+QTextStream(stdout) << "Chooser model build/select ms=" << chooserMs << " nodes=" << environment->nodes().size() << Qt::endl;
 MibModelView modelView;modelView.RegisterToLoader(&loader);QString details;QObject::connect(&modelView,&MibModelView::NodeProperties,[&details](const QString&value){details=value;});modelView.Populate();const QModelIndex selected=findOid(modelView.model(),"1.3.6.1.2.1.2.2.1.2");check(selected.isValid(),"transition fixture selection exists");modelView.setCurrentIndex(selected);modelView.expand(selected.parent());QPersistentModelIndex staleSelection(selected);const QString selectedOid=modelView.selectedOid();
 check(details.contains("IF-MIB")&&details.contains("Display hint")&&details.contains("Range / size")&&details.contains("Access")&&details.contains("Description"),"OID inspector projects rich immutable Environment metadata");modelView.SetFilterText("ifDescr");check(findOid(modelView.model(),"1.3.6.1.2.1.2.2.1.2").isValid(),"Tree filter retains matching node and hierarchy");modelView.SetFilterText(QString());
 const QStringList extremeModules={"SNMPv2-MIB","IF-MIB"};const QStringList extremeBModules={"SNMPv2-MIB","ACCOUNTING-CONTROL-MIB"};
@@ -34,7 +90,7 @@ loader.SetEnvironment(partialEnvironment,modules);check(MibEnvironmentRegistry::
 loader.SetEnvironment({},{});MibEnvironmentRegistry::publish({});modelView.Populate();check(!modelView.currentIndex().isValid()&&modelView.selectedOid().isEmpty()&&details.isEmpty()&&modelView.model()->rowCount()==0,"no Environment clears Tree selection and OID Info");loader.SetEnvironment(environment,modules);MibEnvironmentRegistry::publishMaterialization(environment);modelView.showAllModules();modelView.Populate();
 const auto*ifEntry=environment->nodeByQualifiedName("IF-MIB::ifEntry");const auto*ifTable=environment->nodeByQualifiedName("IF-MIB::ifTable");const MibEnvironmentNodeRecord*row=nullptr;check(ResolveTableRowNode(ifTable,ifEntry,&row)==TableNodeValidation::Valid&&row==ifEntry,"table planning after smiExit");Oid oid;check(RenderEnvironmentNodeOid(environment->nodeByQualifiedName("IF-MIB::ifDescr"),&oid),"column OID after smiExit");
 QTreeWidget widget;MibNode rootNode("MIB Tree",&widget);MibNode info(MibNode::MIBNODE_ROW,*ifEntry,environment,&rootNode);QString html;info.PrintProperties(html);check(html.contains("ifEntry")&&html.contains("ifIndex")&&html.contains("IF-MIB"),"OID Info after smiExit");
-TrapVarbind vb{"1.3.6.1.2.1.2.2.1.8.7",sNMP_SYNTAX_INT32,"1",true};check(TrapPresenter::symbolicOid(vb.oid)=="ifOperStatus.7"&&TrapPresenter::formattedValue(vb)=="up(1)","trap semantics after smiExit");
+TrapVarbind vb;vb.value.set_oid(Oid("1.3.6.1.2.1.2.2.1.8.7"));vb.value.set_value(SnmpInt32(1));check(TrapPresenter::symbolicOid("1.3.6.1.2.1.2.2.1.8.7")=="ifOperStatus.7"&&TrapPresenter::formattedValue(vb)=="up(1)","trap semantics after smiExit");
 Vb response(Oid("1.3.6.1.2.1.2.2.1.8.7"));response.set_value(SnmpInt32(1));const auto resolved=ResolveMibObject(environment,response.get_oid());check(RenderMibOid(environment,response.get_oid())=="ifOperStatus.7"&&RenderMibValue(resolved,response)=="up(1)","Agent value semantics use Environment enum and instance suffix");
 std::weak_ptr<const MibEnvironment> dispatchedWeak;{auto dispatched=std::make_shared<MibEnvironment>(*environment);dispatchedWeak=dispatched;SnmpRequestContext request({},SnmpRequestOperation::Walk,dispatched);dispatched.reset();MibEnvironmentRegistry::publish(extremeEnvironment);MibEnvironmentRegistry::publish(extremeBEnvironment);check(!dispatchedWeak.expired()&&request.environment()!=MibEnvironmentRegistry::active(),"A request retains dispatch Environment across B and C publication");check(RenderMibValue(ResolveMibObject(request.environment(),response.get_oid()),response)=="up(1)","response renders through dispatch Environment");}check(dispatchedWeak.expired(),"dispatch Environment releases after request completion");MibEnvironmentRegistry::publish(environment);
 Vb unknown(Oid("9.9.9"));unknown.set_value(Counter64::ll_to_c64(0xffffffffffffffffULL));check(RenderMibOid(environment,unknown.get_oid())=="9.9.9"&&!RenderMibValue(ResolveMibObject(environment,unknown.get_oid()),unknown).isEmpty(),"unknown OID retains numeric and raw value");

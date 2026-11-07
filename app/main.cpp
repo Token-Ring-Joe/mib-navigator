@@ -24,6 +24,7 @@
 #include <QTranslator>
 #include <QLibraryInfo>
 #include <QDialog>
+#include <QDialogButtonBox>
 #include <QDockWidget>
 #include <QDir>
 #include <QFile>
@@ -48,6 +49,7 @@
 #include <QListWidget>
 #include <QStackedWidget>
 #include <QSpinBox>
+#include <QScrollArea>
 #include <QToolBar>
 #include <QMenu>
 #include <QHash>
@@ -57,6 +59,11 @@
 #include "mibmodelview.h"
 #include "mibtreemodel.h"
 #include "mibmodule.h"
+#include "mibengine.h"
+#include "mibselection.h"
+#include <future>
+#include <chrono>
+#include "mibservice.h"
 #include "preferences.h"
 #include "snmpbapp.h"
 #include "productidentity.h"
@@ -71,9 +78,11 @@
 #include "mibenvironment.h"
 #include "mibenvironmentregistry.h"
 #include "miblibrarywidget.h"
+#include "collectionsearchpanel.h"
 #include <QComboBox>
 #include <QToolButton>
 #include "agent.h"
+#include "trap.h"
 #include "csvformat.h"
 #include "mibprofile.h"
 #include "requestlog.h"
@@ -87,6 +96,7 @@
 #include "communitycredentialservice.h"
 #include <QTextEdit>
 #include <QEventLoop>
+#include <QPointer>
 
 QString file_to_open;
 
@@ -96,6 +106,7 @@ int main( int argc, char ** argv )
     QString smoke_config_dir;
     QString smoke_mib_file;
     bool smoke_network = false;
+    bool smoke_dependency_check = false;
     QString smoke_live_target;
     QString smoke_live_credential;
     QString smoke_live_walk;
@@ -116,6 +127,10 @@ int main( int argc, char ** argv )
         else if (argument == "--smoke-mib" && i + 1 < argc)
         {
             smoke_mib_file = QString::fromLocal8Bit(argv[++i]);
+        }
+        else if (argument == "--smoke-dependency-check")
+        {
+            smoke_dependency_check = true;
         }
         else if (argument == "--smoke-network")
         {
@@ -340,6 +355,208 @@ int main( int argc, char ** argv )
                                  << " file=" << QFileInfo(problem.file).fileName() << " line=" << problem.line
                                  << " why=\"" << problem.why << "\"" << Qt::endl;
             }
+            if (smoke_dependency_check) {
+                // Exercise the actual Library action with an unrelated module in its collection.
+                // All files/settings here belong to the isolated smoke-test directory.
+                auto *modules = snmpb.MibModuleObj();
+                auto *button = mw.findChild<QPushButton *>("MibLibraryCheckDependencies");
+                const auto before = modules->CurrentEnvironment();
+                check(before && before->profileId() == "custom.test" && button,
+                      "dependency-check: the selected profile and Library action are available");
+                const auto parserNames = [] {
+                    QStringList names;
+                    for (const auto &module : MibService().moduleInventory()) names.append(module.name);
+                    names.sort(); return names;
+                };
+                const auto initialNames = parserNames();
+                check(!initialNames.contains("EXTRA-MIB"),
+                      "dependency-check: the unselected Library module is initially outside the parser");
+                // Instrumented memory-check builds can explicitly use a larger
+                // display-latency budget. Production/normal validation retains
+                // 1.5 s, and the worker-gate/500 ms action-return checks always apply.
+                const int uiBudgetMsecs = qMax(1500,
+                    qEnvironmentVariableIntValue("MIB_NAVIGATOR_SMOKE_UI_BUDGET_MS"));
+                const QString concurrentPath = QDir(smoke_config_dir).filePath("MIB-Library/Acme/Other/EXTRA-MIB");
+                const auto runCheck = [&](const QString &profileId, bool expectBuild,
+                                          bool queueRefresh = false) {
+                    QEventLoop wait; QTimer limit, pulse; limit.setSingleShot(true);
+                    bool restored = false, cacheHit = true, completed = false;
+                    int pulses = 0; qint64 longestGap = 0;
+                    QElapsedTimer heartbeat; heartbeat.start();
+                    QObject::connect(&pulse, &QTimer::timeout, &wait, [&] {
+                        longestGap = qMax(longestGap, heartbeat.restart()); ++pulses;
+                        if (!modules->DependencyCheckRunning()) {
+                            completed = true;
+                            if (!expectBuild || restored) wait.quit();
+                        }
+                    });
+                    QObject::connect(&limit, &QTimer::timeout, &wait, &QEventLoop::quit);
+                    QObject::connect(modules, &MibModule::profileRuntimeReady, &wait,
+                        [&](const QString &id, const MibEffectivePlan &, MibEnvironmentPtr,
+                            const QStringList &, bool cached, bool) {
+                            if (id == profileId && (!expectBuild || !cached)) {
+                                restored = true; cacheHit = cached;
+                                if (completed) wait.quit();
+                            }
+                        });
+                    // A queued engine gate is released by a UI timer. A blocking
+                    // action cannot pass this assertion, even on a very fast CPU.
+                    auto release = std::make_shared<std::promise<void>>();
+                    auto released = release->get_future().share();
+                    MibEngine::instance().submit([released] { released.wait_for(std::chrono::seconds(5)); });
+                    bool uiRan = false, browsed = false;
+                    QTimer::singleShot(50, &wait, [&] {
+                        uiRan = true;
+                        auto *tabs = mw.findChild<QTabWidget *>("WorkbenchDocuments");
+                        if (tabs) { tabs->setCurrentIndex(0); tabs->setCurrentIndex(1); }
+                        modules->ModuleMetadata("GOOD-MIB");
+                        if (modules->CurrentEnvironment() && modules->CurrentEnvironment()->profileId() != profileId)
+                            snmpb.MibLibraryObj()->selectProfile(profileId);
+                        if (queueRefresh) {
+                            QString queuedError;
+                            modules->RefreshDependencyIndex(&queuedError);
+                            check(queuedError.contains("queued"),
+                                  "dependency-check: a concurrent refresh is deferred without blocking browsing");
+                        }
+                        browsed = modules->DependencyCheckRunning() && button && !button->isEnabled();
+                        release->set_value();
+                    });
+                    QElapsedTimer returned; returned.start();
+                    if (button) button->click();
+                    const qint64 clickMsecs = returned.elapsed();
+                    pulse.start(25); limit.start(60000); wait.exec();
+                    check(clickMsecs < 500 && uiRan && browsed && pulses > 0 && longestGap < uiBudgetMsecs,
+                          "dependency-check: action returns promptly and browsing stays responsive while the worker is busy");
+                    check(completed && button && button->isEnabled(),
+                          "dependency-check: asynchronous completion restores the action controls");
+                    smoke_output << "launch-smoke: DEPENDENCY-RESPONSIVENESS click-ms=" << clickMsecs
+                                 << " longest-ui-gap-ms=" << longestGap << " ui-budget-ms=" << uiBudgetMsecs
+                                 << " pulses=" << pulses << Qt::endl;
+                    check(expectBuild ? restored && !cacheHit : !restored || cacheHit,
+                        expectBuild ? "dependency-check: a fresh build restores the requested profile"
+                                    : "dependency-check: a cached recheck leaves the profile untouched");
+                };
+                const QString extraPath = QDir(smoke_config_dir).filePath("MIB-Library/Acme/Other/EXTRA-MIB");
+                check(!modules->DependencyIndex()->moduleNames().contains("EXTRA-MIB") &&
+                      QDir().mkpath(QFileInfo(extraPath).absolutePath()) &&
+                      QFile::copy(QDir(smoke_config_dir).filePath("extra-fixture.mib"), extraPath),
+                      "dependency-check: a new module is added after startup without a manual refresh");
+                runCheck("custom.test", true);
+                auto report = modules->DependencyIndex()->profileCheck("mib-library");
+                check(report.effectiveModules.contains("EXTRA-MIB") && !report.unresolved.contains("EXTRA-MIB") &&
+                      report.effectiveModules.contains("GOOD-MIB") && !report.unresolved.contains("GOOD-MIB"),
+                      "dependency-check: the unrelated module and equivalent duplicate providers were checked");
+                check(parserNames() == initialNames && modules->CurrentEnvironment() &&
+                      modules->CurrentEnvironment()->profileId() == "custom.test",
+                      "dependency-check: the parser and selected environment return to the original profile");
+                runCheck("custom.test", false);
+                check(parserNames() == initialNames,
+                      "dependency-check: a repeated check does not contaminate the parser");
+
+                QFile extra(extraPath);
+                QByteArray content;
+                if (extra.open(QIODevice::ReadOnly)) { content = extra.readAll(); extra.close(); }
+                const QByteArray originalContent = content;
+                content.replace("SYNTAX Integer32", "SYNTAX");
+                check(!content.isEmpty() && extra.open(QIODevice::WriteOnly) && extra.write(content) == content.size(),
+                      "dependency-check: the isolated fixture is edited to contain a syntax error");
+                extra.close();
+                runCheck("custom.test", true);
+                report = modules->DependencyIndex()->profileCheck("mib-library");
+                check(report.unresolved.contains("EXTRA-MIB"),
+                      "dependency-check: changed MIB bytes are checked rather than trusting an already-loaded identity");
+                check(parserNames() == initialNames,
+                      "dependency-check: failed semantic validation also restores the selected parser");
+
+                auto *profiles = snmpb.MibLibraryObj()->profileService();
+                QString error;
+                const QString pending = profiles->create("Pending selection", &error);
+                snmpb.MibLibraryObj()->reloadProfiles();
+                emit snmpb.MibLibraryObj()->profilesChanged();
+                // Change profiles from the UI timer while verification is busy.
+                content = originalContent;
+                if (extra.open(QIODevice::WriteOnly)) { extra.write(content); extra.close(); }
+                runCheck(pending, true);
+                check(!pending.isEmpty() && modules->CurrentEnvironment() &&
+                      modules->CurrentEnvironment()->profileId() == pending && !parserNames().contains("EXTRA-MIB"),
+                      "dependency-check: restoration respects a profile selection whose build was pending");
+                // Inject an index commit failure after a fresh semantic pass.
+                // Do not touch user data: this index is in the isolated test state.
+                const QString indexPath = modules->DependencyIndex()->path();
+                const QString savedIndex = indexPath + ".saved";
+                modules->DependencyIndex()->setProfileCheck("mib-library", {});
+                const bool blockedSave = QFile::rename(indexPath, savedIndex) && QDir().mkdir(indexPath);
+                check(blockedSave, "dependency-check: the isolated index save failure is injected");
+                if (blockedSave) {
+                    runCheck(pending, true);
+                    auto *status = mw.findChild<QLabel *>("MibLibraryStatus");
+                    const auto signature = MibDependencyIndex::profileSignature(
+                        modules->DependencyIndex()->moduleNames(), false);
+                    check(status && !status->text().contains("complete", Qt::CaseInsensitive) &&
+                          !modules->DependencyIndex()->profileCheckCurrent("mib-library", signature),
+                          "dependency-check: a failed index save is reported and does not mark the check current");
+                    check(modules->CurrentEnvironment() && modules->CurrentEnvironment()->profileId() == pending &&
+                          !parserNames().contains("EXTRA-MIB"),
+                          "dependency-check: index save failure also restores the selected parser");
+                    check(QDir().rmdir(indexPath) && QFile::rename(savedIndex, indexPath),
+                          "dependency-check: the isolated index file is restored");
+                    runCheck(pending, true);
+                    check(modules->DependencyIndex()->profileCheckCurrent("mib-library", signature) &&
+                          QFileInfo(indexPath).isFile(),
+                          "dependency-check: a retry rechecks and persists the result after the save failure");
+                }
+                check(QFile::remove(extraPath), "dependency-check: the unselected module is removed from the isolated Library");
+                runCheck(pending, true, true);
+                report = modules->DependencyIndex()->profileCheck("mib-library");
+                check(!report.effectiveModules.contains("EXTRA-MIB") && !report.unresolved.contains("EXTRA-MIB") &&
+                      !parserNames().contains("EXTRA-MIB"),
+                      "dependency-check: removed files are excluded from the refreshed check without a stale missing-module error");
+                modules->DependencyIndex()->setProfileCheck("mib-library", {});
+                // Inject a file change through the worker's inventory-preparation
+                // boundary, after verification and before the final scan. A timed
+                // copy can race the initial scan on slower/instrumented machines.
+                QEventLoop changedWait; QTimer changedLimit; changedLimit.setSingleShot(true);
+                struct ChangedCheckState {
+                    std::atomic<bool> injected{false}, copied{false};
+                    bool finished = false, restored = false;
+                    QString error;
+                };
+                auto changedState = std::make_shared<ChangedCheckState>();
+                QPointer<QEventLoop> changedContext(&changedWait);
+                QObject::connect(&changedLimit, &QTimer::timeout, &changedWait, &QEventLoop::quit);
+                QObject::connect(modules, &MibModule::profileRuntimeReady, &changedWait,
+                    [changedState, changedContext, pending](const QString &id,
+                        const MibEffectivePlan &, MibEnvironmentPtr,
+                        const QStringList &, bool cached, bool) {
+                        if (id == pending && !cached) {
+                            changedState->restored = true;
+                            if (changedContext && changedState->finished) changedContext->quit();
+                        }
+                    });
+                const QString changedFixture = QDir(smoke_config_dir).filePath("extra-fixture.mib");
+                modules->CheckProfileDependencies("mib-library", {}, false,
+                    [changedState, changedFixture, concurrentPath](const QList<MibModuleRecord> &) {
+                        if (!changedState->injected.exchange(true))
+                            changedState->copied = QFile::copy(changedFixture, concurrentPath);
+                    }, [changedState, changedContext](const QString &error) {
+                        changedState->error = error; changedState->finished = true;
+                        if (changedContext && changedState->restored) changedContext->quit();
+                    });
+                changedLimit.start(60000); changedWait.exec();
+                check(changedState->copied && changedState->finished && changedState->restored,
+                      "dependency-check: a file is added after verification and the selected parser is restored");
+                const auto changedSignature = MibDependencyIndex::profileSignature(
+                    modules->DependencyIndex()->moduleNames(), false);
+                check(changedState->error.contains("changed during checking") &&
+                      !modules->DependencyIndex()->profileCheckCurrent("mib-library", changedSignature),
+                      "dependency-check: a mid-check file change invalidates the report and requests a retry");
+                runCheck(pending, true);
+                check(modules->DependencyIndex()->profileCheckCurrent("mib-library", changedSignature) &&
+                      modules->DependencyIndex()->profileCheck("mib-library").effectiveModules.contains("EXTRA-MIB"),
+                      "dependency-check: retry verifies the file added during the preceding check");
+                smoke_output << "launch-smoke: DEPENDENCY-CHECK completed" << Qt::endl;
+                smoke_log.close(); app.exit(passed ? 0 : 1); return;
+            }
             QSettings settings;
             check(QFileInfo(settings.fileName()).absoluteFilePath().startsWith(
                       QFileInfo(smoke_config_dir).absoluteFilePath()),
@@ -391,6 +608,75 @@ int main( int argc, char ** argv )
                       problemHeading->text() != "Problems loading the active MIB profile",
                       "Problems is a bottom tab headed with the active profile's name");
             }
+            // Focus shortcuts reacquire named controls without changing Qt Tab navigation.
+            {
+                mw.activateWindow(); QCoreApplication::processEvents();
+                const auto focus = [&](const char *name, QWidget *expected) {
+                    auto *action = mw.findChild<QAction *>(name);
+                    check(action, "keyboard navigation action exists");
+                    if (action) action->trigger();
+                    QCoreApplication::processEvents();
+                    check(QApplication::focusWidget() == expected, "keyboard navigation reaches the real content control");
+                };
+                focus("WorkbenchFocusDocument", mw.findChild<QTableWidget *>("StructuredQueryResults"));
+                mw.findChild<QAction *>("ViewMibLibrary")->trigger();
+                focus("WorkbenchFocusDocument", mw.findChild<QLineEdit *>("MibLibrarySearch"));
+                mw.findChild<QAction *>("ViewMibProfiles")->trigger();
+                focus("WorkbenchFocusDocument", mw.findChild<QComboBox *>("MibProfileEditorSelector"));
+                mw.findChild<QAction *>("ViewMibEditor")->trigger();
+                focus("WorkbenchFocusDocument", snmpb.MainUI()->MIBFile);
+                mw.findChild<QAction *>("ViewTraps")->trigger();
+                focus("WorkbenchFocusDocument", snmpb.MainUI()->TrapLog);
+                mw.findChild<QAction *>("ViewWatch")->trigger();
+                focus("WorkbenchFocusDocument", mw.findChild<QTableWidget *>("WatchTable"));
+                focus("WorkbenchFocusInspector", snmpb.MainUI()->NodeInfo);
+                mw.findChild<QAction *>("ViewBottomOutput")->trigger();
+                focus("WorkbenchFocusBottom", snmpb.MainUI()->Query);
+                mw.findChild<QAction *>("WorkbenchToggleBottom")->trigger();
+                mw.findChild<QAction *>("ViewResults")->trigger();
+                auto *target = mw.findChild<QComboBox *>("ConnectionTarget");
+                focus("WorkbenchFocusTarget", target);
+                focus("WorkbenchFocusOid", mw.findChild<QLineEdit *>("QueryObjectAddress"));
+                QSet<QWidget *> reached;
+                target->setFocus();
+                for (int i = 0; i < 80; ++i) {
+                    QWidget *current = QApplication::focusWidget();
+                    if (!current) break;
+                    reached.insert(current);
+                    QKeyEvent tab(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
+                    QApplication::sendEvent(current, &tab);
+                }
+                for (const char *name : {"ConnectionTarget", "ConnectionCredential", "ConnectionManageCredentials",
+                    "MibBrowserProfileSelector", "ConnectionDetect", "WorkbenchPanelToggle", "QueryObjectAddress",
+                    "CollectionSearch", "MibTreeFilter", "MIBTree", "ResultsFilter", "ResultsDisplayMode",
+                    "StructuredQueryResults", "NodeInfo"}) {
+                    auto *control = mw.findChild<QWidget *>(name);
+                    if (control && control->isVisible() && control->isEnabled() && (control->focusPolicy() & Qt::TabFocus))
+                        check(reached.contains(control), qPrintable(QString("Tab reaches %1").arg(name)));
+                }
+                focus("WorkbenchFocusDocument", mw.findChild<QTableWidget *>("StructuredQueryResults"));
+            }
+            {
+                auto *log = snmpb.findChild<RequestLog *>();
+                auto *copy = mw.findChild<QPushButton *>("LogCopy");
+                auto *clear = mw.findChild<QPushButton *>("RequestLogClear");
+                check(log && copy && clear && !copy->isEnabled() && !clear->isEnabled(),
+                      "empty request log disables Copy and Clear");
+                if (log && copy && clear) {
+                    const auto id = log->begin("UI validation", "synthetic", "SNMPv2c", "1.3.6.1");
+                    check(copy->isEnabled() && clear->isEnabled(), "first log entry enables its actions");
+                    log->finish(id, "Stopped", 0); clear->click();
+                    check(log->entries().isEmpty() && !copy->isEnabled() && !clear->isEnabled(),
+                          "clearing the Log restores its empty state");
+                }
+                auto *filter = mw.findChild<QLineEdit *>("MibLibrarySearch");
+                auto *empty = mw.findChild<QLabel *>("MibLibraryEmptyState");
+                filter->setText("no-module-matches-this-filter");
+                check(!empty->isHidden() && empty->text().contains("filters"),
+                      "filtered-empty Library gives filter guidance rather than an import instruction");
+                filter->clear();
+                check(empty->isHidden(), "clearing Library filters restores its populated view");
+            }
             // Appearance is applied to the real workbench without rebuilding feature widgets.
             {
                 const auto originalMode = appearance.mode();
@@ -408,7 +694,7 @@ int main( int argc, char ** argv )
                 auto *dark = mw.findChild<QAction *>("Appearancedark");
                 auto *light = mw.findChild<QAction *>("Appearancelight");
                 check(dark && light && mw.findChild<QAction *>("Appearancesystem"),
-                      "View Appearance offers Follow System, Light and Dark");
+                      "Settings Appearance offers Follow System, Light and Dark");
                 if (dark && light) {
                     dark->trigger(); QCoreApplication::processEvents();
                     check(qApp->palette().color(QPalette::Base).lightness() < 128 && dark->isChecked(),
@@ -418,11 +704,18 @@ int main( int argc, char ** argv )
                     check(qApp->palette().color(QPalette::Base).lightness() > 128 && light->isChecked(),
                           "Light theme applies to the live workbench");
                     bool allControlsLight = true;
+                    const auto background = [](const QWidget *widget, QPalette::ColorRole role) {
+                        for (const QWidget *owner = widget; owner; owner = owner->parentWidget()) {
+                            const QColor color = owner->palette().color(role);
+                            if (color.alpha() != 0) return color;
+                        }
+                        return qApp->palette().color(role);
+                    };
                     for (QWidget *control : mw.findChildren<QWidget *>()) {
-                        bool matches = control->palette().color(QPalette::Window).lightness() > 128;
+                        bool matches = background(control, QPalette::Window).lightness() > 128;
                         if (qobject_cast<QLineEdit *>(control) || qobject_cast<QAbstractItemView *>(control) ||
                             qobject_cast<QTextEdit *>(control) || qobject_cast<QAbstractButton *>(control))
-                            matches = matches && control->palette().color(QPalette::Base).lightness() > 128 &&
+                            matches = matches && background(control, QPalette::Base).lightness() > 128 &&
                                 control->palette().color(QPalette::Active, QPalette::Text) == qApp->palette().color(QPalette::Active, QPalette::Text);
                         if (!matches) smoke_output << "launch-smoke: THEME-CONTROL class=" << control->metaObject()->className()
                             << " name=" << control->objectName() << " visible=" << control->isVisibleTo(&mw)
@@ -442,10 +735,17 @@ int main( int argc, char ** argv )
             }
             QWidget *queryToolbar = mw.findChild<QWidget *>("QueryToolBar");
             QWidget *header = mw.findChild<QWidget *>("CurrentDeviceContext");
-            check(queryToolbar && header && header->isAncestorOf(queryToolbar) &&
+            check(queryToolbar && header && !header->isAncestorOf(queryToolbar) &&
+                  mw.findChild<QWidget *>("WorkbenchQueryWorkspace")->isAncestorOf(queryToolbar) &&
                   queryToolbar->isAncestorOf(mw.findChild<QLineEdit *>("QueryObjectAddress")) &&
                   queryToolbar->isAncestorOf(mw.findChild<QLineEdit *>("CollectionSearch")),
-                  "the query toolbar, Object / OID and Search all MIBs span the window under the connection bar");
+                  "OID navigation and collection search belong inside Query, below permanent workspace navigation");
+            bool duplicateOperations = false;
+            if (queryToolbar) for (auto *button : queryToolbar->findChildren<QToolButton *>())
+                duplicateOperations |= !button->property("appearanceIcon").toString().isEmpty();
+            check(queryToolbar && !duplicateOperations, "Query has no duplicate SNMP operation toolbar buttons");
+            check(queryToolbar && queryToolbar->height() <= queryToolbar->fontMetrics().height()*4,
+                  "Query navigation remains one compact row and reserves space for data");
             QWidget *searchPage = mw.findChild<QWidget *>("WorkbenchSearchPage");
             check(searchPage && !searchPage->isVisible() && workbenchDocuments && queryDocuments &&
                   queryDocuments->indexOf(searchPage) < 0,
@@ -461,6 +761,87 @@ int main( int argc, char ** argv )
                       diagnosticsWindow && diagnosticsWindow->isAncestorOf(snmpb.MainUI()->LogOutput) &&
                       !diagnosticsWindow->isVisible(),
                       "Help > Diagnostics holds the SNMP library log in its own window");
+                if (diagnostics && diagnosticsWindow) {
+                    diagnostics->trigger();
+                    QCoreApplication::processEvents();
+                    check(snmpb.MainUI()->LogTab->isVisibleTo(diagnosticsWindow) &&
+                          snmpb.MainUI()->LogOutput->isVisibleTo(diagnosticsWindow) &&
+                          snmpb.MainUI()->LogOutput->toPlainText().contains("Diagnostics window opened"),
+                          "Help Diagnostics shows its actual controls and accumulated application log");
+                    const bool logging = snmpb.MainUI()->LogEnable->isChecked();
+                    snmpb.MainUI()->LogEnable->setChecked(false);
+                    check(snmpb.MainUI()->LogOutput->isEnabled(),
+                          "Diagnostics remains readable with SNMP library logging disabled");
+                    snmpb.MainUI()->LogEnable->setChecked(logging);
+                    diagnosticsWindow->close();
+                }
+            }
+            {
+                auto *ui = snmpb.MainUI();
+                QStringList titles, mnemonics;
+                bool uniqueMnemonics = true;
+                for (QAction *action : ui->MenuBar->actions()) {
+                    QString text = action->text();
+                    const int marker = text.indexOf('&');
+                    const QString key = marker >= 0 ? text.mid(marker + 1, 1).toLower() : QString();
+                    uniqueMnemonics = uniqueMnemonics && !key.isEmpty() && !mnemonics.contains(key);
+                    mnemonics << key;
+                    titles << text.remove('&');
+                }
+                check(uniqueMnemonics, "top-level menus have distinct keyboard mnemonics");
+                check(titles == QStringList{"File", "Edit", "View", "MIB", "SNMP", "Settings", "Help"},
+                      "main menu order is File, Edit, View, MIB, SNMP, Settings, Help");
+                check(ui->editMenu->actions().contains(ui->actionFind) &&
+                      ui->editMenu->actions().contains(ui->actionReplace) &&
+                      ui->editMenu->actions().contains(ui->actionGotoLine) &&
+                      ui->mibMenu->actions().contains(ui->actionVerifyMIB) &&
+                      ui->settingsMenu->actions().contains(ui->actionCredentials) &&
+                      ui->snmpMenu->actions().contains(ui->actionMultipleVarbinds) &&
+                      !ui->snmpMenu->actions().contains(ui->actionStop) &&
+                      mw.actions().contains(ui->actionStop) && ui->actionStop->shortcut() == QKeySequence("Esc") &&
+                      ui->mibMenu->actions().contains(ui->actionExtractMIBfromRFC) &&
+                      ui->settingsMenu->actions().contains(ui->actionPreferences),
+                      "editing, MIB, SNMP and Settings commands belong to their intended menus");
+                check(ui->actionFind->shortcut() == QKeySequence("Ctrl+F") &&
+                      ui->actionReplace->shortcut() == QKeySequence("Ctrl+H") &&
+                      ui->actionVerifyMIB->shortcut() == QKeySequence("Ctrl+R") &&
+                      ui->actionMultipleVarbinds->shortcut() == QKeySequence("Ctrl+M"),
+                      "menu reorganization preserves existing command shortcuts");
+            }
+            {
+                auto *appearanceMenu = mw.findChild<QMenu *>("AppearanceMenu");
+                check(appearanceMenu && snmpb.MainUI()->settingsMenu->actions().contains(appearanceMenu->menuAction()) &&
+                      !mw.findChild<QMenu *>("WorkbenchViewMenu")->actions().contains(appearanceMenu->menuAction()),
+                      "Appearance belongs to Settings and keeps its existing actions");
+                if (!smoke_mib_file.isEmpty() && smoke_live_target.isEmpty()) {
+                    QTimer::singleShot(0, &mw, [&]() {
+                        auto *about = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+                        check(about && about->text().contains("Build (UTC):") && about->text().contains("Source revision:"),
+                              "Help About displays this executable's build timestamp and source revision");
+                        if (about) about->accept();
+                    });
+                    snmpb.MainUI()->helpAboutAction->trigger();
+                    for (int workspace = 0; workspace < 3; ++workspace) {
+                        workbenchDocuments->setCurrentIndex(workspace);
+                        check(snmpb.MainUI()->actionExtractMIBfromRFC->isEnabled(),
+                              "Extract MIB from RFC is available from every workspace");
+                        QTimer::singleShot(0, &mw, [&]() {
+                            auto *chooser = qobject_cast<QFileDialog *>(QApplication::activeModalWidget());
+                            check(chooser != nullptr, "RFC extraction opens its file chooser from the MIB menu");
+                            if (chooser) chooser->reject();
+                        });
+                        snmpb.MainUI()->actionExtractMIBfromRFC->trigger();
+                        check(workbenchDocuments->currentWidget() == snmpb.MibLibraryObj() &&
+                              snmpb.MibLibraryObj()->findChild<QTabWidget *>("MibLibraryTabs")->currentWidget() == snmpb.MainUI()->EditorTab &&
+                              snmpb.MainUI()->actionVerifyMIB->isEnabled(),
+                              "RFC extraction activates Editor, where Verify Current MIB is available");
+                    }
+                    mw.findChild<QAction *>("ViewResults")->trigger();
+                    check(!snmpb.MainUI()->actionVerifyMIB->isEnabled() &&
+                          snmpb.MainUI()->mibMenu->toolTipsVisible() &&
+                          snmpb.MainUI()->actionVerifyMIB->toolTip().contains("MIBs > Editor"),
+                          "Verify is Editor-specific and explains where to use it");
+                }
             }
             // Workspace navigation preserves the shared panel and permanent top-level tabs.
             if (workbenchDocuments) {
@@ -473,8 +854,12 @@ int main( int argc, char ** argv )
                     QDockWidget *inspectorDock = mw.findChild<QDockWidget *>("WorkbenchInspectorDock");
                     QDockWidget *bottomDock = mw.findChild<QDockWidget *>("WorkbenchBottomDock");
                     const bool panelWasHidden = bottomDock && bottomDock->isHidden();
+                    const int navigationTop = workbenchDocuments->mapTo(&mw, QPoint()).y();
+                    const int connectionHeight = header->height();
                     viewLibrary->trigger();
                     QCoreApplication::processEvents();
+                    check(workbenchDocuments->mapTo(&mw, QPoint()).y() == navigationTop && header->height() == connectionHeight,
+                          "workspace navigation and connection bar keep the same height in Query and MIBs");
                     mw.grab().save(QDir(smoke_config_dir).filePath("mibs-workspace.png"));
                     QWidget *queryRow = mw.findChild<QWidget *>("QueryToolBar");
                     check(workbenchDocuments->count() == 3 &&
@@ -482,7 +867,7 @@ int main( int argc, char ** argv )
                           workbenchDocuments->tabText(1) == "MIBs",
                           "View > MIB Library selects the permanent MIBs workspace");
                     check(!snmpb.MainUI()->MIBTree->isVisibleTo(&mw) && inspectorDock && inspectorDock->isHidden() &&
-                          bottomDock && bottomDock->isHidden() == panelWasHidden && queryRow && queryRow->isHidden() &&
+                          bottomDock && bottomDock->isHidden() == panelWasHidden && queryRow && !queryRow->isVisibleTo(&mw) &&
                           mw.findChild<QWidget *>("ConnectionBar")->isVisibleTo(&mw),
                           "MIBs fills the workspace; Query tools hide and shared panel state is preserved");
                     viewLibrary->trigger();
@@ -491,7 +876,7 @@ int main( int argc, char ** argv )
                     QCoreApplication::processEvents();
                     check(workbenchDocuments->currentIndex() == 0 &&
                           snmpb.MainUI()->MIBTree->isVisibleTo(&mw) && inspectorDock && !inspectorDock->isHidden() &&
-                          bottomDock && bottomDock->isHidden() == panelWasHidden && queryRow && !queryRow->isHidden(),
+                          bottomDock && bottomDock->isHidden() == panelWasHidden && queryRow && !!queryRow->isVisibleTo(&mw),
                           "returning to Query restores tree and Inspector and preserves panel state");
                     // The environment badge opens MIB Problems from Query.
                     viewOutput->trigger();
@@ -554,6 +939,35 @@ int main( int argc, char ** argv )
             check(!snmpb.MainUI()->NodeInfo->toPlainText().isEmpty(),
                   "MIB inspector follows Tree selection");
 
+            {
+                auto *tree = snmpb.MainUI()->MIBTree;
+                auto *copy = mw.findChild<QToolButton *>("InspectorCopyOid");
+                auto *address = mw.findChild<QLineEdit *>("QueryObjectAddress");
+                const QString selected = tree->currentObjectOid();
+                if (!selected.isEmpty() && copy && address) {
+                    address->setText("1.3.6.1.4.1.999999"); copy->click();
+                    check(QApplication::clipboard()->text() == selected,
+                          "Inspector copies its selected OID independently of unsubmitted navigation text");
+                    tree->setCurrentIndex({});
+                    check(!copy->isEnabled() && address->text().isEmpty() && snmpb.MainUI()->NodeInfo->toPlainText().isEmpty(),
+                          "clearing Query selection clears OID navigation and disables Inspector Copy");
+                    tree->SelectFromOid(selected);
+                }
+                auto *iana = mw.findChild<QDialog *>("IanaMibDialog");
+                auto *openIana = mw.findChild<QPushButton *>("MibLibraryGetIana");
+                check(iana && openIana && !iana->isVisible(), "IANA downloads are in a separate initially closed window");
+                if (iana && openIana) {
+                    openIana->click(); QCoreApplication::processEvents();
+                    check(iana->isVisible() && iana->isAncestorOf(mw.findChild<QPushButton *>("MibLibraryDownload")),
+                          "Get MIBs from IANA opens the catalog and its download controls together");
+                    auto *catalog = iana->findChild<QTableWidget *>("IanaCatalogTable");
+                    check(catalog && (catalog->rowCount() || iana->findChild<QLabel *>("IanaStatus")->text().contains("Refresh Catalog")),
+                          "an empty IANA catalog explains how to retrieve its module list");
+                    iana->grab().save(QDir(smoke_config_dir).filePath("iana-window.png"));
+                    iana->close();
+                }
+            }
+
             if (!smoke_mib_file.isEmpty())
             {
                 snmpb.ShowEditorDocument();
@@ -570,11 +984,109 @@ int main( int argc, char ** argv )
                     }
                 });
                 if (openButton) openButton->click();
-                if (verifyButton) verifyButton->click();
-                check(!snmpb.MainUI()->MIBFile->toPlainText().isEmpty(),
-                      "MIB editor opened and verified a local module");
-                check(snmpb.MainUI()->MIBLogL->text().startsWith("Verification complete."),
-                      "MIB editor parsing completed");
+                // Reproduce closing the OID chooser before Verify restores the profile.
+                {
+                    MibSelection chooser(&snmpb, &mw, "Choose OID", MIBSELECTION_NONE);
+                    QTimer::singleShot(0, &mw, [&]() {
+                        auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+                        check(dialog != nullptr, "OID chooser opens before Verify");
+                        auto *tree = dialog ? dialog->findChild<MibModelView *>("OidChooserTree") : nullptr;
+                        auto *proxy = tree ? qobject_cast<QSortFilterProxyModel *>(tree->model()) : nullptr;
+                        const auto chooserEnvironment = chooser.GetEnvironment();
+                        const bool scalarAvailable = chooserEnvironment &&
+                            chooserEnvironment->nodeByOid("1.3.6.1.2.1.1.1");
+                        check(tree && proxy && proxy->sourceModel() != snmpb.MibLoaderObj()->TreeModel() &&
+                              chooser.GetSemanticOid() == (scalarAvailable ? QStringLiteral("1.3.6.1.2.1.1.1") : QString()) &&
+                              chooser.GetOid() == "1.3.6.1.2.1.1.1.0",
+                              "OID chooser uses its own model snapshot with scalar instances or numeric fallback");
+                        if (dialog) dialog->reject();
+                    });
+                    check(!chooser.run("1.3.6.1.2.1.1.1.0"), "OID chooser cancels before Verify");
+                }
+                auto *editor = snmpb.MibEditorObj();
+                auto *modules = snmpb.MibModuleObj();
+                const auto environmentBeforeVerify = modules->CurrentEnvironment();
+                const QString originalProfile = environmentBeforeVerify ? environmentBeforeVerify->profileId() : QString();
+                const QString originalContent = snmpb.MainUI()->MIBFile->toPlainText();
+                QString profileError;
+                const QString pendingProfile = snmpb.MibLibraryObj()->profileService()->create(
+                    "Verify pending selection", &profileError);
+                check(!pendingProfile.isEmpty(), "Verify profile-switch fixture is created");
+                snmpb.MibLibraryObj()->reloadProfiles();
+                const auto runVerification = [&](bool changeDocument, const QString &profile) {
+                    QEventLoop wait;
+                    QTimer limit; limit.setSingleShot(true);
+                    bool completed = false, current = false, restored = false, uiRan = false;
+                    int completions = 0;
+                    QObject::connect(&limit, &QTimer::timeout, &wait, &QEventLoop::quit);
+                    QObject::connect(editor, &MibEditor::VerificationFinished, &wait, [&](bool matches) {
+                        completed = true; current = matches; ++completions;
+                        if (restored) wait.quit();
+                    });
+                    QObject::connect(modules, &MibModule::profileRuntimeReady, &wait,
+                        [&](const QString &id, const MibEffectivePlan &, MibEnvironmentPtr,
+                            const QStringList &, bool cached, bool) {
+                            if (completed && id == profile && !cached) { restored = true; wait.quit(); }
+                        });
+                    auto release = std::make_shared<std::promise<void>>();
+                    const auto released = release->get_future().share();
+                    MibEngine::instance().submit([released] { released.wait_for(std::chrono::seconds(5)); });
+                    QTimer::singleShot(50, &wait, [&] {
+                        uiRan = editor->VerificationRunning() && modules->EditorVerificationRunning();
+                        auto *tabs = snmpb.MibLibraryObj()->findChild<QTabWidget *>("MibLibraryTabs");
+                        if (tabs) { tabs->setCurrentIndex(0); tabs->setCurrentWidget(snmpb.MainUI()->EditorTab); }
+                        check(!snmpb.MainUI()->actionVerifyMIB->isEnabled(),
+                              "Verify remains disabled after switching subtabs during a check");
+                        modules->ModuleMetadata("SNMPv2-MIB");
+                        if (changeDocument) {
+                            QString refreshError;
+                            modules->RefreshDependencyIndex(&refreshError);
+                            check(refreshError.contains("queued"), "Verify defers Library refresh without blocking the UI");
+                            bool rejected = false;
+                            modules->CheckProfileDependencies("mib-library", {}, false, {},
+                                [&](const QString &error) { rejected = error.contains("already running"); });
+                            check(rejected, "Library checking cannot overlap Editor verification");
+                        }
+                        check(!modules->VerifyEditorSource("ignored", {}, MibValidationLevel::Errors),
+                              "Verify rejects a second operation while busy");
+                        editor->VerifyMIB(); // A direct duplicate invocation must also be harmless.
+                        if (changeDocument) snmpb.MainUI()->MIBFile->insertPlainText("-- edited while verifying\n");
+                        snmpb.MibLibraryObj()->selectProfile(profile);
+                        release->set_value();
+                    });
+                    const auto publishedBeforeClick = modules->CurrentEnvironment();
+                    QElapsedTimer returned; returned.start();
+                    if (verifyButton) verifyButton->click();
+                    const auto clickMsecs = returned.elapsed();
+                    check(modules->CurrentEnvironment() == publishedBeforeClick,
+                          "Verify preserves the published Query environment while queued");
+                    limit.start(60000); wait.exec();
+                    check(clickMsecs < 500 && uiRan, "Verify returns promptly and the UI runs while its worker is gated");
+                    check(completed && completions == 1 && current == !changeDocument && !editor->VerificationRunning(),
+                          "Verify completes once and detects document changes");
+                    check(restored && modules->CurrentEnvironment() && modules->CurrentEnvironment()->profileId() == profile,
+                          "Verify restores the latest profile selected while checking");
+                    smoke_output << "launch-smoke: VERIFY-RESPONSIVENESS click-ms=" << clickMsecs
+                                 << " changed-document=" << changeDocument << Qt::endl;
+                };
+                runVerification(true, pendingProfile);
+                check(editor->Diagnostics().isEmpty() && snmpb.MainUI()->MIBLogL->text().startsWith("Document changed"),
+                      "Verify discards stale diagnostics and asks to check the changed document again");
+                snmpb.MainUI()->MIBFile->setPlainText(originalContent);
+                snmpb.MainUI()->MIBFile->document()->setModified(false);
+                runVerification(false, originalProfile);
+                check(snmpb.MibLibraryObj()->profileService()->remove(pendingProfile, &profileError),
+                      "Verify temporary profile is removed");
+                snmpb.MibLibraryObj()->reloadProfiles();
+                if (originalContent.contains("SMOKE-EDITOR-ROOT-MIB")) {
+                    bool missingImport = false;
+                    for (const auto &diagnostic : editor->Diagnostics()) missingImport |= diagnostic.tag == "module-not-found";
+                    check(!missingImport && environmentBeforeVerify &&
+                          !environmentBeforeVerify->nodeByQualifiedName("SMOKE-EDITOR-DEPENDENCY-MIB::smokeEditorBranch"),
+                          "Editor resolves filename-independent Library imports outside the active Query profile");
+                }
+                check(!snmpb.MainUI()->MIBFile->toPlainText().isEmpty(), "MIB editor opened and verified a local module");
+                check(snmpb.MainUI()->MIBLogL->text().startsWith("Verification complete."), "MIB editor parsing completed");
                 QTabWidget *documentTabs = mw.findChild<QTabWidget *>("WorkbenchDocuments");
                 QCoreApplication::processEvents();
                 check(documentTabs && documentTabs->currentWidget() == snmpb.MibLibraryObj() &&
@@ -598,15 +1110,115 @@ int main( int argc, char ** argv )
                       "away from the editor its actions are off, but Open MIB and Find (in the tree) stay available");
             }
 
-            snmpb.PreferencesObj()->Save();
+            QDialog *preferencesDialog = mw.findChild<QDialog *>("Preferences");
+            auto *preferenceSections = preferencesDialog ? preferencesDialog->findChild<QTreeWidget *>("PreferencesTree") : nullptr;
+            check(preferenceSections && preferenceSections->topLevelItemCount() == 3 &&
+                  preferenceSections->topLevelItem(0)->text(0) == "General" &&
+                  preferenceSections->topLevelItem(1)->text(0) == "SNMP" &&
+                  preferenceSections->topLevelItem(2)->text(0) == "Traps" &&
+                  !mw.findChild<QWidget *>("MibLoadingEnable") &&
+                  !mw.findChild<QWidget *>("ModulePaths"),
+                  "Preferences has General, SNMP and Traps without duplicate MIB collection/path controls");
             settings.sync();
+            const PreferencesSettings beforePreferences = PreferencesSettings::load(settings);
+            const bool hadLegacyPaths = settings.contains("mibpaths/size");
+            if (preferencesDialog && preferenceSections && smoke_live_target.isEmpty() && !smoke_mib_file.isEmpty()) {
+                const auto savedBytes = [&]() {
+                    settings.sync(); QFile file(settings.fileName());
+                    if (!file.open(QIODevice::ReadOnly)) {
+                        check(false, "isolated Preferences settings file is readable");
+                        return QByteArray();
+                    }
+                    return file.readAll();
+                };
+                const QByteArray originalBytes = savedBytes();
+                QTimer::singleShot(0, preferencesDialog, [&]() {
+                    // Editor verification may have queued a runtime restore. Capture
+                    // this baseline at dialog entry, before making pending edits.
+                    const auto originalEnvironment = snmpb.MibModuleObj()->CurrentEnvironment();
+                    check(preferencesDialog->isVisible(), "Settings Preferences opens the actual dialog");
+                    preferencesDialog->resize(640, 480); QCoreApplication::processEvents();
+                    auto *scroll = preferencesDialog->findChild<QScrollArea *>("PreferencesScroll");
+                    auto *footer = preferencesDialog->findChild<QDialogButtonBox *>("OKCancelBox");
+                    check(scroll && footer && preferencesDialog->width() <= 640 && preferencesDialog->height() <= 480 &&
+                          preferencesDialog->rect().contains(footer->mapTo(preferencesDialog, footer->rect().bottomRight())),
+                          "dialog-polish: compact Preferences keeps its footer outside scrollable sections");
+                    if (scroll) {
+                        preferenceSections->setCurrentItem(preferenceSections->topLevelItem(1));
+                        auto *last = preferencesDialog->findChild<QSpinBox *>("BulkMaxRepetitions");
+                        scroll->ensureWidgetVisible(last); last->setFocus(); QCoreApplication::processEvents();
+                        check(scroll->viewport()->rect().intersects(QRect(last->mapTo(scroll->viewport(), QPoint()), last->size())),
+                              "dialog-polish: the last SNMP setting remains reachable in compact Preferences");
+                        preferencesDialog->grab().save(QDir(smoke_config_dir).filePath("dialog-preferences.png"));
+                    }
+
+                    preferencesDialog->findChild<QSpinBox *>("TrapPort")->setValue(30162);
+                    preferencesDialog->findChild<QSpinBox *>("RequestTimeout")->setValue(27);
+                    preferencesDialog->findChild<QSpinBox *>("TrapHistoryLimit")->setValue(77);
+                    preferencesDialog->findChild<QCheckBox *>("ExpandTrapBinding")->setChecked(!beforePreferences.expandTrapBinding);
+                    preferencesDialog->findChild<QCheckBox *>("ShowAgentName")->setChecked(!beforePreferences.showAgentName);
+                    for (int i = 0; i < 3; ++i)
+                        preferenceSections->setCurrentItem(preferenceSections->topLevelItem(i));
+                    check(preferencesDialog->findChild<QSpinBox *>("RequestTimeout")->value() == 27,
+                          "switching Preferences sections retains pending edits");
+                    check(savedBytes() == originalBytes &&
+                          snmpb.MibModuleObj()->CurrentEnvironment() == originalEnvironment &&
+                          snmpb.PreferencesObj()->GetTrapPort4() == beforePreferences.trapPort4 &&
+                          snmpb.PreferencesObj()->GetExpandTrapBinding() == beforePreferences.expandTrapBinding &&
+                          snmpb.PreferencesObj()->GetShowAgentName() == beforePreferences.showAgentName &&
+                          snmpb.TrapObj()->service()->history().maximumRecords() == beforePreferences.trapHistoryLimit,
+                          "pending Preferences edits preserve settings, the environment and live behavior");
+                    auto *ipv4 = preferencesDialog->findChild<QCheckBox *>("EnableIPv4");
+                    auto *ipv6 = preferencesDialog->findChild<QCheckBox *>("EnableIPv6");
+                    auto *buttons = preferencesDialog->findChild<QDialogButtonBox *>("OKCancelBox");
+                    ipv4->setChecked(false); ipv6->setChecked(false);
+                    check(!buttons->button(QDialogButtonBox::Ok)->isEnabled(),
+                          "Preferences cannot accept with both transports disabled");
+                    buttons->button(QDialogButtonBox::Cancel)->click();
+                });
+                snmpb.MainUI()->actionPreferences->trigger();
+                check(savedBytes() == originalBytes &&
+                      snmpb.PreferencesObj()->GetTrapPort4() == beforePreferences.trapPort4 &&
+                      snmpb.PreferencesObj()->GetTrapHistoryLimit() == beforePreferences.trapHistoryLimit,
+                      "Cancel restores every pending preference and preserves the settings file");
+                QTimer::singleShot(0, preferencesDialog, [&]() {
+                    check(preferencesDialog->findChild<QSpinBox *>("RequestTimeout")->value() == beforePreferences.requestTimeout,
+                          "reopening Preferences starts with applied values after cancellation");
+                    preferencesDialog->findChild<QSpinBox *>("TrapHistoryLimit")->setValue(123);
+                    preferencesDialog->findChild<QDialogButtonBox *>("OKCancelBox")->button(QDialogButtonBox::Ok)->click();
+                });
+                snmpb.MainUI()->actionPreferences->trigger();
+                check(snmpb.PreferencesObj()->GetTrapHistoryLimit() == 123 &&
+                      snmpb.TrapObj()->service()->history().maximumRecords() == 123,
+                      "OK commits the actual Preferences dialog and updates live trap retention");
+            }
+            QSpinBox *trapHistoryLimit = mw.findChild<QSpinBox *>("TrapHistoryLimit");
+            const int previousTrapLimit = beforePreferences.trapHistoryLimit;
+            check(trapHistoryLimit != nullptr, "trap history preference control exists");
+            if (trapHistoryLimit) trapHistoryLimit->setValue(123);
+            snmpb.PreferencesObj()->Save();
+            check(snmpb.TrapObj()->service()->history().maximumRecords() == 123,
+                  "saving trap history limit applies immediately to the running service");
+            if (trapHistoryLimit) trapHistoryLimit->setValue(previousTrapLimit);
+            snmpb.PreferencesObj()->Save();
+            check(snmpb.TrapObj()->service()->history().maximumRecords() == previousTrapLimit,
+                  "restoring trap history preference updates the service again");
+            settings.sync();
+            check(PreferencesSettings::load(settings).mibPaths == beforePreferences.mibPaths &&
+                  PreferencesSettings::load(settings).automaticLoading == beforePreferences.automaticLoading,
+                  "repeated Preferences saves neither duplicate paths nor rewrite retired loading settings");
             check(settings.contains("network/enableipv4") &&
-                  settings.contains("mibpaths/size"),
+                  settings.contains("mibpaths/size") == hadLegacyPaths,
                   "preferences saved to isolated configuration");
 
             QTranslator translation_probe;
             check(translation_probe.load(":/i18n/snmpb.uk_UA"),
                   "bundled application translation loads");
+            if (beforePreferences.mibPaths.join(';').contains("Legacy-only-MIBs")) {
+                QFile config(snmpb.GetSmiConfigFile());
+                check(config.open(QIODevice::ReadOnly) && !config.readAll().contains("Legacy-only-MIBs"),
+                      "startup libsmi paths exclude retained legacy folders outside the MIB Library");
+            }
             check(QFileInfo::exists(snmpb.GetSmiConfigFile()),
                   "loaded-MIB state file initialized");
             check(QFileInfo::exists(snmpb.GetBootCounterConfigFile()),
@@ -624,10 +1236,21 @@ int main( int argc, char ** argv )
                 if (notes) notes->setChecked(true);
                 QCoreApplication::processEvents();
                 if (table->rowCount() > 0 && detail) {
+                    // Keep the current cell fixed while changing selection: the
+                    // detail pane must not depend on currentCellChanged firing.
+                    table->setCurrentCell(0, 0, QItemSelectionModel::NoUpdate);
+                    table->clearSelection();
                     table->selectRow(0);
-                    QCoreApplication::processEvents();
+                    // Selection signals update the detail synchronously. Do not
+                    // yield here to an unrelated editor runtime/report restore.
                     check(detail->toPlainText().contains("Why:"),
-                          "Selecting a Problems row fills the detail pane");
+                          "Selecting a Problems row fills the detail pane even when its current cell is unchanged");
+                    table->clearSelection();
+                    check(detail->toPlainText().isEmpty(),
+                          "clearing Problems selection clears the detail pane");
+                    table->selectRow(0);
+                    check(detail->toPlainText().contains("Why:"),
+                          "reselecting the same Problems row restores its explanation");
                 }
                 mw.grab().save(QDir(smoke_config_dir).filePath("problems-tab-notes.png"));
                 if (QAction *viewOutput = mw.findChild<QAction *>("ViewResults")) viewOutput->trigger();
@@ -639,7 +1262,7 @@ int main( int argc, char ** argv )
                 QComboBox *credentialBox = mw.findChild<QComboBox *>("ConnectionCredential");
                 QComboBox *profileBox = mw.findChild<QComboBox *>("MibBrowserProfileSelector");
                 check(bar && targetBox && credentialBox && profileBox, "connection bar has Target, Credential and MIB Profile");
-                check(bar && profileBox && profileBox->parentWidget() == bar,
+                check(bar && profileBox && bar->isAncestorOf(profileBox),
                       "the MIB Profile selector lives in the connection bar (there is only one)");
                 check(mw.findChild<QToolButton *>("ConnectionManageCredentials") != nullptr,
                       "the connection bar offers Manage… for saved credentials");
@@ -1026,9 +1649,22 @@ int main( int argc, char ** argv )
                                              << " detail=\"" << e.detail << "\"" << Qt::endl;
                             }
                         };
-                        runSingle("get", [&] { snmpb.AgentObj()->GetFrom("1.3.6.1.2.1.1.1.0", 0); });
-                        runSingle("getnext", [&] { snmpb.AgentObj()->GetFrom("1.3.6.1.2.1.1.1", 1); });
-                        runSingle("getbulk", [&] { snmpb.AgentObj()->GetFrom("1.3.6.1.2.1.1", 2); });
+                        const auto queryTypedInstance = [&](const QString &root, const QString &suffix, int operation) {
+                            QTimer::singleShot(0, &mw, [&]() {
+                                auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+                                auto *field = dialog ? dialog->findChild<QLineEdit *>("InstanceSuffix") : nullptr;
+                                auto *buttons = dialog ? dialog->findChild<QDialogButtonBox *>() : nullptr;
+                                check(field && buttons, "dialog-polish: typed instance opens for the scripted query");
+                                if (field && buttons) { field->setText(suffix); buttons->button(QDialogButtonBox::Ok)->click(); }
+                                else if (dialog) dialog->reject();
+                            });
+                            snmpb.AgentObj()->GetFromPromptInstance(root, operation);
+                            check(singleLog && !singleLog->entries().isEmpty() && singleLog->entries().last().oid == root + "." + suffix,
+                                  "dialog-polish: accepting instance entry queries the exact typed suffix");
+                        };
+                        runSingle("get", [&] { queryTypedInstance("1.3.6.1.2.1.1.1", "0", 0); });
+                        runSingle("getnext", [&] { queryTypedInstance("1.3.6.1.2.1.1", "1", 1); });
+                        runSingle("getbulk", [&] { queryTypedInstance("1.3.6.1.2.1", "1", 2); });
                         runSingle("get-missing", [&] { snmpb.AgentObj()->GetFrom("1.3.6.1.2.1.1.9.0", 0); });
                         runSingle("getnext-end", [&] { snmpb.AgentObj()->GetFrom("1.3.6.1.4.1.90001.9.9", 1); });
                         // Set, against the test agent only (it keeps the new value in memory): the one
@@ -1090,7 +1726,16 @@ int main( int argc, char ** argv )
                         const int rowsAtStop = results->rowCount();
                         QElapsedTimer stopTimer; stopTimer.start();
                         const bool stopWasAvailable = snmpb.MainUI()->actionStop->isEnabled();
-                        snmpb.MainUI()->actionStop->trigger();
+                        // Exercise the actual window shortcut after removing its menu entry.
+                        bool escapeTriggeredStop = false;
+                        const auto shortcutCheck = QObject::connect(snmpb.MainUI()->actionStop, &QAction::triggered,
+                            &mw, [&]() { escapeTriggeredStop = true; });
+                        mw.activateWindow(); mw.setFocus();
+                        QCoreApplication::processEvents();
+                        QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+                        QApplication::sendEvent(&mw, &escape);
+                        QObject::disconnect(shortcutCheck);
+                        check(escapeTriggeredStop, "Esc triggers Stop even without a Stop menu entry");
                         QEventLoop stopWait; QTimer stopLimit; stopLimit.setSingleShot(true);
                         QObject::connect(&stopLimit, &QTimer::timeout, &stopWait, &QEventLoop::quit);
                         QTimer stopPoll; QObject::connect(&stopPoll, &QTimer::timeout, &stopWait, [&]() {
@@ -1303,8 +1948,27 @@ int main( int argc, char ** argv )
                             mw.resize(1500, 1000);
                             QCoreApplication::processEvents();
                             mw.grab().save(QDir(smoke_config_dir).filePath("watch-tab.png"));
-                            watchService->remove(watchId);
-                            check(watchTable && watchTable->rowCount() == 0, "live: removing a watch removes its row");
+                            if (QAction *viewWatch = mw.findChild<QAction *>("ViewWatch")) viewWatch->trigger();
+                            QCoreApplication::processEvents();
+                            QObject watchMenuContext;
+                            QTimer::singleShot(0, &watchMenuContext, [&]() {
+                                auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+                                check(menu, "live: Watch context menu opens");
+                                if (!menu) return;
+                                QAction *pause = menu->actions().first();
+                                watchService->remove(watchId); // invalidate the old row during the modal menu
+                                menu->setActiveAction(pause);
+                                QKeyEvent key(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+                                QApplication::sendEvent(menu, &key);
+                            });
+                            const QPoint position = watchTable->visualItemRect(watchTable->item(0, 0)).center();
+                            emit watchTable->customContextMenuRequested(position);
+                            check(watchTable && watchTable->rowCount() == 0,
+                                  "live: removing a watch removes its row");
+                            check(watchTable && watchTable->rowCount() == 0 && !watchService->row(watchId),
+                                  "live: a removed Watch row cannot be accessed or recreated by its open menu");
+                            check(mw.findChild<QLabel *>("WatchHint")->text().startsWith("No watches yet"),
+                                  "live: removing the final watch restores empty-state guidance");
                         }
                         if (smoke_live_target.startsWith("127.0.0.1") && smoke_live_core) {
                             // Detect profile: start from another profile; the test agent reports a
@@ -1373,6 +2037,27 @@ int main( int argc, char ** argv )
                     QCoreApplication::processEvents();
                     mw.grab().save(QDir(smoke_config_dir).filePath("live-get.png"));
                 }
+            }
+            {
+                // Exercise the application's actual receive-to-widget wiring using
+                // a local value PDU, without sending any network traffic.
+                Pdu notification;
+                notification.set_type(sNMP_PDU_TRAP);
+                notification.set_notify_id(Oid("1.3.6.1.6.3.1.1.5.1"));
+                Vb binding(Oid("1.3.6.1.2.1.2.2.1.8.1"));
+                binding.set_value(SnmpInt32(7));
+                notification += binding;
+                TrapEndpoint endpoint{QStringLiteral("192.0.2.10"), 9162,
+                    TrapSnmpVersion::V2c, QStringLiteral("synthetic"), {}};
+                check(snmpb.TrapObj()->Receive(notification, endpoint),
+                    "synthetic trap enters the application receiver");
+                QTreeWidget *content = snmpb.MainUI()->TrapContent;
+                check(snmpb.MainUI()->TrapLog->topLevelItemCount() == 1 &&
+                    content->topLevelItemCount() == 2 && content->topLevelItem(1)->childCount() == 1 &&
+                    content->topLevelItem(1)->child(0)->text(2) == "Integer32" &&
+                    content->topLevelItem(1)->child(0)->text(3) == "7",
+                    "synthetic trap displays typed raw data in the actual Traps workspace");
+                snmpb.TrapObj()->service()->clear();
             }
             check(snmpb.MainUI()->TrapLog->contextMenuPolicy() == Qt::CustomContextMenu,
                   "the trap list offers a right-click menu (Copy source IP)");
@@ -1488,6 +2173,61 @@ int main( int argc, char ** argv )
                           "the same name defined in several modules gives one result per module");
                     check(snmpv2Row >= 0 && !cell(snmpv2Row, 4).isEmpty(),
                           "every result says which profiles contain it, or that none does");
+                    if (searchTable->rowCount() > 0) {
+                        const QString savedEditorText = snmpb.MainUI()->MIBFile->toPlainText();
+                        const bool savedEditorModified = snmpb.MainUI()->MIBFile->document()->isModified();
+                        const auto savedEditorCursor = snmpb.MainUI()->MIBFile->textCursor();
+                        const int savedEditorPosition = savedEditorCursor.position();
+                        const int savedEditorAnchor = savedEditorCursor.anchor();
+                        auto *searchPanel = mw.findChild<CollectionSearchPanel *>();
+                        const int row = 0;
+                        const QString file = searchTable->item(row, 5)->data(Qt::UserRole).toString();
+                        const int line = searchTable->item(row, 5)->data(Qt::UserRole + 1).toInt();
+                        int deliveries = 0;
+                        const auto connection = QObject::connect(searchPanel, &CollectionSearchPanel::openInEditorRequested,
+                            &mw, [&](const QString &chosen, int at) {
+                                ++deliveries; check(chosen == file && at == line,
+                                    "Search menu keeps the captured source after its table is rebuilt");
+                            });
+                        QObject searchMenuContext;
+                        QTimer::singleShot(0, &searchMenuContext, [&]() {
+                            auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+                            check(menu, "Search source menu opens"); if (!menu) return;
+                            auto *open = menu->actions().value(1);
+                            searchPanel->search("no-such-definition-during-menu");
+                            menu->setActiveAction(open);
+                            QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+                            QApplication::sendEvent(menu, &enter);
+                        });
+                        const QPoint position = searchTable->visualItemRect(searchTable->item(row, 0)).center();
+                        emit searchTable->customContextMenuRequested(position);
+                        QObject::disconnect(connection);
+                        check(deliveries == 1, "Search menu opens its captured definition exactly once");
+                        // Keyboard activation uses the same source-opening path as a double-click.
+                        searchBox->setText("SNMPv2-MIB::sysDescr"); emit searchBox->returnPressed();
+                        if (searchTable->rowCount()) {
+                            int activations = 0;
+                            const auto activated = QObject::connect(searchPanel, &CollectionSearchPanel::showInTreeRequested,
+                                &mw, [&](const QString &) { ++activations; });
+                            const auto opened = QObject::connect(searchPanel, &CollectionSearchPanel::openInEditorRequested,
+                                &mw, [&](const QString &, int) { ++activations; });
+                            searchTable->setCurrentCell(0, 0); searchTable->setFocus();
+                            QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+                            QApplication::sendEvent(searchTable, &enter);
+                            check(activations == 1, "Enter activates a Search result exactly once");
+                            QObject::disconnect(activated); QObject::disconnect(opened);
+                        }
+                        // Source-opening regressions must not replace the later edit/save fixture.
+                        if (!smoke_mib_file.isEmpty()) snmpb.MibEditorObj()->MibFileOpen(smoke_mib_file);
+                        snmpb.MainUI()->MIBFile->setPlainText(savedEditorText);
+                        QTextCursor restoredCursor(snmpb.MainUI()->MIBFile->document());
+                        restoredCursor.setPosition(savedEditorAnchor);
+                        restoredCursor.setPosition(savedEditorPosition, QTextCursor::KeepAnchor);
+                        snmpb.MainUI()->MIBFile->setTextCursor(restoredCursor);
+                        snmpb.MainUI()->MIBFile->document()->setModified(savedEditorModified);
+                        check(snmpb.MainUI()->MIBFile->toPlainText() == savedEditorText,
+                              "Search regression restores the independent Editor fixture");
+                    }
                     if (hasGoodMib) {
                     searchBox->setText("1.3.6.1.4.1.90001.1.0");
                     emit searchBox->returnPressed();
@@ -1503,6 +2243,125 @@ int main( int argc, char ** argv )
                     QCoreApplication::processEvents();
                     mw.grab().save(QDir(smoke_config_dir).filePath("search-tab.png"));
                 }
+            }
+            // A smaller desktop must retain the fixed workspace navigation and connection controls.
+            if (smoke_live_target.isEmpty() && !smoke_mib_file.isEmpty()) {
+                auto *tabs = mw.findChild<QTabWidget *>("WorkbenchDocuments");
+                auto *header = mw.findChild<QWidget *>("CurrentDeviceContext");
+                auto *bottom = mw.findChild<QDockWidget *>("WorkbenchBottomDock");
+                const QSize previousSize = mw.size();
+                const int previousTab = tabs ? tabs->currentIndex() : 0;
+                const bool bottomHidden = bottom && bottom->isHidden();
+                if (bottom) bottom->hide();
+                int navigationY = -1;
+                for (int page = 0; tabs && page < tabs->count(); ++page) {
+                    tabs->setCurrentIndex(page); QCoreApplication::processEvents();
+                    mw.resize(1024, 720); QCoreApplication::processEvents();
+                    bool controlsFit = header;
+                    for (const auto *name : {"ConnectionTarget", "ConnectionCredential", "MibBrowserProfileSelector", "ConnectionDetect"})
+                        if (auto *control = mw.findChild<QWidget *>(name))
+                            controlsFit &= header && header->rect().contains(control->mapTo(header, control->rect().bottomRight()));
+                        else controlsFit = false;
+                    const int y = tabs->mapTo(&mw, QPoint()).y();
+                    if (navigationY < 0) navigationY = y;
+                    smoke_output << "launch-smoke: SMALL-WINDOW page=" << page << " size=" << mw.width() << "x" << mw.height()
+                                 << " minimum=" << mw.minimumSize().width() << "x" << mw.minimumSize().height()
+                                 << " controls-fit=" << controlsFit << " navigation-y=" << y << Qt::endl;
+                    check(mw.width() <= 1024 && mw.height() <= 720 && controlsFit && navigationY == y,
+                          "dialog-polish: smaller desktop keeps workspace navigation fixed and connection controls visible");
+                    mw.grab().save(QDir(smoke_config_dir).filePath(QString("small-window-workspace-%1.png").arg(page)));
+                }
+                if (tabs) tabs->setCurrentIndex(previousTab);
+                if (bottom) bottom->setVisible(!bottomHidden);
+                mw.resize(previousSize); QCoreApplication::processEvents();
+            }
+            // Actual Editor dialogs: action/default-button behavior and compact layout.
+            if (smoke_live_target.isEmpty() && !smoke_mib_file.isEmpty()) {
+                snmpb.ShowEditorDocument();
+                auto *document = snmpb.MainUI()->MIBFile;
+                const QString original = document->toPlainText();
+                const bool wasModified = document->document()->isModified();
+                document->setPlainText("alpha\nbeta alpha\ngamma\n");
+                document->moveCursor(QTextCursor::Start);
+                const auto dialogFits = [&](QDialog *dialog, const QString &image) {
+                    if (!dialog) { check(false, "dialog-polish: expected modal dialog opens"); return; }
+                    dialog->resize(640, 480); QCoreApplication::processEvents();
+                    auto *buttons = dialog->findChild<QDialogButtonBox *>();
+                    check(dialog->width() <= 640 && dialog->height() <= 480 && buttons &&
+                          dialog->rect().contains(buttons->mapTo(dialog, buttons->rect().bottomRight())),
+                          "dialog-polish: compact dialog keeps its standard footer visible");
+                    dialog->grab().save(QDir(smoke_config_dir).filePath(image));
+                };
+                QTimer::singleShot(0, &mw, [&]() {
+                    auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+                    dialogFits(dialog, "dialog-find.png"); if (!dialog) return;
+                    auto *find = dialog->findChild<QComboBox *>("comboFind");
+                    auto *next = dialog->findChild<QPushButton *>("buttonFindNext");
+                    check(find && next && !next->isEnabled(), "dialog-polish: empty Find has no active search action");
+                    if (find && next) {
+                        find->setEditText("alpha");
+                        QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+                        QApplication::sendEvent(dialog, &enter);
+                        check(next->isEnabled() && next->isDefault() && dialog->isVisible() &&
+                              document->textCursor().selectedText() == "alpha",
+                              "dialog-polish: Enter finds text without closing Find");
+                    }
+                    dialog->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Close)->click();
+                });
+                snmpb.MainUI()->actionFind->trigger();
+                document->moveCursor(QTextCursor::Start);
+                QTimer::singleShot(0, &mw, [&]() {
+                    auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+                    dialogFits(dialog, "dialog-replace.png"); if (!dialog) return;
+                    auto *find = dialog->findChild<QComboBox *>("comboFind");
+                    auto *replacement = dialog->findChild<QComboBox *>("comboReplace");
+                    auto *next = dialog->findChild<QPushButton *>("buttonFindNext");
+                    auto *replace = dialog->findChild<QPushButton *>("buttonReplace");
+                    auto *all = dialog->findChild<QPushButton *>("buttonReplaceAll");
+                    if (find && replacement && next && replace && all) {
+                        find->setEditText("");
+                        check(!replace->isEnabled() && !all->isEnabled(), "dialog-polish: empty Replace disables replacement actions");
+                        find->setEditText("alpha"); replacement->setEditText("omega"); next->click(); replace->click(); all->click();
+                        check(document->toPlainText() == "omega\nbeta omega\ngamma\n" && dialog->isVisible(),
+                              "dialog-polish: Replace and Replace All edit the actual document without closing");
+                    } else check(false, "dialog-polish: replacement controls exist");
+                    dialog->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Close)->click();
+                });
+                snmpb.MainUI()->actionReplace->trigger();
+                QTimer::singleShot(0, &mw, [&]() {
+                    auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+                    dialogFits(dialog, "dialog-go-to-line.png"); if (!dialog) return;
+                    auto *line = dialog->findChild<QSpinBox *>("spinLine");
+                    check(line && line->minimum() == 1, "dialog-polish: Go to Line starts at the first valid line");
+                    if (line) line->setValue(2);
+                    dialog->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok)->click();
+                });
+                snmpb.MainUI()->actionGotoLine->trigger();
+                check(document->textCursor().blockNumber() == 1, "dialog-polish: Go to Line moves the actual Editor cursor");
+                document->setPlainText(original); document->document()->setModified(wasModified);
+
+                auto *requestLog = snmpb.findChild<RequestLog *>();
+                const auto requestCount = requestLog ? requestLog->entries().size() : -1;
+                for (int operation = 0; operation < 3; ++operation) {
+                    QTimer::singleShot(0, &mw, [&]() {
+                        auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+                        dialogFits(dialog, "dialog-enter-instance.png"); if (!dialog) return;
+                        auto *suffix = dialog->findChild<QLineEdit *>("InstanceSuffix");
+                        auto *buttons = dialog->findChild<QDialogButtonBox *>();
+                        check(suffix && buttons && !buttons->button(QDialogButtonBox::Ok)->isEnabled(),
+                              "dialog-polish: Enter Instance requires a suffix");
+                        if (suffix && buttons) {
+                            suffix->setText("1.4");
+                            check(buttons->button(QDialogButtonBox::Ok)->isEnabled(), "dialog-polish: a numeric compound suffix enables Query");
+                            suffix->setText("1..4");
+                            check(!buttons->button(QDialogButtonBox::Ok)->isEnabled(), "dialog-polish: an incomplete suffix cannot start a query");
+                            suffix->setText("7"); buttons->button(QDialogButtonBox::Cancel)->click();
+                        } else dialog->reject();
+                    });
+                    snmpb.AgentObj()->GetFromPromptInstance("1.3.6.1.2.1.2.2.1.10", operation);
+                }
+                check(requestLog && requestLog->entries().size() == requestCount,
+                      "dialog-polish: cancelling Get, Get Next and Get Bulk instance entry issues no request");
             }
             // Unified credentials: explicit versions, independent display names and stable IDs.
             if (auto *dialog = mw.findChild<CredentialsDialog *>("CredentialsDialog")) {
@@ -1567,6 +2426,21 @@ int main( int argc, char ** argv )
                     check(fields->currentIndex() == 1 && list->count() == communitiesBefore.size() + usersBefore.size() + 4,
                           "reopening credentials retains a unified list and selects the requested kind");
                     dialog->grab().save(QDir(smoke_config_dir).filePath("credentials-workspace.png"));
+                    const QSize previousSize = dialog->size(); const bool wasVisible = dialog->isVisible();
+                    dialog->show(); dialog->resize(640, 480); QCoreApplication::processEvents();
+                    auto *scroll = dialog->findChild<QScrollArea *>("CredentialEditorScroll");
+                    auto *footer = dialog->findChild<QDialogButtonBox *>();
+                    if (scroll) { scroll->ensureWidgetVisible(privSecret); privSecret->setFocus(); QCoreApplication::processEvents(); }
+                    check(scroll && footer && dialog->width() <= 640 && dialog->height() <= 480 &&
+                          dialog->rect().contains(footer->mapTo(dialog, footer->rect().bottomRight())) &&
+                          scroll->viewport()->rect().intersects(QRect(privSecret->mapTo(scroll->viewport(), QPoint()), privSecret->size())),
+                          "dialog-polish: compact Credentials keeps privacy fields reachable and footer visible");
+                    check(!dialog->findChild<QPushButton *>("CredentialDelete")->autoDefault() &&
+                          !dialog->findChild<QPushButton *>("CredentialDuplicate")->autoDefault(),
+                          "dialog-polish: list actions cannot become the credential dialog default");
+                    dialog->grab().save(QDir(smoke_config_dir).filePath("dialog-credentials-compact.png"));
+                    dialog->resize(previousSize); dialog->setVisible(wasVisible);
+
                     // Removing a secondary variant must also discard its learned notification keys.
                     auto *notificationUsm = snmpb.AgentObj()->GetUSMObj();
                     const OctetStr testEngine("credential-deletion-test-engine");
@@ -1683,6 +2557,24 @@ int main( int argc, char ** argv )
                 check(diagnosticLog.open(QIODevice::ReadOnly) &&
                       diagnosticLog.readAll().contains("rebuilding"),
                       "edit: the diagnostic log records the save as rebuilding the active profile");
+            }
+            if (!smoke_mib_file.isEmpty()) {
+                bool deliveredAfterStop = false;
+                QObject completionContext;
+                QObject::connect(snmpb.MibModuleObj(), &MibModule::editorVerificationFinished,
+                    &completionContext, [&] { deliveredAfterStop = true; });
+                MibEngine::instance().submit([] {
+                    std::promise<void> gate;
+                    gate.get_future().wait_for(std::chrono::milliseconds(100));
+                });
+                snmpb.MibEditorObj()->VerifyMIB();
+                check(snmpb.MibEditorObj()->VerificationRunning(),
+                    "Editor Verify can be queued immediately before shutdown");
+                snmpb.Shutdown();
+                QCoreApplication::processEvents();
+                check(!deliveredAfterStop && !snmpb.MibModuleObj()->VerifyEditorSource(
+                    "ignored", {}, MibValidationLevel::Errors),
+                    "shutdown drains Verify safely and ignores late completion/new work");
             }
             mw.close();
             smoke_log.close();

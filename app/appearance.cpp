@@ -22,12 +22,53 @@
 #include <QTextBlock>
 #include <QTextCursor>
 #include <QTextEdit>
+#include <QTableView>
+#include <QHeaderView>
 #include <QTextFragment>
 #include <QTimer>
 #include <QToolButton>
 #include <QPixmapCache>
 
 namespace {
+// Palette roles keep this single visual vocabulary valid in Light, Dark and
+// Follow System. Font sizes remain native and controls scale with display DPI.
+const QString widgetStyle = QStringLiteral(R"(
+    QWidget#CurrentDeviceContext { background: palette(window); border-bottom: 1px solid palette(midlight); }
+    QWidget#QueryToolBar { background: palette(base); border-bottom: 1px solid palette(midlight); }
+    QLabel[caption="true"] { font-weight: 600; }
+    QLineEdit, QComboBox, QSpinBox { padding: 4px 7px; min-height: 22px;
+        border: 1px solid palette(mid); border-radius: 4px; background: palette(base); }
+    QLineEdit:focus, QComboBox:focus, QSpinBox:focus { border-color: palette(highlight); }
+    QComboBox { padding-right: 24px; }
+    QComboBox::drop-down { width: 22px; border: 0; }
+    QPushButton, QToolButton { padding: 5px 10px; min-height: 22px;
+        border: 1px solid palette(midlight); border-radius: 4px; background: palette(button); }
+    QPushButton:hover, QToolButton:hover { border-color: palette(mid); }
+    QPushButton:focus, QToolButton:focus { border-color: palette(highlight); }
+    QPushButton:pressed, QToolButton:pressed, QToolButton:checked { background: palette(alternate-base); }
+    QPushButton:default { border-color: palette(highlight); font-weight: 600; }
+    QLineEdit QToolButton, QTabBar QToolButton { padding: 0; min-height: 0; border: 0; background: transparent; }
+    QToolBar { border: 0; spacing: 6px; }
+    QTabWidget::pane { border: 0; }
+    QTabBar::tab { padding: 7px 12px; margin-right: 2px; background: palette(window);
+        border: 0; border-bottom: 2px solid transparent; }
+    QTabBar::tab:selected { background: palette(base); border-bottom-color: palette(highlight); }
+    QTabBar::tab:hover { background: palette(alternate-base); }
+    QTabBar#WorkspaceNavigation::tab { padding: 10px 20px; min-width: 64px; }
+    QTabBar#WorkspaceNavigation::tab:selected { font-weight: 600; }
+    QTreeView, QTableView, QListView { border: 1px solid palette(midlight); border-radius: 3px;
+        background: palette(base); alternate-background-color: palette(alternate-base); }
+    QTreeView::item, QTableView::item, QListView::item { min-height: 22px; padding: 2px 3px; }
+    QHeaderView::section { padding: 7px 8px; font-weight: 600; background: palette(window);
+        border: 0; border-bottom: 1px solid palette(midlight); }
+    QGroupBox { border: 1px solid palette(midlight); border-radius: 4px; margin-top: 12px; padding-top: 8px; }
+    QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }
+    QDockWidget::title { padding: 8px 10px; background: palette(window); }
+    QTextEdit { border: 1px solid palette(midlight); border-radius: 3px; background: palette(base); }
+    QTextEdit#NodeInfo { border: 0; padding: 8px; background: palette(base); }
+    QMainWindow::separator, QSplitter::handle { background: palette(window); }
+    QMainWindow::separator:hover, QSplitter::handle:hover { background: palette(midlight); }
+)");
 constexpr int originalInk = QTextFormat::UserProperty + 300;
 QString modeName(Appearance::Mode mode)
 {
@@ -136,6 +177,11 @@ bool Appearance::eventFilter(QObject *object, QEvent *event)
             QTimer::singleShot(0, this, [this]() { pending = false; apply(); });
         }
     }
+    if (object == root && event->type() == QEvent::ApplicationFontChange) {
+        // Stylesheets cache resolved child fonts. Repolish after Qt has applied
+        // the new application font, preserving explicit fonts such as OID text.
+        QTimer::singleShot(0, this, [this]() { refreshWindow(); });
+    }
     return QObject::eventFilter(object, event);
 }
 
@@ -165,8 +211,9 @@ QIcon Appearance::icon(const QString &name) { return QIcon(new ActionIcon(name))
 void Appearance::attach(QMainWindow *window)
 {
     root = window;
-    if (auto *view = window->findChild<QMenu *>("WorkbenchViewMenu")) {
-        auto *menu = view->addMenu(tr("Appearance")); menu->setObjectName("AppearanceMenu");
+    window->setStyleSheet(window->styleSheet() + widgetStyle);
+    if (auto *settings = window->findChild<QMenu *>("settingsMenu")) {
+        auto *menu = settings->addMenu(tr("Appearance")); menu->setObjectName("AppearanceMenu");
         auto *group = new QActionGroup(menu); group->setExclusive(true);
         const QList<QPair<Mode, QString>> choices{{Mode::System, tr("Follow System")},
             {Mode::Light, tr("Light")}, {Mode::Dark, tr("Dark")}};
@@ -217,6 +264,11 @@ void Appearance::refreshWindow()
     }
     for (auto *view : root->findChildren<QTextEdit *>()) if (view->isReadOnly()) recolorText(view);
     for (auto *highlighter : root->findChildren<MibHighlighter *>()) highlighter->applyPalette(p);
+    for (auto *table : root->findChildren<QTableView *>()) {
+        table->setAlternatingRowColors(true);
+        table->setShowGrid(false);
+        table->horizontalHeader()->setHighlightSections(false);
+    }
     root->update();
 }
 

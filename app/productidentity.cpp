@@ -1,12 +1,14 @@
 #include "productidentity.h"
+#include "snmpb_build_info.h"
 
 QString ProductIdentity::aboutHtml(const QString &version,
                                    const QString &dependencyVersions)
 {
     return QStringLiteral(
         "<h2>MIB Navigator</h2><p><b>Version %1</b></p>"
-        "<p>A cross-platform SNMP MIB browser with device query and trap "
-        "support.</p>"
+        "<p>A free, cross-platform SNMP/MIB engineering tool with MIB browsing, "
+        "device queries, tables, value watching and traps.</p>"
+        "<p><b>Build (UTC):</b> %6<br><b>Source revision:</b> %7 (%8)</p>"
         "<h3>Project</h3><p>MIB Navigator source/project: "
         "<a href=\"%2\">%2</a></p>"
         "<h3>Original SnmpB project</h3>"
@@ -26,7 +28,10 @@ QString ProductIdentity::aboutHtml(const QString &version,
         "<p><a href=\"license.txt\">View License</a> | "
         "<a href=\"third-party-dependencies.md\">Third-Party Notices</a></p>"
         "<p>%5</p>")
-        .arg(version, QString::fromLatin1(ProjectUrl),
+        .arg(version.toHtmlEscaped(), QString::fromLatin1(ProjectUrl),
              QString::fromLatin1(OriginalProjectUrl),
-             QString::fromLatin1(OriginalSourceUrl), dependencyVersions);
+             QString::fromLatin1(OriginalSourceUrl), dependencyVersions.toHtmlEscaped(),
+             QString::fromLatin1(SNMPB_BUILD_UTC),
+             QString::fromLatin1(SNMPB_BUILD_REVISION),
+             QString::fromLatin1(SNMPB_BUILD_SOURCE_STATE));
 }

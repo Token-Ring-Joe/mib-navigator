@@ -429,8 +429,10 @@ Flexibility and visibility are the owner's top priorities for MIB handling:
   differs from the hash recorded when it was added is loaded as it is on disk and gets
   a small "Modified" note, not a problem. Saving from the editor refreshes the stored
   hash, the Library index, and the active Environment.
-- **Duplicates are resolved, not refused.** When several different files declare a
-  module, the first by path is used and the report says which, and why.
+- **Duplicates are resolved, not refused.** Within the winning provider scope,
+  prefer the newest valid LAST-UPDATED revision, with path order breaking ties
+  or missing dates; explicit provider pins retain precedence. The report names
+  the candidates and chosen provider. See Redesign Plan step 18a-4.
 - **Integrity stays strict.** The application never silently loads a file that the plan
   did not authorize. That is a consistency check, not a reason to refuse a profile.
 

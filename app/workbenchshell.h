@@ -52,7 +52,7 @@ public:
     void showMibLibrary(int mode); // 0 Library, 1 Profiles, 2 Editor
     void setPanelExpanded(bool expanded);
     void setActivityCounts(int running, int problems);
-    void setFullPageHiddenWidgets(const QList<QWidget *> &widgets);
+    void setQueryControls(QWidget *controls);
     bool isFullPage() const { return outsideQuery; }
     void restorePresentationState();
     void savePresentationState() const;
@@ -88,7 +88,6 @@ private:
     QToolButton *panelButton;
     QLabel *activityStatus;
     QMenu *view = nullptr;
-    QList<QWidget *> queryOnlyWidgets;
     bool outsideQuery = false;
     bool inspectorShown = true;
     int panelHeight = 300;

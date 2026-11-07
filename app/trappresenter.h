@@ -2,21 +2,34 @@
 #define TRAPPRESENTER_H
 
 #include "traprecord.h"
+#include "mibenvironment.h"
 
 #include <QStringList>
+
+struct TrapBindingPresentation
+{
+    QString oid;
+    QString object;
+    QString receivedType;
+    QString rawValue;
+    QString interpretedValue;
+    QString units;
+    QStringList warnings;
+};
 
 struct TrapPresentation
 {
     QStringList summaryColumns;
     QString notificationHtml;
     QString communityText;
-    QStringList varbindLines;
+    QList<TrapBindingPresentation> bindings;
 };
 
 class TrapPresenter
 {
 public:
-    TrapPresentation present(const TrapRecord &record, bool showAgentName = false) const;
+    TrapPresentation present(const TrapRecord &record) const;
+    QStringList summary(const TrapRecord &record) const;
     static QString symbolicOid(const QString &numericOid);
     static QString formattedValue(const TrapVarbind &varbind);
     // The address to copy for "Copy source IP": the sender of the UDP packet, except for

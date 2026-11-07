@@ -29,6 +29,10 @@ int main(int argc, char **argv)
     const QString legacyId = communities.create(legacy);
     UsmCredentialService users({}, UsmCredentialRepository(usmFile));
     CredentialsDialog dialog(&communities, &users); dialog.prepare();
+    check(dialog.credentialList()->item(0)->text() == "Legacy shared" &&
+          dialog.credentialList()->item(0)->data(Qt::UserRole + 3).toString() == "SNMPv1 / v2c" &&
+          dialog.credentialList()->item(0)->data(Qt::AccessibleTextRole).toString().contains("SNMPv1 / v2c"),
+          "credential name and version occupy separate display fields with accessible text");
     check(dialog.credentialList()->count() == 1, "legacy community appears once in unified list");
     const auto original = bytes(communityFile);
     check(dialog.applyChanges() && bytes(communityFile) == original && !QFile::exists(usmFile + ".v2.json"),

@@ -9,6 +9,8 @@
 #include <QMainWindow>
 #include <QLabel>
 #include <QLineEdit>
+#include <QComboBox>
+#include <QKeyEvent>
 #include <QToolButton>
 #include <QMenu>
 #include <QMenuBar>
@@ -74,7 +76,17 @@ int main(int argc, char **argv)
           }), "tiny/off-screen geometry was not repaired");
 
 
+    const QRect bottomLost = SafeRestoredWindowGeometry({100, 1100, 1100, 760}, screens);
+    check(bottomLost.bottom() <= screens[1].bottom(),
+          "restored window keeps its bottom controls on screen");
+
     QMenu *fileMenu = window.menuBar()->addMenu("&File");
+    QMenu *editMenu = window.menuBar()->addMenu("&Edit");
+    QMenu *viewMenu = window.menuBar()->addMenu("&View");
+    viewMenu->setObjectName("WorkbenchViewMenu");
+    QMenu *mibMenu = window.menuBar()->addMenu("&MIB");
+    QMenu *snmpMenu = window.menuBar()->addMenu("&SNMP");
+    QMenu *settingsMenu = window.menuBar()->addMenu("Se&ttings");
     QMenu *helpMenu = window.menuBar()->addMenu("&Help");
     auto *root = new QWidget(&window);
     auto *layout = new QGridLayout(root);
@@ -93,6 +105,13 @@ int main(int argc, char **argv)
     mibTabs->addTab(new QWidget, "Profiles");
     mibTabs->addTab(pages.editor, "Editor");
     pages.results = new QWidget;
+    auto *resultContent = new QLineEdit(pages.results);
+    resultContent->setObjectName("resultContent"); pages.results->setProperty("workbenchFocusTarget", QStringLiteral("resultContent"));
+    auto *trapContent = new QLineEdit(pages.traps);
+    trapContent->setObjectName("trapContent"); pages.traps->setProperty("workbenchFocusTarget", QStringLiteral("trapContent"));
+    auto *watchContent = new QLineEdit(pages.watch);
+    watchContent->setObjectName("watchContent"); pages.watch->setProperty("workbenchFocusTarget", QStringLiteral("watchContent"));
+    editorContent->setObjectName("editorContent"); pages.editor->setProperty("workbenchFocusTarget", QStringLiteral("editorContent"));
     pages.search = new QWidget(&window);
     auto *treePane = new QWidget(oldTreeTab);
     auto *tree = new QTreeView(treePane);
@@ -104,8 +123,12 @@ int main(int argc, char **argv)
     bottom.output = new QWidget;
     bottom.log = new QWidget;
     bottom.problems = new QWidget;
+    auto *inspector = new QWidget;
+    auto *inspectorContent = new QLineEdit(inspector); inspectorContent->setObjectName("inspectorContent"); inspector->setProperty("workbenchFocusTarget", QStringLiteral("inspectorContent"));
+    auto *outputContent = new QLineEdit(bottom.output); outputContent->setObjectName("outputContent"); bottom.output->setProperty("workbenchFocusTarget", QStringLiteral("outputContent"));
+    auto *target = new QComboBox(header); target->setEditable(true); target->setObjectName("ConnectionTarget");
     WorkbenchShell shell(&window, root, layout, header, treePane, documents, pages,
-                         new QWidget, bottom, &window);
+                         inspector, bottom, &window);
     QObject::connect(&shell, &WorkbenchShell::mibLibraryModeRequested,
                      mibTabs, &QTabWidget::setCurrentIndex);
     shell.restorePresentationState();
@@ -127,27 +150,30 @@ int main(int argc, char **argv)
           bottomTabs->widget(1) == bottom.log && bottomTabs->widget(2) == bottom.problems &&
           !bottomTabs->isTabVisible(2), "shared panel pages and conditional Problems");
     check(shell.bottomDock()->isHidden() && button && !button->isChecked() &&
-          button->text() == "Show panel", "panel starts collapsed with a visible toggle");
+          button->text() == "Operations", "panel starts collapsed with a visible toggle");
     check(shell.header()->isAncestorOf(header) && !shell.header()->isMovable() &&
           !shell.header()->isFloatable() && !shell.header()->toggleViewAction()->isVisible() &&
           window.corner(Qt::BottomRightCorner) == Qt::BottomDockWidgetArea,
           "fixed header and full-width bottom panel");
     QPointer<QWidget> keptEditor(pages.editor), keptWatch(pages.watch), keptTraps(pages.traps);
     auto *queryRow = new QWidget(header);
-    shell.setFullPageHiddenWidgets({queryRow});
+    auto *oid = new QLineEdit(queryRow); oid->setObjectName("QueryObjectAddress");
+    auto *search = new QLineEdit(queryRow); search->setObjectName("CollectionSearch");
+    (new QHBoxLayout(queryRow))->addWidget(oid); queryRow->layout()->addWidget(search);
+    shell.setQueryControls(queryRow);
     shell.inspectorDock()->show();
     for (int repeat = 0; repeat < 10; ++repeat) {
         shell.openDocument(pages.editor);
         check(documents->currentWidget() == pages.library && mibTabs->currentWidget() == pages.editor &&
               shell.isFullPage() && !treePane->isVisibleTo(&window) &&
-              shell.inspectorDock()->isHidden() && queryRow->isHidden(), "Editor is nested under MIBs");
+              shell.inspectorDock()->isHidden() && !queryRow->isVisibleTo(&window), "Editor is nested under MIBs");
         shell.openDocument(pages.traps);
         shell.openDocument(pages.watch);
         check(documents->currentIndex() == 0 && query->currentWidget() == pages.watch && documents->count() == 3 &&
               shell.bottomDock()->isHidden() && header->isVisibleTo(&window),
               "workspace navigation keeps header and collapsed panel state");
         shell.showResults();
-        check(!shell.inspectorDock()->isHidden() && !queryRow->isHidden() &&
+        check(!shell.inspectorDock()->isHidden() && queryRow->isVisibleTo(&window) &&
               treePane->isVisibleTo(&window), "Query restores its Inspector and tools");
     }
     check(keptEditor && keptWatch && keptTraps && editorContent->parentWidget() == pages.editor,
@@ -186,7 +212,7 @@ int main(int argc, char **argv)
     if (auto *viewProblems = window.findChild<QAction *>("ViewBottomProblems")) viewProblems->trigger();
     QCoreApplication::processEvents();
     check(documents->currentWidget() == pages.library && bottomTabs->currentWidget() == bottom.problems &&
-          !shell.bottomDock()->isHidden() && button->isChecked() && button->text() == "Hide panel",
+          !shell.bottomDock()->isHidden() && button->isChecked() && button->text() == "Operations",
           "explicit Problems opens within MIBs");
     const int expandedHeight = shell.bottomDock()->height();
     for (QWidget *page : {pages.traps, pages.watch, pages.results, pages.editor}) {
@@ -296,8 +322,10 @@ int main(int argc, char **argv)
           "explicit Problems from Traps selects MIBs without changing its local Editor tab");
     shell.setPanelExpanded(true);
     const auto top = window.menuBar()->actions();
-    check(top.size() == 3 && top[0] == fileMenu->menuAction() && top[1] == shell.viewMenu()->menuAction() &&
-          top[2] == helpMenu->menuAction(), "View menu follows File");
+    check(top == QList<QAction *>{fileMenu->menuAction(), editMenu->menuAction(),
+              viewMenu->menuAction(), mibMenu->menuAction(), snmpMenu->menuAction(),
+              settingsMenu->menuAction(), helpMenu->menuAction()} && shell.viewMenu() == viewMenu,
+          "shell populates the existing View menu and preserves the seven-menu order");
     auto *toggle = window.findChild<QAction *>("WorkbenchToggleBottom");
     check(toggle && toggle->shortcut() == QKeySequence("Ctrl+J"), "panel toggle shortcut");
     if (toggle) toggle->trigger();
@@ -322,6 +350,59 @@ int main(int argc, char **argv)
           query->currentWidget() == pages.results, "Output opens below Results");
     shell.setResultsNote({});
     check(query->tabText(0) == "Results", "clearing warnings restores Results title");
-    shell.setFullPageHiddenWidgets({});
+    window.activateWindow(); QCoreApplication::processEvents();
+    auto *navigation = window.findChild<QMenu *>("WorkbenchKeyboardNavigation");
+    check(navigation && navigation->actions().size() == 7,
+          "View exposes every focus shortcut in Keyboard Navigation");
+    const auto focus = [&](const char *name, QWidget *expected) {
+        auto *action = window.findChild<QAction *>(name);
+        check(action, "focus action exists");
+        if (action) action->trigger();
+        QCoreApplication::processEvents();
+        if (QApplication::focusWidget() != expected)
+            std::fprintf(stderr, "Focus mismatch: %s expected=%s actual=%s visible=%d enabled=%d\n", name,
+                expected->metaObject()->className(), QApplication::focusWidget() ? QApplication::focusWidget()->metaObject()->className() : "null",
+                expected->isVisible(), expected->isEnabled());
+        check(QApplication::focusWidget() == expected, "focus action reaches usable visible content");
+    };
+    shell.showResults(); focus("WorkbenchFocusDocument", resultContent);
+    shell.openDocument(pages.watch); focus("WorkbenchFocusDocument", watchContent);
+    shell.openDocument(pages.editor); focus("WorkbenchFocusDocument", editorContent);
+    shell.openDocument(pages.traps); focus("WorkbenchFocusDocument", trapContent);
+    focus("WorkbenchFocusInspector", inspectorContent);
+    shell.showBottomPage(bottom.output); focus("WorkbenchFocusBottom", outputContent);
+    focus("WorkbenchFocusTree", tree);
+    focus("WorkbenchFocusOid", oid);
+    focus("WorkbenchGlobalSearch", search);
+    focus("WorkbenchFocusTarget", target);
+    // Exercise Qt shortcut dispatch as well as action wiring, from another workspace.
+    shell.openDocument(pages.traps); target->setEditText("192.0.2.1");
+    QKeyEvent targetKey(QEvent::KeyPress, Qt::Key_L, Qt::ControlModifier);
+    QApplication::sendEvent(&window, &targetKey);
+    check(QApplication::focusWidget() == target && target->lineEdit()->hasSelectedText(),
+          "Ctrl+L focuses and selects the target without navigating workspaces");
+    check(documents->currentWidget() == pages.traps, "target focus leaves the workspace unchanged");
+    QKeyEvent workKey(QEvent::KeyPress, Qt::Key_1, Qt::ControlModifier);
+    QApplication::sendEvent(&window, &workKey);
+    check(QApplication::focusWidget() == trapContent, "Ctrl+1 reaches the active work area");
+    shell.showResults();
+    shell.treeSplitter()->setSizes({250, 650});
+    const QList<int> savedSizes = shell.treeSplitter()->sizes();
+    shell.inspectorDock()->hide(); shell.showBottomPage(bottom.log);
+    shell.setPanelExpanded(false); shell.savePresentationState();
+    shell.treeSplitter()->setSizes({550, 350}); shell.inspectorDock()->show();
+    shell.restorePresentationState();
+    check(shell.treeSplitter()->sizes() == savedSizes && shell.inspectorDock()->isHidden() &&
+          shell.bottomDock()->isHidden() && bottomTabs->currentWidget() == bottom.log,
+          "splitter, Inspector and collapsed Log round-trip together");
+    shell.treeSplitter()->setOrientation(Qt::Vertical);
+    QSettings().setValue("workbench/tree-splitter", shell.treeSplitter()->saveState());
+    shell.restorePresentationState();
+    check(shell.treeSplitter()->orientation() == Qt::Horizontal && !shell.treeSplitter()->childrenCollapsible(),
+          "stale vertical splitter state cannot replace the Query layout");
+    QSettings().setValue("workbench/tree-splitter", QByteArray("invalid splitter state"));
+    shell.restorePresentationState();
+    check(shell.treeSplitter()->sizes().first() > 0 && shell.treeSplitter()->sizes().last() > 0,
+          "damaged splitter state retains usable panes");
     return failures ? 1 : 0;
 }

@@ -29,6 +29,8 @@
 #include "mibruntimeparser.h"
 #include "mibenvironment.h"
 #include "mibenvironmentmanager.h"
+#include <QMutex>
+#include "mibengine.h"
 
 #define SMI_PATH_SEPARATOR ';'
 
@@ -62,14 +64,20 @@ public:
     QList<MibModuleRecord> AvailableModuleRecords() const { return AvailableRecords; }
     QStringList LoadedModuleNames() const;
     bool ApplyProfileRuntime(const MibEffectivePlan &plan, QString *error = nullptr);
-    void RestoreRuntimeAfterEditorValidation();
+    bool VerifyEditorSource(const QByteArray &content, const QString &sourceDirectory,
+                            MibValidationLevel level);
+    bool EditorVerificationRunning() const { return editorVerificationRunning; }
+    void StopBackgroundWork();
     MibEffectivePlan BuildEffectivePlan(const MibProfileRecord &profile) const;
     MibEnvironmentPtr CurrentEnvironment() const { return currentEnvironment; }
     bool ValidateModuleFile(const QString &path, QString *error = nullptr,
                             MibValidationLevel level = MibValidationLevel::ErrorsAndWarnings);
     MibModuleRecord ModuleMetadata(const QString &moduleName, const QString &localPath = {});
-    MibProfileDependencyCheck CheckProfileDependencies(const QString &profileId,
-        const QStringList &explicitModules, bool includeStandardBase, QString *error = nullptr);
+    void CheckProfileDependencies(const QString &profileId,
+        const QStringList &explicitModules, bool includeStandardBase,
+        std::function<void(const QList<MibModuleRecord> &)> prepareInventory,
+        std::function<void(const QString &)> completed);
+    bool DependencyCheckRunning() const { return dependencyCheckRunning; }
     MibProfileDependencyCheck CachedProfileDependencies(const QString &profileId,
         const QString &signature) const;
     MibDependencyIndex *DependencyIndex() { return &dependencyIndex; }
@@ -89,18 +97,21 @@ signals:
     void LogError(const QString& text);
     void StopAgentTimer();
     void inventoryChanged();
+    void editorVerificationFinished(const MibEngineValidationResult &result, int searchPathCount);
     void profileRuntimeBuildStarted(const QString &profileName);
     void profileRuntimeReady(const QString &profileId, const MibEffectivePlan &plan,
         MibEnvironmentPtr environment, QStringList loadedModules, bool cacheHit, bool partial);
     void profileRuntimeFailed(const QString &profileId, const QString &error);
 
 private:
+    bool ParserCheckRunning() const { return dependencyCheckRunning || editorVerificationRunning; }
+    void RestoreProfileRuntime();
     MibEnvironmentBuildResult BuildEnvironment(const MibEffectivePlan &plan);
     QStringList LoadEffectivePlan(const MibEffectivePlan &plan,
                                   QList<MibExplicitRootLoadResult> *outcomes = nullptr);
     void InitLib(int restart);
     void RebuildTotalList();
-    void RebuildCandidateList();
+    void RebuildCandidateList(bool scan = true);
     void RebuildLoadedList();
     void RebuildUnloadedList();
 
@@ -115,6 +126,12 @@ private:
     bool ErrorWhileLoading;
     MibDependencyIndex dependencyIndex;
     bool dependencyIndexStale = false;
+    bool dependencyCheckRunning = false;
+    bool editorVerificationRunning = false;
+    bool stopping = false;
+    bool deferredRuntimeRequest = false;
+    bool deferredLibraryRefresh = false;
+    mutable QMutex dependencyCommitMutex;
     MibEffectivePlan activeProfilePlan;
     bool hasActiveProfilePlan = false;
     MibEnvironmentPtr currentEnvironment;

@@ -24,12 +24,14 @@ RequestLogPanel::RequestLogPanel(RequestLog *requestLog, QWidget *parent)
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(4, 4, 4, 4);
     auto *bar = new QHBoxLayout;
-    bar->addWidget(new QLabel(tr("Every request this session and how it ended. Passwords and communities are never logged."), this));
+    auto *hint = new QLabel(tr("The request log is empty. Start a query from the MIB tree. Passwords and communities are never logged."), this);
+    hint->setObjectName("RequestLogHint"); hint->setWordWrap(true);
+    bar->addWidget(hint, 1);
     bar->addStretch();
     copyButton = new QPushButton(tr("Copy all"), this);
     clearButton = new QPushButton(tr("Clear"), this);
     copyButton->setObjectName(QStringLiteral("LogCopy"));
-    clearButton->setObjectName(QStringLiteral("LogClear"));
+    clearButton->setObjectName(QStringLiteral("RequestLogClear"));
     copyButton->setToolTip(tr("Copy the log as tab-separated text, for a ticket or a bug report"));
     bar->addWidget(copyButton); bar->addWidget(clearButton);
     layout->addLayout(bar);
@@ -47,8 +49,12 @@ RequestLogPanel::RequestLogPanel(RequestLog *requestLog, QWidget *parent)
     table->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
     table->horizontalHeader()->setSectionResizeMode(Detail, QHeaderView::Stretch);
     layout->addWidget(table, 1);
+    setProperty("workbenchFocusTarget", QStringLiteral("RequestLogTable"));
+    copyButton->setEnabled(false); clearButton->setEnabled(false);
 
-    connect(log, &RequestLog::entryAdded, this, [this](quint64 id) {
+    connect(log, &RequestLog::entryAdded, this, [this, hint](quint64 id) {
+        hint->setText(tr("Requests this session and how they ended. Passwords and communities are never logged."));
+        copyButton->setEnabled(true); clearButton->setEnabled(true);
         const int row = table->rowCount();
         table->insertRow(row);
         for (int column = 0; column < ColumnCount; ++column) table->setItem(row, column, new QTableWidgetItem);
@@ -62,7 +68,10 @@ RequestLogPanel::RequestLogPanel(RequestLog *requestLog, QWidget *parent)
         const int row = rowOf(id);
         if (row >= 0) fill(row, id);
     });
-    connect(log, &RequestLog::cleared, this, [this]() { table->setRowCount(0); });
+    connect(log, &RequestLog::cleared, this, [this, hint]() {
+        table->setRowCount(0); copyButton->setEnabled(false); clearButton->setEnabled(false);
+        hint->setText(tr("The request log is empty. Start a query from the MIB tree. Passwords and communities are never logged."));
+    });
     connect(clearButton, &QPushButton::clicked, log, &RequestLog::clear);
     connect(copyButton, &QPushButton::clicked, this, [this]() {
         QApplication::clipboard()->setText(RequestLogAsText(log->entries()));

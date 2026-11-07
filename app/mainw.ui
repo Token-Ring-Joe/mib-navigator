@@ -842,29 +842,30 @@
     <addaction name="separator"/>
     <addaction name="helpAboutAction"/>
    </widget>
-   <widget class="QMenu" name="optionsMenu">
-    <property name="title">
-     <string>&amp;Options</string>
-    </property>
-    <addaction name="actionCredentials"/>
-    <addaction name="separator"/>
-    <addaction name="actionPreferences"/>
-   </widget>
-   <widget class="QMenu" name="menuTools">
-    <property name="title">
-     <string>&amp;Tools</string>
-    </property>
-    <addaction name="actionGotoLine"/>
-    <addaction name="separator"/>
+   <widget class="QMenu" name="editMenu">
+    <property name="title"><string>&amp;Edit</string></property>
     <addaction name="actionFind"/>
-    <addaction name="actionReplace"/>
     <addaction name="actionFindNext"/>
+    <addaction name="actionReplace"/>
     <addaction name="separator"/>
-    <addaction name="actionMultipleVarbinds"/>
-    <addaction name="actionStop"/>
-    <addaction name="separator"/>
+    <addaction name="actionGotoLine"/>
+   </widget>
+   <widget class="QMenu" name="WorkbenchViewMenu">
+    <property name="title"><string>&amp;View</string></property>
+   </widget>
+   <widget class="QMenu" name="mibMenu">
+    <property name="title"><string>&amp;MIB</string></property>
     <addaction name="actionVerifyMIB"/>
     <addaction name="actionExtractMIBfromRFC"/>
+   </widget>
+   <widget class="QMenu" name="snmpMenu">
+    <property name="title"><string>&amp;SNMP</string></property>
+    <addaction name="actionMultipleVarbinds"/>
+   </widget>
+   <widget class="QMenu" name="settingsMenu">
+    <property name="title"><string>Se&amp;ttings</string></property>
+    <addaction name="actionCredentials"/>
+    <addaction name="actionPreferences"/>
    </widget>
    <widget class="QMenu" name="fileMenu">
     <property name="title">
@@ -876,11 +877,13 @@
     <addaction name="fileSaveAsAction"/>
     <addaction name="separator"/>
     <addaction name="fileExitAction"/>
-    <addaction name="separator"/>
    </widget>
    <addaction name="fileMenu"/>
-   <addaction name="menuTools"/>
-   <addaction name="optionsMenu"/>
+   <addaction name="editMenu"/>
+   <addaction name="WorkbenchViewMenu"/>
+   <addaction name="mibMenu"/>
+   <addaction name="snmpMenu"/>
+   <addaction name="settingsMenu"/>
    <addaction name="helpMenu"/>
   </widget>
   <action name="fileNewAction">
@@ -979,7 +982,7 @@
      <normaloff>:/icon/verify</normaloff>:/icon/verify</iconset>
    </property>
    <property name="text">
-    <string>&amp;Verify MIB syntax</string>
+    <string>&amp;Verify Current MIB</string>
    </property>
    <property name="shortcut">
     <string>Ctrl+R</string>
@@ -1102,11 +1105,6 @@
   <tabstop>MIBTree</tabstop>
   <tabstop>NodeInfo</tabstop>
   <tabstop>Query</tabstop>
-  <tabstop>UnloadedModules</tabstop>
-  <tabstop>ModuleAdd</tabstop>
-  <tabstop>ModuleDelete</tabstop>
-  <tabstop>LoadedModules</tabstop>
-  <tabstop>ModuleInfo</tabstop>
   <tabstop>MIBFile</tabstop>
   <tabstop>MIBLog</tabstop>
   <tabstop>TrapLog</tabstop>

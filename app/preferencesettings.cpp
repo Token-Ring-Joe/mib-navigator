@@ -51,7 +51,8 @@ PreferencesSettings PreferencesSettings::load(QSettings &settings)
     return result;
 }
 
-void PreferencesSettings::save(QSettings &settings, bool preserveLegacyMibPreloads) const
+void PreferencesSettings::save(QSettings &settings, bool preserveLegacyMibPreloads,
+                               bool preserveLegacyMibPaths) const
 {
     settings.setValue("network/enableipv4", enableIpv4);
     settings.setValue("network/trapport4", trapPort4);
@@ -67,7 +68,8 @@ void PreferencesSettings::save(QSettings &settings, bool preserveLegacyMibPreloa
     settings.setValue("request/retries", requestRetries);
     settings.setValue("request/nonrepeaters", bulkNonRepeaters);
     settings.setValue("request/maxrepetitions", bulkMaxRepetitions);
-    writeArray(settings, "mibpaths", "dir", mibPaths);
+    if (!preserveLegacyMibPaths)
+        writeArray(settings, "mibpaths", "dir", mibPaths);
     if (!preserveLegacyMibPreloads)
         writeArray(settings, "mibpreloads", "mib", mibPreloads);
     if (windowSize.isValid())

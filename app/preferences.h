@@ -22,11 +22,10 @@
 
 #include "snmpb.h"
 #include "ui_preferences.h"
+#include "preferencesettings.h"
 #include <qdialog.h>
 #include <qtreewidget.h>
 #include <qsettings.h>
-
-class QSpinBox;
 
 class Preferences: public QObject
 {
@@ -34,9 +33,10 @@ class Preferences: public QObject
     
 public:
     Preferences(Snmpb *snmpb);
+    ~Preferences() override;
     void Init(void);
     void Execute(void);
-    void Save();
+    bool Save();
     int GetTrapPort4();
     int GetTrapPort6();
     bool GetEnableIPv4();
@@ -46,8 +46,10 @@ public:
     bool GetExpandTrapBinding(void);
     bool GetShowAgentName(void);
     int GetTrapHistoryLimit(void) const;
-    int GetAutomaticLoading(void);
     QStringList DefaultMibPaths() const;
+
+signals:
+    void trapHistoryLimitChanged(int maximumRecords);
 
 public slots:
     void SetEnableIPv4(bool checked);
@@ -56,44 +58,15 @@ public slots:
     static void RestoreWindowGeometry(QMainWindow&);
     static void SaveWindowGeometry(const QMainWindow&);
 
-protected slots:
-    void SelectedPreferences( QTreeWidgetItem * item, QTreeWidgetItem * old);
-    void SetHorizontalSplit(bool checked);
-    void SetTrapPort();
-    void SetTrapPort6();
-    void SetExpandTrapBinding(bool checked);
-    void SetShowAgentName(bool checked);
-    void SelectAutomaticLoading();
-    void MibPathAdd();
-    void MibPathDelete();
-    void MibPathReset();
-    void MibPathRefresh();
-
 private:
     Snmpb *s;
-    Ui_Preferences *p;
-    QDialog *pw;
+    Ui_Preferences *p = nullptr;
+    QDialog *pw = nullptr;
 
-    QTreeWidgetItem *transport;
-    QTreeWidgetItem *mibtree;
-    QTreeWidgetItem *modules;
-    QTreeWidgetItem *traps;
-    QTreeWidgetItem *requestDefaults;
-    QSpinBox *requestPortSpin;
-    QSpinBox *requestTimeoutSpin;
-    QSpinBox *requestRetriesSpin;
-    QSpinBox *bulkNonRepeatersSpin;
-    QSpinBox *bulkMaxRepetitionsSpin;
-
-    bool horizontalsplit;
-    int trapport4;
-    int trapport6;
-    bool enableipv4;
-    bool enableipv6;
-    bool expandtrapbinding;
-    bool showagentname;
-    int traphistorylimit;
-    int automaticloading;
+    void LoadControls();
+    PreferencesSettings ReadControls() const;
+    void UpdateValidation();
+    PreferencesSettings applied;
 };
 
 #endif /* PREFERENCES_H */

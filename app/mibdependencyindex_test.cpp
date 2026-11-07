@@ -1,6 +1,7 @@
 #include "mibdependencyindex.h"
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QFile>
 #include <QFileInfo>
 #include <QSet>
@@ -255,6 +256,30 @@ int main(int argc, char **argv)
     ok &= check(!reloaded.profileCheckCurrent("profile", MibDependencyIndex::profileSignature({"B-MIB"}, true)), "profile edit marks state stale");
     reloaded.save(); MibDependencyIndex cached(indexPath); cached.load(); const auto cachedCheck = cached.update({first, second});
     ok &= check(cachedCheck.scanned == 0, "profile switching can reuse cached graph without rescanning");
+    // An upgrade must not trust a success recorded by the previous checker.
+    // Load an actual persisted legacy report, retaining its provider graph.
+    const QString legacySignature = QString::fromLatin1(QCryptographicHash::hash(
+        QByteArrayLiteral("A-MIB\n-base"), QCryptographicHash::Sha256).toHex());
+    MibProfileDependencyCheck legacyCheck = profile;
+    legacyCheck.profileSignature = legacySignature;
+    legacyCheck.effectiveModules = {"A-MIB"};
+    reloaded.setProfileCheck("mib-library", legacyCheck);
+    ok &= check(reloaded.save(), "legacy dependency report fixture persists");
+    MibDependencyIndex upgraded(indexPath);
+    ok &= check(upgraded.load() && upgraded.profileCheck("mib-library").profileSignature == legacySignature,
+                "upgrade retains the old report without rewriting or deleting it");
+    const QString currentSignature = MibDependencyIndex::profileSignature({"A-MIB"}, false);
+    ok &= check(!upgraded.profileCheckCurrent("mib-library", currentSignature) &&
+                upgraded.files().size() == reloaded.files().size() &&
+                upgraded.provider("ROOT-MIB").path == reloaded.provider("ROOT-MIB").path,
+                "old checker success is stale while the provider graph remains available");
+    legacyCheck.profileSignature = currentSignature;
+    upgraded.setProfileCheck("mib-library", legacyCheck);
+    ok &= check(upgraded.save(), "a new checker result persists safely");
+    MibDependencyIndex restarted(indexPath);
+    ok &= check(restarted.load() && restarted.profileCheckCurrent("mib-library", currentSignature) &&
+                restarted.profileCheckCurrent("profile", signature),
+                "restart reuses the new check and preserves other profile reports");
     const QString missingIndexPath = root.filePath("missing-index.json");
     MibDependencyIndex missingIndex(missingIndexPath);
     ok &= check(missingIndex.load() && missingIndex.loadStatus() == MibDependencyIndexLoadStatus::Missing &&

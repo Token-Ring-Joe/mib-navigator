@@ -122,6 +122,8 @@ public:
     }
 };
 
+class MibModelView;
+
 class MibSelection: public QObject
 {
     Q_OBJECT
@@ -175,7 +177,7 @@ private:
     QComboBox *syntax_cb;
     QLineEdit *val_le;
     QLineEdit *oid_le;
-    BasicMibView *bmv;
+    MibModelView *bmv;
  
     QString result_string;
     QString result_oid;
