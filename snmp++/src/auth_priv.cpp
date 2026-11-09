@@ -2163,7 +2163,7 @@ int AuthSHABase::password_to_key(const unsigned char *password,
   unsigned long  password_index = 0;
   unsigned long  count = 0, i;
 
-  std::auto_ptr<Hasher> h(get_hasher());
+  std::unique_ptr<Hasher> h(get_hasher());
   h->init(); /* initialize SHA */
 
   *key_len = h->get_key_length();
@@ -2212,7 +2212,7 @@ int AuthSHABase::hash(const unsigned char *data,
                   const unsigned int   data_len,
                   unsigned char       *digest) const
 {
-  std::auto_ptr<Hasher> h(get_hasher());
+  std::unique_ptr<Hasher> h(get_hasher());
 
   h->init();
   h->update(data, data_len);
@@ -2226,7 +2226,7 @@ int AuthSHABase::auth_out_msg(const unsigned char *key,
                                const int msg_len,
                                unsigned char *auth_par_ptr)
 {
-  std::auto_ptr<Hasher> h(get_hasher());
+  std::unique_ptr<Hasher> h(get_hasher());
   int block_size = h->get_block_size();
   int key_len    = h->get_key_length();
   unsigned char digest[SNMPv3_AP_MAXLENGTH_AUTHPARAM];
@@ -2298,7 +2298,7 @@ int AuthSHABase::auth_inc_msg(const unsigned char *key,
   }
 
 #ifdef __DEBUG
-  std::auto_ptr<Hasher> h(get_hasher());
+  std::unique_ptr<Hasher> h(get_hasher());
   debughexcprintf(21, "digest in Message", auth_par_ptr, auth_par_len);
   debughexcprintf(21, "key", key, h->get_key_length());
 #endif

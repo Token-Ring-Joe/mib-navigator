@@ -26,28 +26,39 @@
 
 #include "snmpb.h"
 #include "mibhighlighter.h"
+#include "mibrecords.h"
+#include "mibdiagnosticmodel.h"
 #include "ui_gotoline.h"
 #include "ui_find.h"
 #include "ui_replace.h"
+
+class QSortFilterProxyModel;
+class QComboBox;
 
 class MibEditor: public QObject
 {
     Q_OBJECT
     
+signals:
+    // Emitted after the editor writes a MIB file to disk.
+    void FileSaved(const QString &path);
+
 public:
     MibEditor(Snmpb *snmpb);
     void ErrorHandler(char *path, int line, int severity, 
                       char *msg, char *tag);
+    const QList<MibDiagnosticRecord> &Diagnostics() const { return diagnostics; }
 
 public slots:
     void MibFileNew(void);
     void MibFileOpen(void);
     void MibFileOpen(QString fileName);
+    void GoToLine(int line);
     void MibFileSave(void);
     void MibFileSaveAs(void);
     void VerifyMIB(void);
     void ExtractMIBfromRFC(void);
-    void SelectedLogEntry(QListWidgetItem *item);
+    void SelectedLogEntry(const QModelIndex &index);
     void SetLineNumStatus(void); 
     void MibFileModified(bool modified);
     void GotoLine(void);
@@ -80,6 +91,10 @@ private:
     int num_error;
     int num_warning;
     int num_info;
+    QList<MibDiagnosticRecord> diagnostics;
+    MibDiagnosticModel *diagnosticModel;
+    QSortFilterProxyModel *diagnosticFilter;
+    QComboBox *validationLevel;
 
     QTextDocument::FindFlags ff;
     QStringList find_strings;

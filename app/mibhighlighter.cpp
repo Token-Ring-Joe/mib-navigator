@@ -100,7 +100,7 @@ MibHighlighter::MibHighlighter(QTextDocument *parent): QSyntaxHighlighter(parent
 
     foreach (QString pattern, reserved_words)
     {
-        rule.pattern = QRegExp(pattern);
+        rule.pattern = QRegularExpression(pattern);
         rule.format = reserved_word;
         rules.append(rule);
     }
@@ -144,49 +144,46 @@ MibHighlighter::MibHighlighter(QTextDocument *parent): QSyntaxHighlighter(parent
 
     foreach (QString pattern, keywords)
     {
-        rule.pattern = QRegExp(pattern);
+        rule.pattern = QRegularExpression(pattern);
         rule.format = keyword;
         rules.append(rule);
     }
 
     number.setForeground(Qt::darkRed);
-    rule.pattern = QRegExp("\\b([1-9][0-9]*|0)\\b");
+    rule.pattern = QRegularExpression("\\b([1-9][0-9]*|0)\\b");
     rule.format = number;
     rules.append(rule);
 
     comment.setFontItalic(true);
     comment.setForeground(Qt::red);
-    rule.pattern = QRegExp("--[^\n]*");
+    rule.pattern = QRegularExpression("--[^\n]*");
     rule.format = comment;
     rules.append(rule);
 
     character.setForeground(Qt::magenta);
-    rule.pattern = QRegExp("'.*'");
+    rule.pattern = QRegularExpression("'.*'");
     rule.format = character;
     rules.append(rule);
 
     enumeration.setForeground(Qt::blue);
-    rule.pattern = QRegExp("\\b[A-Za-z0-9_]+(?=\\()");
+    rule.pattern = QRegularExpression("\\b[A-Za-z0-9_]+(?=\\()");
     rule.format = enumeration;
     rules.append(rule);
 
     string.setForeground(Qt::darkGreen);
-    string_start = QRegExp("\"");
-    string_end = QRegExp("\"");
+    string_start = QRegularExpression("\"");
+    string_end = QRegularExpression("\"");
 }
 
 void MibHighlighter::highlightBlock(const QString &text)
 {
     foreach (MibHighlightingRule rule, rules)
     {
-        QRegExp expression(rule.pattern);
-        int index = text.indexOf(expression);
-
-        while (index >= 0)
+        QRegularExpressionMatchIterator matches = rule.pattern.globalMatch(text);
+        while (matches.hasNext())
         {
-            int length = expression.matchedLength();
-            setFormat(index, length, rule.format);
-            index = text.indexOf(expression, index + length);
+            const QRegularExpressionMatch match = matches.next();
+            setFormat(match.capturedStart(), match.capturedLength(), rule.format);
         }
     }
 
@@ -196,13 +193,15 @@ void MibHighlighter::highlightBlock(const QString &text)
     
     if (previousBlockState() != 1)
     {
-        start_index = text.indexOf(string_start);
+        start_index = string_start.match(text).capturedStart();
         offset = 1;
     }
 
     while (start_index >= 0)
     {
-        end_index = text.indexOf(string_end, start_index + offset);
+        const QRegularExpressionMatch end_match =
+            string_end.match(text, start_index + offset);
+        end_index = end_match.capturedStart();
 
         if (end_index == -1)
         {
@@ -212,12 +211,12 @@ void MibHighlighter::highlightBlock(const QString &text)
         else
         {
             string_length = end_index - start_index
-                            + string_end.matchedLength();
+                            + end_match.capturedLength();
         }
 
         setFormat(start_index, string_length, string);
-        start_index = text.indexOf(string_start,
-                                   start_index + string_length);
+        start_index = string_start.match(
+            text, start_index + string_length).capturedStart();
 
         if (previousBlockState() != 1) offset = 1;
         else

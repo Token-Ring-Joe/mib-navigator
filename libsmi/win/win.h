@@ -54,14 +54,12 @@ int __cdecl fileno(FILE *);
 #endif
 
 /*
- * Windows seems to lacks C99 function fabsf(), strtold(). Well, this
- * is only true for some compilers on Windows - gcc is fine since it
- * comes with a C99 library.
+ * Older Microsoft C runtimes lacked some C99 math/conversion
+ * functions. Modern MSVC (VS 2015+) provides them natively.
  */
-
-#if ! defined(__GNUC__)
-#define fabsf		fabs
-#define strtold		strtod
+#if !defined(__GNUC__) && (!defined(_MSC_VER) || _MSC_VER < 1900)
+#define fabsf       fabs
+#define strtold     strtod
 #endif
 
 /*
@@ -69,7 +67,16 @@ int __cdecl fileno(FILE *);
  */
 
 #if defined(_MSC_VER)
+
+/*
+ * Visual Studio 2015 (_MSC_VER 1900) and later provide native
+ * C99 strtof() and vsnprintf().  Keep the compatibility aliases
+ * only for older Microsoft compilers.
+ */
+#if _MSC_VER < 1900
 #define strtof(f1,f2) ((float)strtod(f1,f2))
+#define vsnprintf     _vsnprintf
+#endif
 
 /*
  * Windows compiler writers love to issue warnings for C functions
@@ -80,7 +87,6 @@ int __cdecl fileno(FILE *);
 #define access(f1,f2) _access(f1,f2)
 #define putenv        _putenv
 #define strdup        _strdup
-#define vsnprintf     _vsnprintf
 #define strcasecmp    _stricmp
 
 /*

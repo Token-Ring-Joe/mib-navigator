@@ -19,10 +19,12 @@
 */
 #ifndef MIBSELECTION_H
 #define MIBSELECTION_H
+#include "mibenvironment.h"
 
 #include <QValidator>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QRegularExpression>
 
 #include "snmpb.h"
 #include "snmp_pp/snmp_pp.h"
@@ -44,8 +46,8 @@ public:
     // -2147483648 .. 4294967295
     State validate (QString& input, int& pos) const
     {
-        QRegExp r("\\-?\\d{0,10}");
-        if (r.exactMatch(input))
+        QRegularExpression r("\\A\\-?\\d{0,10}\\z");
+        if (r.match(input).hasMatch())
         {
             bool ok;
             if (is_uint == true)
@@ -70,7 +72,9 @@ public:
         }
         else
         {
-            if (const_cast<QRegExp &>(r).matchedLength() == input.size())
+            if (r.match(input, 0,
+                        QRegularExpression::PartialPreferCompleteMatch)
+                    .hasPartialMatch())
                 return Intermediate;
             else
             {
@@ -92,8 +96,8 @@ public:
 
     State validate (QString& input, int& pos) const
     {
-        QRegExp r("\\-?\\d{0,20}");
-        if (r.exactMatch(input))
+        QRegularExpression r("\\A\\-?\\d{0,20}\\z");
+        if (r.match(input).hasMatch())
         {
             bool ok;
             unsigned long long uval = input.toULongLong(&ok);
@@ -105,7 +109,9 @@ public:
         }
         else
         {
-            if (const_cast<QRegExp &>(r).matchedLength() == input.size())
+            if (r.match(input, 0,
+                        QRegularExpression::PartialPreferCompleteMatch)
+                    .hasPartialMatch())
                 return Intermediate;
             else
             {
@@ -134,7 +140,8 @@ public:
     QString GetOid(void);
     QString GetValue(void);
     QString GetName(void);
-    SmiNode *GetNode(void);
+    MibEnvironmentPtr GetEnvironment(void) const;
+    QString GetSemanticOid(void) const;
 
 public slots:
     void GetValueCb(int index);
@@ -153,9 +160,9 @@ private:
     Snmpb *s;
 
     Vb vb;
-    SmiType *type;  
     QString syntax;
-    SmiNode *node;
+    MibEnvironmentPtr environment;
+    QString semanticOid;
 
     QGridLayout *gl;
     QLabel *oidlabel;

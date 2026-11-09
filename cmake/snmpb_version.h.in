@@ -1,0 +1,3 @@
+#pragma once
+
+#define SNMPB_VERSION_STRING "@SNMPB_RELEASE_LABEL@"

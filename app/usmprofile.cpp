@@ -19,12 +19,24 @@
 */
 #include "usmprofile.h"
 #include "agent.h"
+#include "usmcredentialruntime.h"
+#include "usmcredentialservice.h"
+#include "usmcredentialcoordinator.h"
+#include <QMessageBox>
+
+USMProfileManager::~USMProfileManager()
+{
+    // When the editor is hosted in the Credentials screen that screen owns (and deletes) it.
+    if (editorDialog && !editorDialog->parentWidget()) delete editorDialog;
+}
 
 USMProfileManager::USMProfileManager(Snmpb *snmpb)
 {
     s = snmpb;
 
-    up.setupUi(&upw);
+    editorDialog = new QDialog;
+    up.setupUi(editorDialog);
+    up.OKCancelBox->hide();   // the Credentials screen provides OK and Cancel
 
     // Set some properties for the USM Profile TreeView
     up.ProfileTree->header()->hide();
@@ -41,9 +53,11 @@ USMProfileManager::USMProfileManager(Snmpb *snmpb)
     connect( up.ProfileTree, 
              SIGNAL( customContextMenuRequested ( const QPoint & ) ),
              this, SLOT( ContextMenu ( const QPoint & ) ) );
-    addAct = new QAction(tr("&New USM profile"), this);
+    addAct = new QAction(tr("&New USM Credential"), this);
     connect(addAct, SIGNAL(triggered()), this, SLOT(Add()));
-    deleteAct = new QAction(tr("&Delete USM profile"), this);
+    duplicateAct = new QAction(tr("D&uplicate USM Credential"), this);
+    connect(duplicateAct, &QAction::triggered, this, &USMProfileManager::Duplicate);
+    deleteAct = new QAction(tr("&Delete USM Credential"), this);
     connect(deleteAct, SIGNAL(triggered()), this, SLOT(Delete()));
 
     connect( up.ProfileTree, 
@@ -67,62 +81,87 @@ USMProfileManager::USMProfileManager(Snmpb *snmpb)
     currentprofile = NULL;
 
     USM* usm = s->AgentObj()->GetUSMObj();
-    int numusers = 0;
-    const UsmUserNameTableEntry * v3user = usm->peek_first_user();
-    while (v3user)
-    {
-        QString _name(v3user->usmUserSecurityName.get_printable());
-        USMProfile *newuser = new USMProfile(&up, &_name);
-
-        QString ap = QString::fromLatin1((const char*)v3user->authPassword, 
-                                         v3user->authPasswordLength);
-        QString pp = QString::fromLatin1((const char*)v3user->privPassword, 
-                                         v3user->privPasswordLength);
-        newuser->SetSecurity(LibAuthToUiAuth(v3user->usmUserAuthProtocol), ap,
-                             LibPrivToUiPriv(v3user->usmUserPrivProtocol), pp);
-
-        users.append(newuser);
-        numusers++;
-
-        v3user = usm->peek_next_user(v3user);
-    }
-
-    if (numusers != 0)
-       up.ProfileTree->setCurrentItem(up.ProfileTree->topLevelItem(0));
+    const QList<UsmCredentialRecord> storedUsers =
+        UsmCredentialRuntimeRepository::snapshot(usm);
+    credentialService = new UsmCredentialService(
+        storedUsers, UsmCredentialRepository(s->GetCredentialIdentitiesConfigFile()),
+        this);
 }
 
-void USMProfileManager::Execute (void)
+QWidget *USMProfileManager::EditorWidget()
 {
-    if(upw.exec() == QDialog::Accepted)
+    return editorDialog;
+}
+
+void USMProfileManager::PrepareEditor()
+{
+    RebuildEditor();
+}
+
+bool USMProfileManager::ApplyEditor()
+{
+    const QList<UsmCredentialRecord> before = credentialService->records();
+    const QList<UsmCredentialRecord> after = EditorRecords();
+    if (!credentialService->validateWorkingCopy(after))
     {
-        USM* usm = s->AgentObj()->GetUSMObj();
-
-        // First, loop & delete the entire user table
-        const UsmUserNameTableEntry * v3user = usm->peek_first_user();
-        while (v3user)
-        {
-            const UsmUserNameTableEntry *v3temp = v3user;
-
-            v3user = usm->peek_next_user(v3temp);
-
-            usm->delete_usm_user(v3temp->usmUserSecurityName);
-        }
-
-        // ... then rebuild it, using the stored profiles
-        for (int i = 0; i < users.size(); i++)
-        {
-            usm->add_usm_user(OctetStr(users[i]->GetName().toLatin1().data()),
-                              UiAuthToLibAuth(users[i]->GetAuthProto()),
-                              UiPrivToLibPriv(users[i]->GetPrivProto()),
-                              OctetStr((const unsigned char *)users[i]->GetAuthPass().toLatin1().data(), 
-                                       users[i]->GetAuthPass().toLatin1().length()), 
-                              OctetStr((const unsigned char *)users[i]->GetPrivPass().toLatin1().data(), 
-                                       users[i]->GetPrivPass().toLatin1().length()));
-        }
-
-        // ... then save it to file.    
-        usm->save_users(s->GetUsmUsersConfigFile().toLatin1().data());
+        QMessageBox::warning(editorDialog, tr("SNMPv3 users"),
+                             tr("Security names must be non-empty and unique. "
+                                "Selected authentication and privacy protocols "
+                                "also require their corresponding secrets."));
+        return false;
     }
+    USM* usm = s->AgentObj()->GetUSMObj();
+    UsmCredentialRepository identities(s->GetCredentialIdentitiesConfigFile());
+    auto runtimeWriter = [usm, this](const QList<UsmCredentialRecord> &records) {
+        return UsmCredentialRuntimeRepository::replaceAndSave(
+                   usm, records, s->GetUsmUsersConfigFile()) == SNMPv3_USM_OK;
+    };
+    auto identityWriter = [&identities](const QList<UsmCredentialRecord> &records) {
+        QList<UsmCredentialIdentityRecord> mappings;
+        for (const auto &record : records)
+            mappings.append({record.identity.credentialId, record.securityName});
+        return identities.save(mappings);
+    };
+    const UsmCommitResult result = UsmCredentialCoordinator::apply(
+        before, after, runtimeWriter, identityWriter);
+    if (result.status != UsmCommitStatus::Success)
+    {
+        QMessageBox::critical(editorDialog, tr("SNMPv3 users"),
+                              tr("The credential changes could not be saved. "
+                                 "The previous configuration was restored where possible."));
+        return false;
+    }
+    credentialService->applyCommitted(after);
+    emit CredentialsChanged();
+    return true;
+}
+
+void USMProfileManager::RebuildEditor()
+{
+    currentprofile = NULL;
+    qDeleteAll(users);
+    users.clear();
+    for (const UsmCredentialRecord &stored : credentialService->records())
+    {
+        UsmCredentialRecord record = stored;
+        record.authProtocol = LibAuthToUiAuth(stored.authProtocol);
+        record.privacyProtocol = LibPrivToUiPriv(stored.privacyProtocol);
+        users.append(new USMProfile(&up, record));
+    }
+    if (!users.isEmpty()) up.ProfileTree->setCurrentItem(users.first()->GetUserWidgetItem());
+}
+
+QList<UsmCredentialRecord> USMProfileManager::EditorRecords()
+{
+    QList<UsmCredentialRecord> result;
+    for (USMProfile *profile : users)
+    {
+        UsmCredentialRecord record = profile->GetRecord();
+        record.authProtocol = UiAuthToLibAuth(record.authProtocol);
+        record.privacyProtocol = UiPrivToLibPriv(record.privacyProtocol);
+        result.append(record);
+    }
+    return result;
 }
 
 void USMProfileManager::SetSecName(void)
@@ -160,16 +199,18 @@ void USMProfileManager::ContextMenu ( const QPoint &pos )
     QMenu menu(tr("Actions"), up.ProfileTree);
 
     menu.addAction(addAct);
+    menu.addAction(duplicateAct);
+    duplicateAct->setEnabled(currentprofile != nullptr);
     menu.addAction(deleteAct);
+    deleteAct->setEnabled(currentprofile != nullptr);
 
     menu.exec(up.ProfileTree->mapToGlobal(pos));
 }
 
 void USMProfileManager::Add(void)
 {
-    USMProfile * newuser = new USMProfile(&up);
-    // Set default values
-    newuser->SetSecurity(0, "", 0, "");
+    UsmCredentialRecord record = credentialService->createWorkingRecord("newuser");
+    USMProfile * newuser = new USMProfile(&up, record);
  
     users.append(newuser);
 
@@ -311,28 +352,38 @@ QStringList USMProfileManager::GetUsersList(void)
 {
     QStringList sl;
 
-    for(int i = 0; i < users.size(); i++)
-        sl << users[i]->GetName();
+    for (const UsmCredentialRecord &record : credentialService->records())
+        sl << record.securityName;
 
     return sl;
 }
 
-USMProfile::USMProfile(Ui_USMProfile *uiup, QString *n)
+void USMProfileManager::Duplicate(void)
+{
+    if (!currentprofile) return;
+    UsmCredentialRecord copy = currentprofile->GetRecord();
+    copy.identity = credentialService->createWorkingRecord(copy.securityName + tr(" copy")).identity;
+    copy.securityName += tr(" copy");
+    auto *duplicate = new USMProfile(&up, copy);
+    users.append(duplicate);
+    up.ProfileTree->setCurrentItem(duplicate->GetUserWidgetItem());
+    up.SecName->setFocus(Qt::OtherFocusReason);
+    up.SecName->selectAll();
+}
+
+UsmCredentialService *USMProfileManager::Credentials() const
+{
+    return credentialService;
+}
+
+USMProfile::USMProfile(Ui_USMProfile *uiup, const UsmCredentialRecord &source)
+    : record(source)
 {
     up = uiup;
 
     user = new QTreeWidgetItem(up->ProfileTree);
 
-    if (n)
-    {
-        user->setText(0, n->toLatin1().data());
-        SetName(*n);
-    }
-    else
-    {
-        user->setText(0, "newuser");
-        SetName("newuser");
-    }
+    user->setText(0, record.securityName);
 }
 
 USMProfile::~USMProfile()
@@ -344,11 +395,11 @@ int USMProfile::SelectUSMProfile(QTreeWidgetItem * item)
 {
     if (item == user)
     {
-        up->SecName->setText(name);
-        up->AuthProtocol->setCurrentIndex(authproto);
-        up->AuthPass->setText(authpass);
-        up->PrivProtocol->setCurrentIndex(privproto);
-        up->PrivPass->setText(privpass);
+        up->SecName->setText(record.securityName);
+        up->AuthProtocol->setCurrentIndex(record.authProtocol);
+        up->AuthPass->setText(QString::fromLatin1(record.authSecret.bytes()));
+        up->PrivProtocol->setCurrentIndex(record.privacyProtocol);
+        up->PrivPass->setText(QString::fromLatin1(record.privacySecret.bytes()));
 
         return 1;
     }
@@ -371,66 +422,68 @@ QTreeWidgetItem *USMProfile::GetUserWidgetItem(void)
 
 void USMProfile::SetName(QString n)
 {
-    name = n;
-    up->SecName->setText(name);  
+    record.securityName = n;
+    record.displayName = n;
+    up->SecName->setText(n);
 }
 
 QString USMProfile::GetName(void)
 {
-    return name;
+    return record.securityName;
 }
 
 void USMProfile::SetSecName(void)
 {
-    name = up->SecName->text();
-    user->setText(0, name);
+    record.securityName = up->SecName->text();
+    record.displayName = record.securityName;
+    user->setText(0, record.securityName);
 }
 
 void USMProfile::SetAuthProto(void)
 {
-    authproto = up->AuthProtocol->currentIndex();
+    record.authProtocol = up->AuthProtocol->currentIndex();
 }
 
 int USMProfile::GetAuthProto(void)
 {
-    return authproto;
+    return record.authProtocol;
 }
 
 void USMProfile::SetAuthPass(void)
 {
-    authpass = up->AuthPass->text();
+    record.authSecret = CredentialSecret(up->AuthPass->text().toLatin1());
 }
 
 QString USMProfile::GetAuthPass(void)
 {
-    return authpass;
+    return QString::fromLatin1(record.authSecret.bytes());
 }
 
 void USMProfile::SetPrivProto(void)
 {
-    privproto = up->PrivProtocol->currentIndex();
+    record.privacyProtocol = up->PrivProtocol->currentIndex();
 }
 
 int USMProfile::GetPrivProto(void)
 {
-    return privproto;
+    return record.privacyProtocol;
 }
 
 void USMProfile::SetPrivPass(void)
 {
-    privpass = up->PrivPass->text();
+    record.privacySecret = CredentialSecret(up->PrivPass->text().toLatin1());
 }
 
 QString USMProfile::GetPrivPass(void)
 {
-    return privpass;
+    return QString::fromLatin1(record.privacySecret.bytes());
 }
 
 void USMProfile::SetSecurity(int aprot, QString apass, int pprot, QString ppass)
 {
-    authproto = aprot;
-    authpass = apass;
-    privproto = pprot;
-    privpass = ppass;
+    record.authProtocol = aprot;
+    record.authSecret = CredentialSecret(apass.toLatin1());
+    record.privacyProtocol = pprot;
+    record.privacySecret = CredentialSecret(ppass.toLatin1());
 }
 

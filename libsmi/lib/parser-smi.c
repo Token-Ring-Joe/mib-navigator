@@ -4470,13 +4470,23 @@ yyreduce:
 				 */
 				(yyval.typePtr) = (yyvsp[(11) - (11)].typePtr);
 			    } else {
-				if (!((yyvsp[(11) - (11)].typePtr)))
-				    smiPrintError(thisParserPtr, ERR_INTERNAL);
 				/*
 				 * Otherwise, we have to allocate a
 				 * new Type struct, inherited from $10.
 				 */
-				(yyval.typePtr) = duplicateType((yyvsp[(11) - (11)].typePtr), 0, thisParserPtr);
+				if (!((yyvsp[(11) - (11)].typePtr))) {
+				    smiPrintError(thisParserPtr, ERR_INTERNAL);
+				    /*
+				     * The SYNTAX could not be understood.
+				     * Keep the TEXTUAL-CONVENTION, with an unknown
+				     * base type, instead of dereferencing NULL
+				     * (this crashed on a vendor ATM-TC-MIB).
+				     */
+				    (yyval.typePtr) = addType(NULL, SMI_BASETYPE_UNKNOWN, 0,
+						 thisParserPtr);
+				} else {
+				    (yyval.typePtr) = duplicateType((yyvsp[(11) - (11)].typePtr), 0, thisParserPtr);
+				}
 			    }
 			    setTypeDescription((yyval.typePtr), (yyvsp[(7) - (11)].text), thisParserPtr);
 			    if ((yyvsp[(9) - (11)].text)) {

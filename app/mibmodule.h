@@ -22,7 +22,13 @@
 
 #include "snmpb.h"
 #include "mibview.h"
-#include "smi.h"
+#include "mibrecords.h"
+#include "miblibrary.h"
+#include "mibdependencyindex.h"
+#include "mibeffectiveplan.h"
+#include "mibruntimeparser.h"
+#include "mibenvironment.h"
+#include "mibenvironmentmanager.h"
 
 #define SMI_PATH_SEPARATOR ';'
 
@@ -30,13 +36,14 @@
 class LoadedMibModule
 {
 public:
-    LoadedMibModule(SmiModule* mod);
+    explicit LoadedMibModule(MibModuleRecord moduleRecord);
     
     void PrintProperties(QString& text);   
-    const char* GetMibLanguage();
+    QString GetMibLanguage() const;
 
     QString name;
-    SmiModule *module;
+    QString path;
+    MibModuleRecord record;
 };
 
 class MibModule: public QObject
@@ -44,17 +51,30 @@ class MibModule: public QObject
     Q_OBJECT
     
 public:
-    enum AutomaticLoadingPolicy {MIBLOAD_ALL, MIBLOAD_DEFAULT, MIBLOAD_NONE};
 
     MibModule(Snmpb *snmpb);
+    ~MibModule() override;
     void SendLogError(const QString& text){ErrorWhileLoading=true; emit LogError(text);}
-    QString LoadBestModule(QString oid);
-    void SetLoadingPolicy(enum AutomaticLoadingPolicy p) {Policy = p;}
 
     void RegenerateSmiConf();
     void ReadMibPaths();
-    void ReadMibPreloads();
-    QStringList GetWantedModules() { return Wanted; }
+    QStringList AvailableModuleNames() const;
+    QList<MibModuleRecord> AvailableModuleRecords() const { return AvailableRecords; }
+    QStringList LoadedModuleNames() const;
+    bool ApplyProfileRuntime(const MibEffectivePlan &plan, QString *error = nullptr);
+    void RestoreRuntimeAfterEditorValidation();
+    MibEffectivePlan BuildEffectivePlan(const MibProfileRecord &profile) const;
+    MibEnvironmentPtr CurrentEnvironment() const { return currentEnvironment; }
+    bool ValidateModuleFile(const QString &path, QString *error = nullptr,
+                            MibValidationLevel level = MibValidationLevel::ErrorsAndWarnings);
+    MibModuleRecord ModuleMetadata(const QString &moduleName, const QString &localPath = {});
+    MibProfileDependencyCheck CheckProfileDependencies(const QString &profileId,
+        const QStringList &explicitModules, bool includeStandardBase, QString *error = nullptr);
+    MibProfileDependencyCheck CachedProfileDependencies(const QString &profileId,
+        const QString &signature) const;
+    MibDependencyIndex *DependencyIndex() { return &dependencyIndex; }
+    bool DependencyIndexStale() const { return dependencyIndexStale; }
+    MibDependencyScanResult RefreshDependencyIndex(QString *error = nullptr);
 
 public slots:
     void Refresh();
@@ -68,10 +88,19 @@ signals:
     void ModuleProperties(const QString& text);
     void LogError(const QString& text);
     void StopAgentTimer();
+    void inventoryChanged();
+    void profileRuntimeBuildStarted(const QString &profileName);
+    void profileRuntimeReady(const QString &profileId, const MibEffectivePlan &plan,
+        MibEnvironmentPtr environment, QStringList loadedModules, bool cacheHit, bool partial);
+    void profileRuntimeFailed(const QString &profileId, const QString &error);
 
 private:
+    MibEnvironmentBuildResult BuildEnvironment(const MibEffectivePlan &plan);
+    QStringList LoadEffectivePlan(const MibEffectivePlan &plan,
+                                  QList<MibExplicitRootLoadResult> *outcomes = nullptr);
     void InitLib(int restart);
     void RebuildTotalList();
+    void RebuildCandidateList();
     void RebuildLoadedList();
     void RebuildUnloadedList();
 
@@ -79,11 +108,19 @@ private:
     Snmpb *s;
 
     QStringList Unloaded;
-    QList<LoadedMibModule*> Loaded;
+    QList<LoadedMibModule> Loaded;
     QList<QStringList> Total;
-    QStringList Wanted;
-    enum AutomaticLoadingPolicy Policy;
+    QStringList KnownModuleNames;
+    QList<MibModuleRecord> AvailableRecords;
     bool ErrorWhileLoading;
+    MibDependencyIndex dependencyIndex;
+    bool dependencyIndexStale = false;
+    MibEffectivePlan activeProfilePlan;
+    bool hasActiveProfilePlan = false;
+    MibEnvironmentPtr currentEnvironment;
+    std::unique_ptr<MibEnvironmentManager> environmentManager;
+    QHash<QString, MibEffectivePlan> requestedPlans;
+    MibEffectivePlan latestRequestedPlan;
 };
 
 #endif /* MIBMODULE_H */

@@ -393,7 +393,7 @@ unsigned char *asn_parse_header(unsigned char *data,
                                 unsigned char *type)
 {
   unsigned char *bufp = data;
-  register int header_len;
+  int header_len;
   unsigned long asn_length;
 
   /* this only works on data types < 30, i.e. no extension octets */

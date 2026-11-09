@@ -84,13 +84,11 @@ INCLUDEPATH += \
 	../snmp++/include \
 	../snmp++/ \
 	../libtomcrypt/src/headers \
-	../libsmi/lib \
-	../qwt/src
+	../libsmi/lib
 LIBS	+= \
 	-L../libtomcrypt \
 	-L../libsmi/lib/.libs \
-	-L../qwt/lib \
-	-lsmi -ltomcrypt -lqwt
+	-lsmi -ltomcrypt
 
 RESOURCES	= snmpb.qrc
 

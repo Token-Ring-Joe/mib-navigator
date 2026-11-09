@@ -71,7 +71,7 @@
  * sizeof(int) < 4.  sizeof(int) > 4 is fine; all the world's not a VAX.
  */
 
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) && _MSC_VER < 1900
 static int
 snprintf (char *str, int n, char *fmt, ...)
 {

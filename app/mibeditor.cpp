@@ -21,10 +21,18 @@
 #include <QScrollBar>
 #include <QFileDialog>
 #include <QMessageBox>
+#include <QRegularExpression>
+#include <QComboBox>
+#include <QBoxLayout>
+#include <QHeaderView>
+#include <QSortFilterProxyModel>
+#include <QTableView>
 #include <qfileinfo.h>
 #include <qpainter.h>
 #include "mibeditor.h"
+#include "mibengine.h"
 #include "mibmodule.h"
+#include "miblibrary.h"
 
 MibEditor::MibEditor(Snmpb *snmpb)
 {
@@ -43,8 +51,42 @@ MibEditor::MibEditor(Snmpb *snmpb)
              this, SLOT( VerifyMIB() ) );
     connect( s->MainUI()->actionExtractMIBfromRFC, SIGNAL( triggered() ),
              this, SLOT( ExtractMIBfromRFC() ) );
-    connect( s->MainUI()->MIBLog, SIGNAL ( itemDoubleClicked ( QListWidgetItem* ) ),
-             this, SLOT( SelectedLogEntry ( QListWidgetItem* ) ) );
+    diagnosticModel = new MibDiagnosticModel(this);
+    diagnosticFilter = new QSortFilterProxyModel(this);
+    diagnosticFilter->setSourceModel(diagnosticModel);
+    diagnosticFilter->setFilterKeyColumn(MibDiagnosticModel::SeverityColumn);
+    diagnosticFilter->setFilterCaseSensitivity(Qt::CaseInsensitive);
+    s->MainUI()->MIBLog->setModel(diagnosticFilter);
+    s->MainUI()->MIBLog->setSortingEnabled(true);
+    s->MainUI()->MIBLog->setSelectionBehavior(QAbstractItemView::SelectRows);
+    s->MainUI()->MIBLog->setSelectionMode(QAbstractItemView::SingleSelection);
+    s->MainUI()->MIBLog->horizontalHeader()->setStretchLastSection(true);
+    s->MainUI()->MIBLog->horizontalHeader()->setSectionResizeMode(MibDiagnosticModel::SourceColumn,QHeaderView::ResizeToContents);
+    s->MainUI()->MIBLog->horizontalHeader()->setSectionResizeMode(MibDiagnosticModel::LineColumn,QHeaderView::ResizeToContents);
+    connect(s->MainUI()->MIBLog, &QTableView::doubleClicked,
+            this, &MibEditor::SelectedLogEntry);
+    auto *severityFilter = new QComboBox(s->MainUI()->MIBLog->parentWidget());
+    severityFilter->setAccessibleName(tr("Diagnostic severity filter"));
+    severityFilter->addItem(tr("All diagnostics"), QString());
+    severityFilter->addItem(tr("Errors"), QStringLiteral("^Error"));
+    severityFilter->addItem(tr("Warnings"), QStringLiteral("^Warning"));
+    severityFilter->addItem(tr("Information"), QStringLiteral("^Info"));
+    validationLevel = new QComboBox(s->MainUI()->MIBLog->parentWidget());
+    validationLevel->setAccessibleName(tr("MIB validation level"));
+    validationLevel->addItem(tr("Validation: Errors"),
+                             static_cast<int>(MibValidationLevel::Errors));
+    validationLevel->addItem(tr("Validation: Errors + Warnings"),
+                             static_cast<int>(MibValidationLevel::ErrorsAndWarnings));
+    validationLevel->addItem(tr("Validation: Full Review"),
+                             static_cast<int>(MibValidationLevel::FullReview));
+    validationLevel->setCurrentIndex(1);
+    if (auto *layout = qobject_cast<QBoxLayout *>(s->MainUI()->MIBLog->parentWidget()->layout())) {
+        layout->insertWidget(1, validationLevel);
+        layout->insertWidget(1, severityFilter);
+    }
+    connect(severityFilter, &QComboBox::currentIndexChanged, this, [this,severityFilter] {
+        diagnosticFilter->setFilterRegularExpression(severityFilter->currentData().toString());
+    });
     connect( s->MainUI()->MIBFile->document(), SIGNAL(modificationChanged(bool)),
              this, SLOT( MibFileModified(bool) ));
     connect( s->MainUI()->MIBFile, SIGNAL( FileLoaded( const QString& ) ),
@@ -110,6 +152,7 @@ void MibEditor::MibFileModified(bool modified)
 
 void MibEditor::MibFileNew(void)
 {
+    s->MainUI()->MIBFile->setReadOnly(false);
     s->MainUI()->MIBFile->clear();
     SetCurrentFileName("");
 }
@@ -202,7 +245,7 @@ void MibEditor::Find(bool reevaluate)
 
     if (reevaluate)
     {
-        ff = 0;
+        ff = {};
         find_string = find_uid.comboFind->currentText();
         if (!find_strings.contains(find_string))
             find_strings.append(find_string);
@@ -271,7 +314,7 @@ bool MibEditor::Replace(bool doreplace)
 {
     QTextCursor tc;
 
-    ff = 0;
+    ff = {};
     find_string = replace_uid.comboFind->currentText(); 
     if (!find_strings.contains(find_string))
         find_strings.append(find_string);
@@ -313,12 +356,13 @@ void MibEditor::MibFileOpen(QString fileName)
         QFile file(fileName);
         if (file.open(QIODevice::ReadOnly | QFile::Text))
         {
+            s->MainUI()->MIBFile->setReadOnly(false);
             s->MainUI()->MIBFile->setPlainText(file.readAll());
             SetCurrentFileName(fileName);
         }
         else
         {
-            QMessageBox::critical(nullptr, tr("SnmpB: Open MIB File"),
+            QMessageBox::critical(nullptr, tr("MIB Navigator: Open MIB File"),
                                   tr("Cannot open file %1: %2.\n")
                                   .arg(file.fileName())
                                   .arg(file.errorString()));
@@ -346,7 +390,7 @@ void MibEditor::MibFileSave(void)
     QFile file(LoadedFile);
     if (!file.open(QFile::WriteOnly))
     {
-        QMessageBox::warning(nullptr, tr("SnmpB: Save MIB File"),
+        QMessageBox::warning(nullptr, tr("MIB Navigator: Save MIB File"),
                              tr("Cannot save file %1: %2\n")
                              .arg(file.fileName())
                              .arg(file.errorString()));
@@ -357,7 +401,15 @@ void MibEditor::MibFileSave(void)
 
     ts << s->MainUI()->MIBFile->toPlainText();
     SetCurrentFileName(LoadedFile);
+    ts.flush();
     file.close();
+    // The verification result on screen describes the text as it was before this save.
+    // Do not leave it standing next to the rebuilt environment; it is re-run on request.
+    diagnostics.clear();
+    diagnosticModel->setDiagnostics(diagnostics);
+    num_error = num_warning = num_info = 0;
+    s->MainUI()->MIBLogL->setText(tr("Saved. Press Verify to check the saved file; the Problems tab shows the result of the rebuild."));
+    emit FileSaved(LoadedFile);
 }
 
 void MibEditor::MibFileSaveAs(void)
@@ -369,6 +421,7 @@ void MibEditor::MibFileSaveAs(void)
                                              tr("MIB Files (*-MIB *-PIB *-SMI *-TC *-TYPES *.mib *.pib *.smi *.MIB *.PIB *.SMI);;All Files (*)"));
     if (fileName.isEmpty())
         return;
+    s->MainUI()->MIBFile->setReadOnly(false);
     SetCurrentFileName(fileName);
     return MibFileSave();
 }
@@ -376,10 +429,15 @@ void MibEditor::MibFileSaveAs(void)
 void MibEditor::ErrorHandler(char *path, int line, int severity, 
                          char *msg, char *tag)
 {
-    QString message = NULL;
-    QListWidgetItem *item;
-    QBrush item_brush;
-    (void)path;
+    MibDiagnosticRecord diagnostic;
+    diagnostic.severity = severity;
+    diagnostic.sourcePath = QString::fromLocal8Bit(path ? path : "");
+    diagnostic.line = line;
+    diagnostic.tag = QString::fromLocal8Bit(tag ? tag : "");
+    diagnostic.message = QString::fromLocal8Bit(msg ? msg : "");
+    diagnostic.rawText = QStringLiteral("%1:%2: [%3] %4")
+        .arg(diagnostic.sourcePath).arg(line).arg(diagnostic.tag, diagnostic.message);
+    diagnostics.append(diagnostic);
 
     switch (severity)
     {
@@ -387,62 +445,52 @@ void MibEditor::ErrorHandler(char *path, int line, int severity,
         case 1:
         case 2:
         case 3:
-            message += tr("Error ");
             num_error++;
-            item_brush.setColor(Qt::red);
             break;
         case 4:
         case 5:
-            message += tr("Warning ");
             num_warning++;
-            item_brush.setColor(Qt::darkYellow);
             break;
         case 6:
         case 7:
         case 8:
         case 9:
-            message += tr("Info ");
             num_info++;
-            item_brush.setColor(Qt::blue);
             break;
     }
 
-    message += tr("(level %1), line %2: [%3] %4")
-                       .arg(severity).arg(line).arg(tag).arg(msg);
-    item = new QListWidgetItem(message, s->MainUI()->MIBLog);
-    item->setForeground(item_brush);
-    s->MainUI()->MIBLog->addItem(item);
-}
-
-MibEditor *CurrentEditorObject = NULL;
-static void ErrorHdlr(char *path, int line, int severity, 
-                      char *msg, char *tag)
-{
-    CurrentEditorObject->ErrorHandler(path, line, severity, msg, tag);
+    diagnosticModel->setDiagnostics(diagnostics);
 }
 
 void MibEditor::VerifyMIB(void)
 {
-    int flags =  smiGetFlags();
-    int saved_flags = flags;
-    flags |= SMI_FLAG_ERRORS;
-    flags |= SMI_FLAG_NODESCR;
-    smiSetFlags(flags);
-
-    s->MainUI()->MIBLog->clear();
-    CurrentEditorObject = this;
-    smiSetErrorHandler(ErrorHdlr);
-    smiSetErrorLevel(9);
-
+    const auto level = static_cast<MibValidationLevel>(validationLevel->currentData().toInt());
+    diagnostics.clear();
+    diagnosticModel->setDiagnostics(diagnostics);
     num_error = 0;
     num_warning = 0;
     num_info = 0;
 
-    QString start_msg = tr("Starting MIB verification...");
-    s->MainUI()->MIBLog->addItem(new QListWidgetItem(start_msg, 
-                                                     s->MainUI()->MIBLog));
+    s->MainUI()->MIBLogL->setText(tr("Verification diagnostics — running..."));
 
-    smiLoadModule(QDir::toNativeSeparators(LoadedFile).toLatin1().data());
+    const auto result=MibEngine::instance().validateSource(
+        s->MainUI()->MIBFile->toPlainText().toUtf8(),QFileInfo(LoadedFile).absolutePath(),
+        MibValidationErrorLevel(level),MibValidationRecursive(level));
+    diagnostics=result.diagnostics;
+    // Verification parses a staged copy of the editor text next to the real file. Show the
+    // real file to the user, never the internal staging name.
+    const QString stagingDir=QFileInfo(LoadedFile).absolutePath();
+    const QRegularExpression stagedName(
+        QStringLiteral("(%1/)?mib-navigator-verify-[A-Za-z0-9]+\\.mib")
+            .arg(QRegularExpression::escape(stagingDir)));
+    const QString shownName = LoadedFile.isEmpty() ? tr("(unsaved editor content)") : LoadedFile;
+    for(auto &diagnostic:diagnostics){
+        diagnostic.sourcePath.replace(stagedName,shownName);
+        diagnostic.message.replace(stagedName,shownName);
+        diagnostic.rawText.replace(stagedName,shownName);}
+    for(const auto &diagnostic:std::as_const(diagnostics)){
+        if(diagnostic.severity<=3)++num_error;else if(diagnostic.severity<=5)++num_warning;else ++num_info;}
+    diagnosticModel->setDiagnostics(diagnostics);
 
     //: %1, %2, %3 are placeholders for pluralized num. of errors, warnings, infos
     QString stop_msg = tr("Verification complete. %1, %2, %3")
@@ -450,25 +498,23 @@ void MibEditor::VerifyMIB(void)
                           .arg(tr("%n warnings", "", num_warning))
                           .arg(tr("%n infos", "", num_info))
                           ;
-    s->MainUI()->MIBLog->addItem(new QListWidgetItem(stop_msg, 
-                                                     s->MainUI()->MIBLog));
+    s->MainUI()->MIBLogL->setText(stop_msg);
 
-    smiSetFlags(saved_flags);
-
-    // Reload everything
-    s->MibModuleObj()->Refresh();
+    // Validation temporarily uses the one parser context. Restore its current
+    // runtime asynchronously while the published immutable Environment remains usable.
+    s->MibModuleObj()->RestoreRuntimeAfterEditorValidation();
 }
 
 void MibEditor::ExtractMIBfromRFC(void)
 {
-    QRegExp module_regexp("^[ \t]*([A-Za-z0-9-]*) *(PIB-)?DEFINITIONS *(::=)? *(BEGIN)? *$");
-    QRegExp page_regexp("\\[[pP]age [iv0-9]*\\] *");
-    QRegExp macro_regexp("^[ \t]*[A-Za-z0-9-]* *MACRO *::=");
-    QRegExp end_regexp("^[ \t]*END[ \t]*$");
-    QRegExp blankline_regexp("^[ \t]*$");
-    QRegExp blank_regexp("[^ \t]");
-    QRegExp leadingspaces_regexp("^([ ]*)");
-    QRegExp draft_regexp("^[ ]*Internet[ \\-]Draft");
+    QRegularExpression module_regexp("^[ \\t]*([A-Za-z0-9-]*) *(PIB-)?DEFINITIONS *(::=)? *(BEGIN)? *$");
+    QRegularExpression page_regexp("\\[[pP]age [iv0-9]*\\] *");
+    QRegularExpression macro_regexp("^[ \\t]*[A-Za-z0-9-]* *MACRO *::=");
+    QRegularExpression end_regexp("^[ \\t]*END[ \\t]*$");
+    QRegularExpression blankline_regexp("^[ \\t]*$");
+    QRegularExpression blank_regexp("[^ \\t]");
+    QRegularExpression leadingspaces_regexp("^([ ]*)");
+    QRegularExpression draft_regexp("^[ ]*Internet[ \\-]Draft");
 
     QFile file_in("empty");
     QFile file_tmpout("empty");
@@ -494,7 +540,7 @@ void MibEditor::ExtractMIBfromRFC(void)
         file_in.setFileName(filename);
         if (!file_in.open(QFile::ReadOnly | QFile::Text))
         {
-            QMessageBox::warning(NULL, tr("SnmpB: Extract MIB from RFC"),
+            QMessageBox::warning(NULL, tr("MIB Navigator: Extract MIB from RFC"),
                                  tr("Cannot read file %1: %2\n")
                                  .arg(file_in.fileName())
                                  .arg(file_in.errorString()));
@@ -510,7 +556,7 @@ void MibEditor::ExtractMIBfromRFC(void)
 
     if (dir.isEmpty())
     {
-        QMessageBox::warning(NULL, tr("SnmpB: Extract MIB from RFC"),
+        QMessageBox::warning(NULL, tr("MIB Navigator: Extract MIB from RFC"),
                              tr("No directory selected. Aborting.\n"));
         file_in.close();
         return;
@@ -518,7 +564,7 @@ void MibEditor::ExtractMIBfromRFC(void)
 
     if (!QFileInfo(dir).isWritable())
     {
-        QMessageBox::warning(NULL, tr("SnmpB: Extract MIB from RFC"),
+        QMessageBox::warning(NULL, tr("MIB Navigator: Extract MIB from RFC"),
                 tr("Directory not writable by this user. Aborting.\n"));
         file_in.close();
         return;
@@ -531,13 +577,14 @@ void MibEditor::ExtractMIBfromRFC(void)
     {
         line = in.readLine();
 
-        if (draft_regexp.indexIn(line) != -1)
+        if (draft_regexp.match(line).hasMatch())
             continue;
 
         // Start of module
-        if (module_regexp.indexIn(line) != -1)
+        const QRegularExpressionMatch module_match = module_regexp.match(line);
+        if (module_match.hasMatch())
         {
-            module = module_regexp.cap(1); 
+            module = module_match.captured(1);
             skip = 9;
             skipped = -1;
             macro = 0;
@@ -548,7 +595,7 @@ void MibEditor::ExtractMIBfromRFC(void)
             file_tmpout.remove();
             if (!file_tmpout.open(QFile::ReadWrite | QFile::Text))
             {
-                QMessageBox::warning(NULL, tr("SnmpB: Extract MIB from RFC"),
+                QMessageBox::warning(NULL, tr("MIB Navigator: Extract MIB from RFC"),
                                      tr("Cannot create file %1: %2. Abort.\n")
                                      .arg(file_tmpout.fileName())
                                      .arg(file_tmpout.errorString()));
@@ -563,7 +610,7 @@ void MibEditor::ExtractMIBfromRFC(void)
             if (file_out.exists())
             {
                 QMessageBox mb(QMessageBox::Question, 
-                               tr("SnmpB: Extract MIB from RFC"), 
+                               tr("MIB Navigator: Extract MIB from RFC"),
                                tr("The file %1 already exists.\n")
                                .arg(file_out.fileName()));
                 QPushButton *ob = mb.addButton(tr("Overwrite"), 
@@ -591,7 +638,7 @@ void MibEditor::ExtractMIBfromRFC(void)
                 file_out.remove();
                 if (!file_out.open(QFile::ReadWrite | QFile::Text))
                 {
-                    QMessageBox::warning(NULL, tr("SnmpB: Extract MIB from RFC"),
+                    QMessageBox::warning(NULL, tr("MIB Navigator: Extract MIB from RFC"),
                                          tr("Cannot create file %1: %2. Skipping.\n")
                                          .arg(file_out.fileName())
                                          .arg(file_out.errorString()));
@@ -604,7 +651,7 @@ void MibEditor::ExtractMIBfromRFC(void)
 
         // At the end of a page we start the counter skipped to skip the
         // next few lines.
-        if (page_regexp.indexIn(line) != -1)
+        if (page_regexp.match(line).hasMatch())
             skipped = 0;
 
         // If we are skipping...
@@ -623,7 +670,7 @@ void MibEditor::ExtractMIBfromRFC(void)
                 // we have skipped four lines. remember the miminum of lines
                 // we have ever skipped to keep empty lines in a modules that
                 // appear near the top of a page.
-                if ((skipped >= 4) && (blank_regexp.indexIn(line) != -1))
+                if ((skipped >= 4) && blank_regexp.match(line).hasMatch())
                 {
                     if (skipped < skip)
                         skip = skipped;
@@ -637,15 +684,15 @@ void MibEditor::ExtractMIBfromRFC(void)
         if ((skipped == -1) && (module.length() > 0))
         {
             n++;
-            tmpout << line << endl;
+            tmpout << line << Qt::endl;
         }
 
         // Remember when we enter a macro definition
-        if (macro_regexp.indexIn(line) != -1)
+        if (macro_regexp.match(line).hasMatch())
             macro = 1;
 
         // End of module
-        if (end_regexp.indexIn(line) != -1)
+        if (end_regexp.match(line).hasMatch())
         {
             if (macro == 0)
             {
@@ -661,11 +708,13 @@ void MibEditor::ExtractMIBfromRFC(void)
                     // Find the minimum column that contains non-blank
                     // characters in order to cut a blank prefix off.
                     // Ignore lines that only contain white spaces.
-                    if (blankline_regexp.indexIn(line) == -1)
+                    if (!blankline_regexp.match(line).hasMatch())
                     {
-                        if (leadingspaces_regexp.indexIn(line) != -1)
+                        const QRegularExpressionMatch leading_match =
+                            leadingspaces_regexp.match(line);
+                        if (leading_match.hasMatch())
                         {
-                            p = leadingspaces_regexp.cap(1).length(); 
+                            p = leading_match.captured(1).length();
                             if ((p < strip) && (line.length() > p))
                                 strip = p;
                         }
@@ -683,7 +732,7 @@ void MibEditor::ExtractMIBfromRFC(void)
                         line = tmpout.readLine();
                         // For each block of consecutive blank lines,
                         // remove all lines but one.
-                        if (blankline_regexp.indexIn(line) != -1)
+                        if (blankline_regexp.match(line).hasMatch())
                         {
                             num_bl++;
                             continue;
@@ -691,11 +740,11 @@ void MibEditor::ExtractMIBfromRFC(void)
                         else
                         {
                             if (num_bl > 0)
-                                out << endl;
+                                out << Qt::endl;
                             num_bl = 0;
                         }
 
-                        out << line.remove(0, strip) << endl;
+                        out << line.remove(0, strip) << Qt::endl;
                     }
 
                     out.flush(); 
@@ -719,7 +768,7 @@ void MibEditor::ExtractMIBfromRFC(void)
  
     if(modules.size() > 0)
     {
-        QMessageBox::information(NULL, tr("SnmpB: Extract MIB from RFC"),
+        QMessageBox::information(NULL, tr("MIB Navigator: Extract MIB from RFC"),
                                  //: %n is the number of MIBs for pluralization; %1 is multiline list of that many filenames.
                                  tr("%n MIB module(s) have been extracted. "
                                     "The following MIB file(s) were created: %1",
@@ -728,13 +777,19 @@ void MibEditor::ExtractMIBfromRFC(void)
     }
 }
 
-void MibEditor::SelectedLogEntry(QListWidgetItem *item)
+void MibEditor::GoToLine(int line)
 {
-    QRegExp expression(" line ([1-9][0-9]*|0): ");
-    expression.indexIn(item->text());
-    int line = expression.capturedTexts()[1].toInt();
+    if (line <= 0) return;
+    s->MainUI()->MIBFileMarker->setMarker(line);
+    QTextCursor cursor(s->MainUI()->MIBFile->document()->findBlockByLineNumber(line - 1));
+    s->MainUI()->MIBFile->setTextCursor(cursor);
+    s->MainUI()->MIBFile->setFocus();
+}
 
-    s->MainUI()->MIBFileMarker->setMarker(line); 
+void MibEditor::SelectedLogEntry(const QModelIndex &index)
+{
+    const QModelIndex source = diagnosticFilter->mapToSource(index);
+    GoToLine(source.data(MibDiagnosticModel::LineRole).toInt());
 }
 
 void MibEditor::SetLineNumStatus(void)

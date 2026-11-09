@@ -23,7 +23,10 @@
 #include <QValidator>
 
 #include "mibselection.h"
+#include <QLineEdit>
 #include "agent.h"
+#include "mibenvironmentregistry.h"
+#include "mibvaluesemantics.h"
 
 MibSelection::MibSelection(Snmpb *snmpb, QWidget *parent, QString title, int _flags)
 {
@@ -34,8 +37,7 @@ MibSelection::MibSelection(Snmpb *snmpb, QWidget *parent, QString title, int _fl
     val_cb = NULL;
     val_le = NULL;
 
-    type = NULL;
-    node = NULL;
+    environment = MibEnvironmentRegistry::active();
     flags = _flags;
 
     dprompt = new QDialog(parent, Qt::WindowTitleHint);
@@ -169,27 +171,11 @@ QString MibSelection::GetValue(void)
 
 QString MibSelection::GetName(void)
 {
-    if (node)
-    {
-        char *b = smiRenderOID(node->oidlen, node->oid, 
-                               SMI_RENDER_NUMERIC);
-        char *f = result_oid.toLatin1().data();
-        while ((*b++ == *f++) && (*b != '\0') && (*f != '\0')) ;
-        /* f is now the remaining part */
-
-        if (*f != '\0')
-            return QString("%1%2").arg(node->name).arg(f);
-        else
-            return QString("%1").arg(node->name);
-    }
-    else
-        return  result_oid;
+    return RenderMibOid(environment, Oid(result_oid.toLatin1().constData()));
 }
 
-SmiNode *MibSelection::GetNode(void)
-{
-    return node;
-}
+MibEnvironmentPtr MibSelection::GetEnvironment(void) const { return environment; }
+QString MibSelection::GetSemanticOid(void) const { return semanticOid; }
 
 // Callback when the value combobox value changes 
 void MibSelection::GetValueCb(int index)
@@ -237,6 +223,14 @@ void MibSelection::OKButtonPressed(void)
         QMessageBox::critical(nullptr, tr("MIB Operation"),
                 tr("Invalid OID value"),
                 QMessageBox::Ok);
+        return;
+    }
+    const auto *selected=environment?environment->nodeByOid(semanticOid):nullptr;
+    QString validationError;
+    if ((flags&MIBSELECTION_SET) &&
+        !ValidateMibSetValue(selected,result_syntax,result_string,&validationError))
+    {
+        QMessageBox::critical(nullptr,tr("MIB Operation"),validationError,QMessageBox::Ok);
         return;
     }
 
@@ -361,23 +355,16 @@ void MibSelection::SetOidInfoType(const QString& oid)
 
     QString outoid = oid;
     QString outinfo = "";
-    SmiNode *thenode;
-    SmiType *thetype;
-    type = NULL;
-    node = NULL;
+    semanticOid.clear();
 
     if (poid.valid() == true)
     {
-        thenode = Agent::GetNodeFromOid(poid);
-        if (thenode && ((thenode->oidlen >= poid.len()) || 
-                        (thenode->nodekind == SMI_NODEKIND_COLUMN)))
+        QStringList suffix;
+        const auto *thenode=environment?environment->longestPrefixNode(oid,&suffix):nullptr;
+        if (thenode && (suffix.isEmpty() || thenode->kind==MibEnvironmentNodeKind::Column))
         {
-            thetype = smiGetNodeType(thenode);
-            SmiRange *r;
-
             // If a column object, ask the user to select the instance ...
-            if ((thenode->nodekind == SMI_NODEKIND_COLUMN) && 
-                (thenode->oidlen >= poid.len()))
+            if ((thenode->kind == MibEnvironmentNodeKind::Column) && suffix.isEmpty())
             {
                 QString inst;
                 // Pop-up the selection dialog
@@ -389,28 +376,23 @@ void MibSelection::SetOidInfoType(const QString& oid)
             else
                 outoid = oid;
 
-            node = thenode;
-
-            if (thetype)
+            semanticOid=thenode->oid;
+            if (!thenode->constraints.isEmpty())
             {
-                if (smiGetFirstRange(thetype))
+                outinfo += tr("<br><b>Range:</b> ");
+                for (int i=0;i<thenode->constraints.size();++i)
                 {
-                    outinfo += tr("<br><b>Range:</b> ");
-                    for (r = smiGetFirstRange(thetype); r; r = smiGetNextRange(r))
-                    {
-                        outinfo += tr("%1 .. %2")
-                                           .arg(r->minValue.value.unsigned64)
-                                           .arg(r->maxValue.value.unsigned64);
-                        if (smiGetNextRange(r))
-                            outinfo += ", ";
-                    }
+                    const auto &r=thenode->constraints[i];
+                    const auto lo=r.minimum.isSigned?QString::number(r.minimum.signedValue):QString::number(r.minimum.unsignedValue);
+                    const auto hi=r.maximum.isSigned?QString::number(r.maximum.signedValue):QString::number(r.maximum.unsignedValue);
+                    if(r.isSizeConstraint)outinfo+=tr("SIZE ");
+                    outinfo+=tr("%1 .. %2").arg(lo,hi);
+                    if(i+1<thenode->constraints.size())outinfo+=", ";
                 }
             }
 
-            if ((thenode->access != SMI_ACCESS_READ_WRITE) && (flags & MIBSELECTION_SET))
+            if (!IsWritableMibNode(thenode) && (flags & MIBSELECTION_SET))
                 outinfo += tr("<br><b><font color=red>WARNING: object is not writable!</font></b>");
-
-            type = thetype;
         }
     }
 
@@ -423,20 +405,19 @@ void MibSelection::SetOidInfoType(const QString& oid)
 
 void MibSelection::SetValueWidget(void)
 {
-    SmiNamedNumber  *nn;
-
     val_cb->clear();
     val_cb->setVisible(false);
 
-    if (type && smiGetFirstNamedNumber(type) && 
-        (type->basetype == SMI_BASETYPE_ENUM))
+    const auto *node=environment?environment->nodeByOid(semanticOid):nullptr;
+    if (node && !node->namedValues.isEmpty() &&
+        node->baseType==MibEnvironmentBaseType::Enumeration)
     {
         val_cb->setVisible(true);
 
-        for (nn = smiGetFirstNamedNumber(type); nn; nn = smiGetNextNamedNumber(nn))
+        for (const auto &nn:node->namedValues)
             val_cb->addItem(QString("%1 (%2)")
-                            .arg(nn->name).arg(nn->value.value.unsigned32), 
-                            QVariant((unsigned int)nn->value.value.unsigned32));
+                            .arg(nn.name).arg(nn.value.isSigned?nn.value.signedValue:qint64(nn.value.unsignedValue)),
+                            QVariant::fromValue(nn.value.isSigned?nn.value.signedValue:qint64(nn.value.unsignedValue)));
         connect(val_cb, SIGNAL(currentIndexChanged(int)), 
                 this, SLOT(GetValueCb(int)));
     }
@@ -481,7 +462,7 @@ void MibSelection::SetSyntax(int st)
         switch (st)
         {
             case sNMP_SYNTAX_INT32: syntax_cb->setCurrentIndex(0); break;
-                                    /*case sNMP_SYNTAX_UINT32:*/
+                                    /* UINT32 shares the Gauge32 wire syntax. */
             case sNMP_SYNTAX_CNTR32: syntax_cb->setCurrentIndex(2); break;
             case sNMP_SYNTAX_GAUGE32: syntax_cb->setCurrentIndex(3); break;
             case sNMP_SYNTAX_OCTETS: syntax_cb->setCurrentIndex(4); break;
@@ -496,66 +477,8 @@ void MibSelection::SetSyntax(int st)
     }
     else // Get the syntax from the MIB information
     {
-        if (type)
-        {
-            switch (type->basetype)
-            {
-                case SMI_BASETYPE_INTEGER32:
-                case SMI_BASETYPE_ENUM:
-                    syntax_cb->setCurrentIndex(0);
-                    break;
-                case SMI_BASETYPE_UNSIGNED32:
-                    if (type->name)
-                    {
-                        if (!strcmp(type->name, "TimeTicks"))
-                        {
-                            syntax_cb->setCurrentIndex(8);
-                            break;
-                        }
-                        else if (!strcmp(type->name, "Counter32") || 
-                                !strcmp(type->name, "COUNTER"))
-                        {
-                            syntax_cb->setCurrentIndex(2);
-                            break;
-                        }
-                        else if (!strcmp(type->name, "Gauge32") || 
-                                !strcmp(type->name, "GAUGE"))
-                        {
-                            syntax_cb->setCurrentIndex(3);
-                            break;
-                        }
-                    }
-                    syntax_cb->setCurrentIndex(1);
-                    break;
-                case SMI_BASETYPE_OCTETSTRING:
-                    if (type->name)
-                    {
-                        if (!strcmp(type->name, "IpAddress"))
-                        {
-                            syntax_cb->setCurrentIndex(9);
-                            break;
-                        }
-                        else if (!strcmp(type->name, "Opaque"))
-                        {
-                            syntax_cb->setCurrentIndex(10);
-                            break;
-                        }
-                    }
-                    syntax_cb->setCurrentIndex(4);
-                    break;
-                case SMI_BASETYPE_BITS: 
-                    syntax_cb->setCurrentIndex(5);
-                    break;
-                case SMI_BASETYPE_OBJECTIDENTIFIER:
-                    syntax_cb->setCurrentIndex(6);
-                    break;
-                case SMI_BASETYPE_UNSIGNED64:
-                    syntax_cb->setCurrentIndex(7);
-                    break;
-                default:
-                    break;
-            }
-        }
+        const auto *node=environment?environment->nodeByOid(semanticOid):nullptr;
+        if (node) SetSyntax(SnmpSyntaxForMibNode(node));
         else // default
             syntax_cb->setCurrentIndex(4);
     }
@@ -585,7 +508,8 @@ bool MibSelection::run(const QString& init_oid, int init_syntax, const QString& 
         {
             val_le->setText(init_val);
             GetValueLe();
-            if (type && (type->basetype == SMI_BASETYPE_ENUM))
+            const auto *node=environment?environment->nodeByOid(semanticOid):nullptr;
+            if (node && node->baseType==MibEnvironmentBaseType::Enumeration)
             {
                 for (int i = 0; i < val_cb->count(); i++)
                     if (val_cb->itemData(i).toUInt() == init_val.toUInt())
@@ -598,7 +522,8 @@ bool MibSelection::run(const QString& init_oid, int init_syntax, const QString& 
     if (dprompt->exec())
     {
         QString tmpoid;
-        if (node && (node->nodekind == SMI_NODEKIND_SCALAR))
+        const auto *node=environment?environment->nodeByOid(semanticOid):nullptr;
+        if (node && node->kind==MibEnvironmentNodeKind::Scalar && !result_oid.endsWith(".0"))
             tmpoid = result_oid + ".0";
         else
             tmpoid = result_oid;
@@ -622,7 +547,8 @@ void MibSelection::bgrun(const QString& oid)
     OKButtonPressed();
 
     QString tmpoid;
-    if (node && (node->nodekind == SMI_NODEKIND_SCALAR))
+    const auto *node=environment?environment->nodeByOid(semanticOid):nullptr;
+    if (node && node->kind==MibEnvironmentNodeKind::Scalar && !result_oid.endsWith(".0"))
         tmpoid = result_oid + ".0";
     else
         tmpoid = result_oid;

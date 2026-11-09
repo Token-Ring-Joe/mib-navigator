@@ -1,0 +1,53 @@
+name: Cross-platform build
+
+on:
+  push:
+    branches: [main, modernize/qt6-cmake]
+  pull_request:
+
+jobs:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            qt-arch: win64_msvc2022_64
+          - os: ubuntu-latest
+            qt-arch: linux_gcc_64
+          - os: macos-latest
+            qt-arch: clang_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      # Qt 6.11.1 remains the primary validated Windows development/release
+      # version. aqtinstall 3.3.0 cannot currently retrieve Qt 6.11.x because
+      # of its upstream repository-layout incompatibility, so CI temporarily
+      # uses 6.10.3 for cross-platform compiler/test evidence. Return CI to
+      # 6.11.x when the upstream installer issue is resolved.
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: 6.10.3
+          arch: ${{ matrix.qt-arch }}
+          cache: true
+      - name: Configure
+        run: cmake -S . -B build-ci -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+      - name: Build
+        run: cmake --build build-ci --config Release --parallel 2
+      - name: Deterministic tests
+        run: ctest --test-dir build-ci -C Release -E snmpb.launch-smoke --output-on-failure
+      - name: Install staging tree
+        run: cmake --install build-ci --config Release --prefix "${{ github.workspace }}/stage"
+      - name: Verify staging tree
+        run: cmake -DSNMPB_PACKAGE_ROOT="${{ github.workspace }}/stage" -P cmake/VerifyReleaseTree.cmake
+      - name: Create release-candidate archive
+        run: cpack --config build-ci/CPackConfig.cmake -C Release -B build-ci/packages
+      - name: Verify extracted release-candidate archive
+        run: cmake -DSNMPB_PACKAGE_DIR="${{ github.workspace }}/build-ci/packages" -DSNMPB_EXTRACT_DIR="${{ github.workspace }}/build-ci/extracted-package" -P cmake/VerifyReleaseArchive.cmake
+      - name: Upload release-candidate artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MIB-Navigator-1.0.0-rc1-${{ matrix.os }}
+          path: build-ci/packages/MIB-Navigator-1.0.0-rc1-*
+          if-no-files-found: error

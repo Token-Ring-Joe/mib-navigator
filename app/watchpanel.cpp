@@ -1,0 +1,148 @@
+#include "watchpanel.h"
+
+#include <QAction>
+#include <QBrush>
+#include <QColor>
+#include <QFontDatabase>
+#include <QHBoxLayout>
+#include <QHeaderView>
+#include <QLabel>
+#include <QMenu>
+#include <QPushButton>
+#include <QSpinBox>
+#include <QTableWidget>
+#include <QVBoxLayout>
+
+namespace {
+enum Column { Target, Credential, Object, Value, Change, Rate, Received, Notes, Every, Status, Updated, ColumnCount };
+}
+
+WatchPanel::WatchPanel(WatchService *watchService,
+                       std::function<QString(const QString &)> label, QWidget *parent)
+    : QWidget(parent), service(watchService), credentialLabel(std::move(label))
+{
+    setObjectName(QStringLiteral("WorkbenchWatchPage"));
+    auto *layout = new QVBoxLayout(this);
+    layout->setContentsMargins(4, 4, 4, 4);
+
+    auto *bar = new QHBoxLayout;
+    bar->addWidget(new QLabel(tr("Right-click a value in Results and choose Watch. New watches repeat every"), this));
+    interval = new QSpinBox(this);
+    interval->setObjectName(QStringLiteral("WatchInterval"));
+    interval->setRange(1, 3600); interval->setValue(5); interval->setSuffix(tr(" s"));
+    bar->addWidget(interval);
+    bar->addStretch();
+    pauseButton = new QPushButton(tr("Pause"), this);
+    removeButton = new QPushButton(tr("Remove"), this);
+    clearButton = new QPushButton(tr("Remove all"), this);
+    pauseButton->setObjectName(QStringLiteral("WatchPause"));
+    removeButton->setObjectName(QStringLiteral("WatchRemove"));
+    clearButton->setObjectName(QStringLiteral("WatchClear"));
+    for (QPushButton *button : {pauseButton, removeButton}) button->setEnabled(false);
+    clearButton->setEnabled(false);
+    bar->addWidget(pauseButton); bar->addWidget(removeButton); bar->addWidget(clearButton);
+    layout->addLayout(bar);
+
+    table = new QTableWidget(0, ColumnCount, this);
+    table->setObjectName(QStringLiteral("WatchTable"));
+    table->setHorizontalHeaderLabels({tr("Target"), tr("Credential"), tr("Object"), tr("Value"), tr("Change"),
+                                      tr("Rate"), tr("Received"), tr("Notes"), tr("Every"), tr("Status"), tr("Updated")});
+    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    table->setSelectionMode(QAbstractItemView::SingleSelection);
+    table->setAlternatingRowColors(true);
+    table->setWordWrap(false);
+    table->verticalHeader()->setVisible(false);
+    table->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+    table->horizontalHeader()->setSectionResizeMode(Notes, QHeaderView::Stretch);
+    table->setContextMenuPolicy(Qt::CustomContextMenu);
+    layout->addWidget(table, 1);
+
+    connect(service, &WatchService::rowAdded, this, [this](quint64 id) {
+        const WatchRow *data = service->row(id);
+        if (!data) return;
+        const int row = table->rowCount();
+        table->insertRow(row);
+        for (int column = 0; column < ColumnCount; ++column) table->setItem(row, column, new QTableWidgetItem);
+        table->item(row, Target)->setData(Qt::UserRole, QVariant::fromValue(id));
+        fill(row, *data);
+        clearButton->setEnabled(true);
+    });
+    connect(service, &WatchService::rowChanged, this, [this](quint64 id) {
+        const int row = rowOf(id);
+        if (const WatchRow *data = service->row(id); data && row >= 0) fill(row, *data);
+        selectionChanged();
+    });
+    connect(service, &WatchService::rowRemoved, this, [this](quint64 id) {
+        const int row = rowOf(id);
+        if (row >= 0) table->removeRow(row);
+        clearButton->setEnabled(table->rowCount() > 0);
+        selectionChanged();
+    });
+    connect(table, &QTableWidget::itemSelectionChanged, this, &WatchPanel::selectionChanged);
+    connect(pauseButton, &QPushButton::clicked, this, [this]() {
+        const quint64 id = selectedId();
+        if (const WatchRow *data = service->row(id)) service->setPaused(id, !data->paused);
+    });
+    connect(removeButton, &QPushButton::clicked, this, [this]() { service->remove(selectedId()); });
+    connect(clearButton, &QPushButton::clicked, service, &WatchService::clear);
+    connect(table, &QWidget::customContextMenuRequested, this, [this](const QPoint &position) {
+        QTableWidgetItem *item = table->itemAt(position);
+        if (!item) return;
+        table->selectRow(item->row());
+        const WatchRow *data = service->row(selectedId());
+        if (!data) return;
+        QMenu menu(table);
+        QAction *pause = menu.addAction(data->paused ? tr("Resume") : tr("Pause"));
+        QAction *poll = menu.addAction(tr("Poll now"));
+        QAction *remove = menu.addAction(tr("Remove"));
+        QAction *chosen = menu.exec(table->viewport()->mapToGlobal(position));
+        if (chosen == pause) service->setPaused(data->id, !data->paused);
+        else if (chosen == poll) service->pollNow(data->id);
+        else if (chosen == remove) service->remove(data->id);
+    });
+}
+
+int WatchPanel::intervalSeconds() const { return interval->value(); }
+
+quint64 WatchPanel::selectedId() const
+{
+    const auto selected = table->selectedItems();
+    return selected.isEmpty() ? 0 : table->item(selected.first()->row(), Target)->data(Qt::UserRole).toULongLong();
+}
+
+int WatchPanel::rowOf(quint64 id) const
+{
+    for (int row = 0; row < table->rowCount(); ++row)
+        if (table->item(row, Target)->data(Qt::UserRole).toULongLong() == id) return row;
+    return -1;
+}
+
+void WatchPanel::selectionChanged()
+{
+    const WatchRow *data = service->row(selectedId());
+    pauseButton->setEnabled(data != nullptr);
+    removeButton->setEnabled(data != nullptr);
+    pauseButton->setText(data && data->paused ? tr("Resume") : tr("Pause"));
+}
+
+void WatchPanel::fill(int row, const WatchRow &data)
+{
+    const QString notes = QStringList{data.change.note, data.warnings}.join(QStringLiteral("  ")).trimmed();
+    const bool failed = data.status != tr("OK") && data.status != tr("Paused") &&
+                        data.status != tr("Waiting for the first answer") && data.status != tr("Resuming");
+    const QStringList cells{data.spec.target, credentialLabel ? credentialLabel(data.spec.credentialKey) : data.spec.credentialKey,
+                            data.objectLabel, data.value, data.change.change, data.change.rate,
+                            data.received, notes, tr("%1 s").arg(data.spec.intervalSeconds), data.status,
+                            data.updated.isValid() ? data.updated.toString(QStringLiteral("HH:mm:ss")) : QString()};
+    for (int column = 0; column < ColumnCount; ++column) {
+        QTableWidgetItem *item = table->item(row, column);
+        item->setText(cells.at(column));
+        item->setToolTip(column == Status || column == Notes ? cells.at(column) : QString());
+        if (column == Value || column == Change || column == Rate || column == Received)
+            item->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+        item->setBackground(failed ? QBrush(QColor(0xf8, 0xd7, 0xda))
+                                   : !data.warnings.isEmpty() ? QBrush(QColor(0xff, 0xe4, 0xc2)) : QBrush());
+        item->setForeground(data.paused ? QBrush(QColor(0x80, 0x80, 0x80)) : QBrush());
+    }
+}

@@ -27,9 +27,25 @@
 #include <QContextMenuEvent>
 #include <qtreewidget.h>
 #include <QTreeWidgetItemIterator>
+#include <functional>
+#include <utility>
 
 #include "mibnode.h"
 #include "mibview.h"
+#include "mibtreemodel.h"
+#include "mibmodelview.h"
+
+namespace {
+QString accessText(MibEnvironmentAccess a){switch(a){case MibEnvironmentAccess::NotAccessible:return "not-accessible";case MibEnvironmentAccess::Notify:return "notify";case MibEnvironmentAccess::ReadOnly:return "read-only";case MibEnvironmentAccess::ReadWrite:return "read-write";case MibEnvironmentAccess::Install:return "install";case MibEnvironmentAccess::InstallNotify:return "install-notify";case MibEnvironmentAccess::ReportOnly:return "report-only";default:return {};}}
+QString statusText(MibEnvironmentStatusCode s){switch(s){case MibEnvironmentStatusCode::Current:return "current";case MibEnvironmentStatusCode::Deprecated:return "deprecated";case MibEnvironmentStatusCode::Mandatory:return "mandatory";case MibEnvironmentStatusCode::Optional:return "optional";case MibEnvironmentStatusCode::Obsolete:return "obsolete";default:return {};}}
+QString baseText(MibEnvironmentBaseType t){switch(t){case MibEnvironmentBaseType::Integer32:return "INTEGER";case MibEnvironmentBaseType::Unsigned32:return "UNSIGNED32";case MibEnvironmentBaseType::Integer64:return "INTEGER64";case MibEnvironmentBaseType::Unsigned64:return "UNSIGNED64";case MibEnvironmentBaseType::OctetString:return "OCTET STRING";case MibEnvironmentBaseType::ObjectIdentifier:return "OBJECT IDENTIFIER";case MibEnvironmentBaseType::Enumeration:return "ENUM";case MibEnvironmentBaseType::Bits:return "BITS";default:return {};}}
+QString valueText(const MibEnvironmentValue&v){return v.isSigned?QString::number(v.signedValue):QString::number(v.unsignedValue);}
+}
+
+void MibModelView::RegisterToLoader(MibViewLoader *loader)
+{
+    setTreeModel(loader ? loader->TreeModel() : nullptr);
+}
 
 //
 // BasicMibView class
@@ -80,6 +96,7 @@ BasicMibView::BasicMibView (QWidget * parent) : QTreeWidget(parent)
 void BasicMibView::SetDirty(void)
 {
     isdirty = 1;
+    find_last = QModelIndex();
 }
 
 void BasicMibView::RegisterToLoader(MibViewLoader *loader)
@@ -90,17 +107,13 @@ void BasicMibView::RegisterToLoader(MibViewLoader *loader)
 
 void BasicMibView::Populate(void)
 {
-    SmiNode *smiNode;
-    
     if (isdirty)
     {
         isdirty = 0;
         // Create the root folder
         MibNode *root = new MibNode("MIB Tree", this);
         
-        smiNode = smiGetNode(NULL, "iso");
-        if (smiNode)
-            MibLoader->PopulateSubTree(smiNode, root, NULL);
+        if (MibLoader) MibLoader->Populate(root);
     }
 }
 
@@ -645,49 +658,39 @@ void MibView::contextMenuEvent ( QContextMenuEvent *event)
 
 MibViewLoader::MibViewLoader ()
 {    
-    pmodc = 0;
-    pmodv = NULL;
     ignoreconformance = 0;
     ignoreleafs = 0;
+    treeModel = new MibTreeModel(this);
 }
 
-void MibViewLoader::Load(QStringList &modules)
+void MibViewLoader::SetEnvironment(MibEnvironmentPtr value, const QStringList &modules)
 {
-    char *modulename;
-    SmiModule *smiModule;
-    SmiModule **modv = NULL;
-    int modc = 0;
-    
-    modv = (SmiModule **)malloc(modules.count() * sizeof(SmiModule *));
-    modc = 0;
-    
-    QString module;
-
-    for (int j=0; j < views.count(); j++)
-    {
-        views[j]->SetDirty();
-        views[j]->clear();
-    }
-
-    for (int i=0; i < modules.count(); i++) 
-    {
-        module = modules[i];
-        modulename = smiLoadModule(module.toLatin1().data());
-        smiModule = modulename ? smiGetModule(modulename) : NULL;
-
-        if (smiModule)
-            modv[modc++] = smiModule;
-        else
-        {
-            emit LogError(tr("Error: `%1` module cannot be loaded (not in MIB paths)")
-                                  .arg(module.toLatin1().data()));
+    environment = std::move(value); loadedModuleNames = modules;
+    for (BasicMibView *view : std::as_const(views)) { view->SetDirty(); view->clear(); }
+    treeSnapshot = {}; treeSnapshot.oid = QStringLiteral("1"); treeSnapshot.name = QStringLiteral("MIB Tree");
+    std::function<MibTreeNodeRecord(const MibEnvironmentNodeRecord &)> project;
+    project = [this, &project](const MibEnvironmentNodeRecord &node) {
+        MibTreeNodeRecord record; record.oid=node.oid; record.name=node.name;
+        record.moduleName=node.moduleIdentity;
+        switch(node.kind){case MibEnvironmentNodeKind::Node:record.nodeKind=1;break;case MibEnvironmentNodeKind::Scalar:record.nodeKind=2;break;case MibEnvironmentNodeKind::Table:record.nodeKind=4;break;case MibEnvironmentNodeKind::Row:record.nodeKind=8;break;case MibEnvironmentNodeKind::Column:record.nodeKind=16;break;case MibEnvironmentNodeKind::Notification:record.nodeKind=32;break;case MibEnvironmentNodeKind::Group:record.nodeKind=64;break;case MibEnvironmentNodeKind::Compliance:record.nodeKind=128;break;case MibEnvironmentNodeKind::Capabilities:record.nodeKind=256;break;default:break;}
+        record.typeName=node.syntaxName;
+        if(record.typeName.isEmpty())if(const auto*t=environment->type(node.typeId))record.typeName=t->parentTypeId.section(QStringLiteral("::"),-1);
+        record.displayHint=node.displayHint; record.units=node.units;
+        record.access=accessText(node.access);record.status=statusText(node.status);record.baseType=baseText(node.baseType);
+        record.description=node.description; record.reference=node.reference;
+        for(const auto&range:node.constraints)record.ranges<<QString("%1 .. %2").arg(valueText(range.minimum),valueText(range.maximum));
+        for(const auto&named:node.namedValues)record.namedValues<<QString("%1 (%2)").arg(named.name,named.value.canonicalText);
+        for (const QString &childOid : node.childOids) {
+            const auto *child=environment->nodeByOid(childOid);
+            if (child && !PruneSubTree(*child)) record.children.append(project(*child));
         }
+        return record;
+    };
+    if (environment) {
+        const auto *iso=environment->nodeByOid(QStringLiteral("1"));
+        if (iso) treeSnapshot.children.append(project(*iso));
     }
-
-    pmodc = modc;
-    if (pmodv)
-        free(pmodv);
-    pmodv = modv;
+    treeModel->setSnapshot(treeSnapshot);
 }
 
 void MibViewLoader::RegisterView(BasicMibView* view)
@@ -695,19 +698,9 @@ void MibViewLoader::RegisterView(BasicMibView* view)
     views.append(view);
 }
 
-int MibViewLoader::IsPartOfLoadedModules(SmiNode *smiNode)
+int MibViewLoader::IsPartOfLoadedModules(const MibEnvironmentNodeRecord &node)
 {
-    SmiModule *smiModule;
-    int i;
-    
-    smiModule = smiGetNodeModule(smiNode);
-    
-    for (i = 0; i < pmodc; i++) {
-        if (strcmp(pmodv[i]->name, smiModule->name) == 0) {
-            return 1;
-        }
-    }
-    return 0;
+    return loadedModuleNames.contains(node.moduleIdentity);
 }
 
 /*
@@ -722,18 +715,10 @@ int MibViewLoader::IsPartOfLoadedModules(SmiNode *smiNode)
  * --tree-no-conformance so the code below is still broken.)
  */
 
-int MibViewLoader::PruneSubTree(SmiNode *smiNode)
+int MibViewLoader::PruneSubTree(const MibEnvironmentNodeRecord &node)
 {
-    SmiNode   *childNode;
-    
-    const int confmask = (SMI_NODEKIND_GROUP | SMI_NODEKIND_COMPLIANCE);
-    const int leafmask = (SMI_NODEKIND_GROUP | SMI_NODEKIND_COMPLIANCE
-                          | SMI_NODEKIND_COLUMN | SMI_NODEKIND_SCALAR
-                          | SMI_NODEKIND_ROW | SMI_NODEKIND_NOTIFICATION);
-    
-    if (! smiNode) {
-        return 1;
-    }
+    const bool conformance=node.kind==MibEnvironmentNodeKind::Group||node.kind==MibEnvironmentNodeKind::Compliance;
+    const bool leaf=conformance||node.kind==MibEnvironmentNodeKind::Column||node.kind==MibEnvironmentNodeKind::Scalar||node.kind==MibEnvironmentNodeKind::Row||node.kind==MibEnvironmentNodeKind::Notification;
     
     /*
      * First, prune all nodes which the user has told us to ignore.
@@ -743,21 +728,11 @@ int MibViewLoader::PruneSubTree(SmiNode *smiNode)
      * module identity nodes.
      */
     
-    if (ignoreconformance && (smiNode->nodekind & confmask)) {
-        return 1;
-    }
+    if (ignoreconformance && conformance) return 1;
     
     if (ignoreleafs) {
-        if (smiNode->nodekind & leafmask) {
-            return 1;
-        }
-        if (smiNode->nodekind == SMI_NODEKIND_NODE
-            && smiNode->status != SMI_STATUS_UNKNOWN) {
-            SmiModule *smiModule = smiGetNodeModule(smiNode);
-            if (smiModule && smiNode != smiGetModuleIdentityNode(smiModule)) {
-                return 1;
-            }
-        }
+        if (leaf) return 1;
+        if (node.kind==MibEnvironmentNodeKind::Node && node.status!=MibEnvironmentStatusCode::Unknown) return 1;
     }
     
     /*
@@ -765,19 +740,15 @@ int MibViewLoader::PruneSubTree(SmiNode *smiNode)
       * modules we are looking at.
       */
     
-    if (IsPartOfLoadedModules(smiNode)) {
-        if (!ignoreconformance || !smiGetFirstChildNode(smiNode)) {
-            return 0;
-        }
-    }
+    if (IsPartOfLoadedModules(node) && (!ignoreconformance || node.childOids.isEmpty())) return 0;
     
     /*
      * Finally, prune all nodes where all child nodes are pruned.
      */
     
-    for (childNode = smiGetFirstChildNode(smiNode);
-    childNode;
-    childNode = smiGetNextChildNode(childNode)) {
+    if (!environment) return 1;
+    for (const QString &childOid : node.childOids) {
+        const auto *childNode=environment->nodeByOid(childOid); if(!childNode) continue;
         
         /*
          * In the case of ignoreleafs, we have to peek at the child
@@ -788,47 +759,43 @@ int MibViewLoader::PruneSubTree(SmiNode *smiNode)
          * to the pruned conformance leafs.
          */
         
-        if (ignoreleafs && (childNode->nodekind & leafmask)) {
-            if (IsPartOfLoadedModules(childNode)) {
-                if (ignoreconformance && (childNode->nodekind & confmask)) {
-                    return 1;
-                }
+        const bool childConf=childNode->kind==MibEnvironmentNodeKind::Group||childNode->kind==MibEnvironmentNodeKind::Compliance;
+        const bool childLeaf=childConf||childNode->kind==MibEnvironmentNodeKind::Column||childNode->kind==MibEnvironmentNodeKind::Scalar||childNode->kind==MibEnvironmentNodeKind::Row||childNode->kind==MibEnvironmentNodeKind::Notification;
+        if (ignoreleafs && childLeaf) {
+            if (IsPartOfLoadedModules(*childNode)) {
+                if (ignoreconformance && childConf) return 1;
                 return 0;
             }
         }
-        
-        if (! PruneSubTree(childNode)) {
-            return 0;
-        }
+        if (!PruneSubTree(*childNode)) return 0;
     }
     
     return 1;
 }
 
-enum MibNode::MibType MibViewLoader::SmiKindToMibNodeType(int smikind)
+enum MibNode::MibType MibViewLoader::EnvironmentKindToMibNodeType(MibEnvironmentNodeKind kind)
 {
-    switch(smikind)
+    switch(kind)
     {
-    case SMI_NODEKIND_NODE:
+    case MibEnvironmentNodeKind::Node:
         return (MibNode::MIBNODE_NODE);
-    case SMI_NODEKIND_SCALAR:
+    case MibEnvironmentNodeKind::Scalar:
         return (MibNode::MIBNODE_SCALAR);
-    case SMI_NODEKIND_TABLE:
+    case MibEnvironmentNodeKind::Table:
         return (MibNode::MIBNODE_TABLE);
-    case SMI_NODEKIND_ROW:
+    case MibEnvironmentNodeKind::Row:
         return (MibNode::MIBNODE_ROW);
-    case SMI_NODEKIND_COLUMN:
+    case MibEnvironmentNodeKind::Column:
         return (MibNode::MIBNODE_COLUMN);
-    case SMI_NODEKIND_NOTIFICATION:
+    case MibEnvironmentNodeKind::Notification:
         return (MibNode::MIBNODE_NOTIFICATION);
-    case SMI_NODEKIND_GROUP:
+    case MibEnvironmentNodeKind::Group:
         return (MibNode::MIBNODE_GROUP);
-    case SMI_NODEKIND_COMPLIANCE:
+    case MibEnvironmentNodeKind::Compliance:
         return (MibNode::MIBNODE_COMPLIANCE);
-    case SMI_NODEKIND_CAPABILITIES:
+    case MibEnvironmentNodeKind::Capabilities:
         return (MibNode::MIBNODE_CAPABILITIES);
-    case SMI_NODEKIND_UNKNOWN:
-    case SMI_NODEKIND_ANY:
+    case MibEnvironmentNodeKind::Unknown:
     default:
         break;
     }
@@ -836,25 +803,16 @@ enum MibNode::MibType MibViewLoader::SmiKindToMibNodeType(int smikind)
     return (MibNode::MIBNODE_NODE);
 }
 
-MibNode * MibViewLoader::PopulateSubTree (SmiNode *smiNode, MibNode *parent, MibNode *sibling)
+void MibViewLoader::Populate(MibNode *root)
 {
-    SmiNode     *childNode;
-    MibNode *current = NULL, *prev = NULL;
-    
-    if (smiNode)
-    {
-        current = new MibNode(SmiKindToMibNodeType(smiNode->nodekind), 
-                              smiNode, parent, sibling);
-        
-        for (childNode = smiGetFirstChildNode(smiNode);
-        childNode;
-        childNode = smiGetNextChildNode(childNode))
-        {
-            if (PruneSubTree(childNode)) continue;
-            
-            prev = PopulateSubTree(childNode, current, prev);
-        }
-    }
-    
+    if (!environment || !root) return;
+    const auto *iso=environment->nodeByOid(QStringLiteral("1"));
+    if (iso) PopulateSubTree(*iso,root,nullptr);
+}
+
+MibNode *MibViewLoader::PopulateSubTree(const MibEnvironmentNodeRecord &node,MibNode *parent,MibNode *sibling)
+{
+    MibNode *current=new MibNode(EnvironmentKindToMibNodeType(node.kind),node,environment,parent,sibling),*prev=nullptr;
+    for(const QString &oid:node.childOids){const auto*child=environment->nodeByOid(oid);if(!child||PruneSubTree(*child))continue;prev=PopulateSubTree(*child,current,prev);}
     return current;
 }

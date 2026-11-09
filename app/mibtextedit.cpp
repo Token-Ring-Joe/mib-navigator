@@ -69,7 +69,7 @@ void MibTextEdit::insertFromMimeData( const QMimeData *source )
             }
             else
             {
-                QMessageBox::critical(NULL, tr("SnmpB: Open MIB File"),
+                QMessageBox::critical(NULL, tr("MIB Navigator: Open MIB File"),
                         tr("Cannot open file %1: %2.\n")
                         .arg(file.fileName())
                         .arg(file.errorString()));

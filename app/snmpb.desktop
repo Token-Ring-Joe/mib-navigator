@@ -1,7 +1,7 @@
 [Desktop Entry] 
-Exec=snmpb %f
-TryExec=snmpb
-Name=SnmpB
+Exec=mib-navigator %f
+TryExec=mib-navigator
+Name=MIB Navigator
 GenericName=SNMP MIB Browser
 Icon=snmpb
 Categories=Qt;Network;Utility;

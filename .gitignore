@@ -16,3 +16,5 @@ libsmi/config.h
 **/.qmake.stash
 **/*.pro.user
 build-*
+build/
+/manual-validation/

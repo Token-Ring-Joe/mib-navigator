@@ -1,0 +1,33 @@
+#ifndef __LIBSNMP_H_INCLUDED__
+#define __LIBSNMP_H_INCLUDED__
+
+#define PLATFORM_WINDOWS
+
+#include <config.h>
+
+#include <cctype>
+#include <cerrno>
+#include <climits>
+#include <csignal>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <ctime>
+#include <iostream>
+
+#include <sys/stat.h>
+#include <sys/timeb.h>
+#include <sys/types.h>
+
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <wspiapi.h>
+#include <io.h>
+#include <process.h>
+#include <windows.h>
+
+typedef int pid_t;
+
+#endif

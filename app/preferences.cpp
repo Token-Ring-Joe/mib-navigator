@@ -18,19 +18,20 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 #include <memory>
+#include <QCoreApplication>
+#include <QDir>
 #include <qmessagebox.h> 
 #include <qfileinfo.h>
 #include <qtextstream.h>
-
-// For DEFAULT_SMIPATH
-#ifdef WIN32
-#include "../libsmi/win/config.h"
-#else
-#include "../libsmi/config.h"
-#endif
+#include <QFormLayout>
+#include <QGroupBox>
+#include <QSpinBox>
+#include <QVBoxLayout>
 
 #include "mibmodule.h"
 #include "preferences.h"
+#include "preferencesettings.h"
+#include "productidentity.h"
 
 const char default_mib_config[] = R"(
 IF-MIB
@@ -51,16 +52,18 @@ Preferences::Preferences(Snmpb *snmpb)
 
     // setup defaults for the default constructor of QSettings
     QSettings::setDefaultFormat(QSettings::IniFormat);
-    QCoreApplication::setOrganizationDomain("snmpb.sourceforge.net");
-    QCoreApplication::setApplicationName("SnmpB");
+    // These legacy identifiers intentionally remain unchanged so upgrades
+    // retain every existing preference and application data file.
+    QCoreApplication::setOrganizationDomain(ProductIdentity::LegacySettingsDomain);
+    QCoreApplication::setApplicationName(ProductIdentity::LegacySettingsApplication);
 
     // read early settings necessary to decide when to drop root
     QSettings settings;
-    settings.beginGroup("network");
-    enableipv4 = settings.value("enableipv4", true).toBool();
-    trapport4 = settings.value("trapport4", 162).toInt();
-    enableipv6 = settings.value("enableipv6", true).toBool();
-    trapport6 = settings.value("trapport6", 162).toInt();
+    const PreferencesSettings persisted = PreferencesSettings::load(settings);
+    enableipv4 = persisted.enableIpv4;
+    trapport4 = persisted.trapPort4;
+    enableipv6 = persisted.enableIpv6;
+    trapport6 = persisted.trapPort6;
 }
 
 void Preferences::Init(void)
@@ -87,6 +90,27 @@ void Preferences::Init(void)
     modules->setText(0, tr("Modules"));
     traps = new QTreeWidgetItem(p->PreferencesTree);
     traps->setText(0, tr("Traps"));
+    requestDefaults = new QTreeWidgetItem(p->PreferencesTree);
+    requestDefaults->setText(0, tr("SNMP Request Defaults"));
+    auto *requestPage = new QWidget(p->PreferencesProps);
+    auto *requestPageLayout = new QVBoxLayout(requestPage);
+    auto *requestGroup = new QGroupBox(tr("SNMP Request Defaults"), requestPage);
+    auto *requestForm = new QFormLayout(requestGroup);
+    requestPortSpin = new QSpinBox(requestGroup);
+    requestPortSpin->setRange(1, 65535);
+    requestPortSpin->setToolTip(tr("Used when the Target has no :port"));
+    requestTimeoutSpin = new QSpinBox(requestGroup);
+    requestTimeoutSpin->setRange(1, 3600); requestTimeoutSpin->setSuffix(tr(" seconds"));
+    requestRetriesSpin = new QSpinBox(requestGroup); requestRetriesSpin->setRange(0, 100);
+    bulkNonRepeatersSpin = new QSpinBox(requestGroup); bulkNonRepeatersSpin->setRange(0, 65535);
+    bulkMaxRepetitionsSpin = new QSpinBox(requestGroup); bulkMaxRepetitionsSpin->setRange(0, 65535);
+    requestForm->addRow(tr("Default SNMP port"), requestPortSpin);
+    requestForm->addRow(tr("Timeout"), requestTimeoutSpin);
+    requestForm->addRow(tr("Retries"), requestRetriesSpin);
+    requestForm->addRow(tr("GETBULK non-repeaters"), bulkNonRepeatersSpin);
+    requestForm->addRow(tr("GETBULK max repetitions"), bulkMaxRepetitionsSpin);
+    requestPageLayout->addWidget(requestGroup); requestPageLayout->addStretch();
+    p->PreferencesProps->addWidget(requestPage);
 
     connect( p->PreferencesTree, 
              SIGNAL( currentItemChanged( QTreeWidgetItem *, QTreeWidgetItem * ) ),
@@ -120,25 +144,36 @@ void Preferences::Init(void)
 
     // Load preferences from the user-scope INI file
     QSettings settings;
-    horizontalsplit = settings.value("ui/horizontalsplit", false).toBool();
+    const PreferencesSettings persisted = PreferencesSettings::load(settings);
+    horizontalsplit = persisted.horizontalSplit;
     p->HorizontalSplit->setChecked(horizontalsplit);
 
     p->EnableIPv4->setChecked(enableipv4);
     p->EnableIPv6->setChecked(enableipv6);
 
-    expandtrapbinding = settings.value("ui/expandtrapbinding", true).toBool();
+    expandtrapbinding = persisted.expandTrapBinding;
     p->ExpandTrapBinding->setChecked(expandtrapbinding);
 
-    showagentname = settings.value("misc/showagentname", false).toBool();
+    showagentname = persisted.showAgentName;
     p->ShowAgentName->setChecked(showagentname);
 
-    automaticloading = settings.value("misc/automaticloading", 2).toInt();
+    traphistorylimit = persisted.trapHistoryLimit;
+    p->TrapHistoryLimit->setValue(traphistorylimit);
+    p->TrapHistoryLimit->setSuffix(tr(" traps"));
+    p->TrapHistoryLimit->setToolTip(tr("Maximum number of traps retained in memory"));
+    p->MibLoadingEnable->setToolTip(tr("Automatically load a matching MIB during an OID walk"));
+    p->MibLoadingEnablePrompt->setToolTip(tr("Ask before loading a matching MIB during an OID walk"));
+
+    automaticloading = persisted.automaticLoading;
     if (automaticloading == 1) p->MibLoadingEnable->setChecked(true);
     else if (automaticloading == 2) p->MibLoadingEnablePrompt->setChecked(true);
     else if (automaticloading == 3) p->MibLoadingDisable->setChecked(true);
 
-    curprofile = settings.value("ui/selectedprofile", "localhost").toString();
-    curproto = settings.value("ui/selectedproto", 0).toInt();
+    requestPortSpin->setValue(persisted.requestPort);
+    requestTimeoutSpin->setValue(persisted.requestTimeout);
+    requestRetriesSpin->setValue(persisted.requestRetries);
+    bulkNonRepeatersSpin->setValue(persisted.bulkNonRepeaters);
+    bulkMaxRepetitionsSpin->setValue(persisted.bulkMaxRepetitions);
 
     // reset to default MIB paths if needed
     if (settings.value("mibpaths/size", 0) == 0) {
@@ -146,11 +181,6 @@ void Preferences::Init(void)
     }
 
     MibPathRefresh();
-
-    // reset to default MIB preload list if needed
-    if (settings.value("mibpreloads/size", 0) == 0) {
-        MibPreloadsReset();
-    }
 
     p->PreferencesTree->setCurrentItem(p->PreferencesTree->topLevelItem(0));
 }
@@ -165,14 +195,16 @@ void Preferences::Execute (void)
 
     QSettings settings;
     // Warn if trap port or transport changed ...
-    if (trapport4 != settings.value("trapport", 162).toInt() ||
-        trapport6 != settings.value("trapport6", 162).toInt() ||
-        enableipv4 != settings.value("enableipv4", true).toBool() ||
-        enableipv6 != settings.value("enableipv6", true).toBool() )
+    PreferencesSettings edited;
+    edited.trapPort4 = trapport4;
+    edited.trapPort6 = trapport6;
+    edited.enableIpv4 = enableipv4;
+    edited.enableIpv6 = enableipv6;
+    if (edited.networkRestartRequired(PreferencesSettings::load(settings)))
         QMessageBox::information(NULL,
                                  tr("Restart needed"),
-                                 tr("SnmpB transport protocol or trap port has changed.\n"
-                                    "Please restart SnmpB for the changes to take effect."),
+                                 tr("MIB Navigator transport protocol or trap port has changed.\n"
+                                    "Please restart MIB Navigator for the changes to take effect."),
                                  QMessageBox::Ok);
 
     Save();
@@ -182,39 +214,28 @@ void Preferences::Save()
 {
     QSettings settings;
 
-    // Save preferences
-    settings.setValue("network/trapport4", trapport4);
-    settings.setValue("network/trapport6", trapport6);
-    settings.setValue("network/enableipv4", enableipv4);
-    settings.setValue("network/enableipv6", enableipv6);
+    PreferencesSettings values = PreferencesSettings::load(settings);
+    values.trapPort4 = trapport4;
+    values.trapPort6 = trapport6;
+    values.enableIpv4 = enableipv4;
+    values.enableIpv6 = enableipv6;
+    values.horizontalSplit = horizontalsplit;
+    values.expandTrapBinding = expandtrapbinding;
+    values.showAgentName = showagentname;
+    traphistorylimit = p->TrapHistoryLimit->value();
+    values.trapHistoryLimit = traphistorylimit;
+    values.automaticLoading = automaticloading;
+    values.requestPort = requestPortSpin->value();
+    values.requestTimeout = requestTimeoutSpin->value();
+    values.requestRetries = requestRetriesSpin->value();
+    values.bulkNonRepeaters = bulkNonRepeatersSpin->value();
+    values.bulkMaxRepetitions = bulkMaxRepetitionsSpin->value();
 
-    settings.setValue("ui/horizontalsplit", horizontalsplit);
-    settings.setValue("ui/expandtrapbinding", expandtrapbinding);
-    settings.setValue("misc/showagentname", showagentname);
-    settings.setValue("misc/automaticloading", automaticloading);
-
-    // Store MIB paths in local list
-    QStringList mibpaths;
     QList<QListWidgetItem *> l = p->ModulePaths->findItems("*", Qt::MatchWildcard);
     for (int i = 0; i < l.size(); i++)
-        mibpaths << l[i]->text();
+        values.mibPaths << l[i]->text();
 
-    // Then save MIB paths to config
-    settings.beginWriteArray("mibpaths");
-    for (int i = 0; i < mibpaths.size(); ++i) {
-        settings.setArrayIndex(i);
-        settings.setValue("dir", mibpaths[i]);
-    }
-    settings.endArray();
-
-    // Save MIB preload list
-    QStringList preloads = s->MibModuleObj()->GetWantedModules();
-    settings.beginWriteArray("mibpreloads");
-    for (int i = 0; i < preloads.size(); ++i) {
-        settings.setArrayIndex(i);
-        settings.setValue("mib", preloads[i]);
-    }
-    settings.endArray();
+    values.save(settings, true);
 
     // Refresh the MIB lists
     s->MibModuleObj()->Refresh();
@@ -258,7 +279,7 @@ void Preferences::MibPathDelete()
     // Protection
     if (todel.size() >= total.size())
     {
-        QMessageBox::warning(NULL, tr("SnmpB warning"),
+        QMessageBox::warning(NULL, tr("MIB Navigator warning"),
                              tr("Must have at least one defined path. Delete failed."),
                              QMessageBox::Ok);
         return;
@@ -288,7 +309,7 @@ void Preferences::MibPathRefresh()
 void Preferences::MibPathReset()
 {
     // "Reset to default" for MIB paths
-    QStringList defaultpaths = QString(DEFAULT_SMIPATH).split(SMI_PATH_SEPARATOR);
+    QStringList defaultpaths = DefaultMibPaths();
 
     QSettings settings;
     settings.beginWriteArray("mibpaths");
@@ -301,21 +322,44 @@ void Preferences::MibPathReset()
     s->MibModuleObj()->RescanPath();
 }
 
-void Preferences::MibPreloadsReset()
+QStringList Preferences::DefaultMibPaths() const
 {
-    // "Reset to default" for Wanted MIB list
-    QStringList preloaddefaults = QString(default_mib_config).split('\n');
-    preloaddefaults.removeAll("");
+    const QDir application_dir(QCoreApplication::applicationDirPath());
+    QStringList data_roots;
 
-    QSettings settings;
-    settings.beginWriteArray("mibpreloads");
-    for (int i = 0; i < preloaddefaults.size(); ++i) {
-        settings.setArrayIndex(i);
-        settings.setValue("mib", preloaddefaults[i]);
+#ifdef SNMPB_INSTALL_DATA_RELATIVE_PATH
+    data_roots << QDir::cleanPath(
+        application_dir.filePath(SNMPB_INSTALL_DATA_RELATIVE_PATH));
+#endif
+
+#ifdef Q_OS_MACOS
+    data_roots << QDir::cleanPath(application_dir.filePath("../Resources"));
+#endif
+
+    data_roots << application_dir.absolutePath();
+
+    QStringList paths;
+    for (const QString &data_root : data_roots)
+    {
+        const QDir root(data_root);
+        const QString mib_path = root.absoluteFilePath("mibs");
+        const QString pib_path = root.absoluteFilePath("pibs");
+
+        if (QDir(mib_path).exists() && !paths.contains(mib_path))
+            paths << mib_path;
+        if (QDir(pib_path).exists() && !paths.contains(pib_path))
+            paths << pib_path;
     }
-    settings.endArray();
 
-    s->MibModuleObj()->Refresh();
+    // Keep a deterministic executable-relative default even when a damaged or
+    // incomplete installation is missing its data directories.
+    if (paths.isEmpty())
+    {
+        paths << application_dir.absoluteFilePath("mibs")
+              << application_dir.absoluteFilePath("pibs");
+    }
+
+    return paths;
 }
 
 void Preferences::SetHorizontalSplit(bool checked)
@@ -338,7 +382,7 @@ void Preferences::SetEnableIPv4(bool checked)
 {
     if (!checked && !enableipv6)
     {
-        QMessageBox::critical(NULL, tr("SnmpB error"),
+        QMessageBox::critical(NULL, tr("MIB Navigator error"),
                               tr("Must enable at least one transport protocol."),
                               QMessageBox::Ok);
         p->EnableIPv4->setCheckState(Qt::Checked);
@@ -352,7 +396,7 @@ void Preferences::SetEnableIPv6(bool checked)
 {
     if (!checked && !enableipv4)
     {
-        QMessageBox::critical(NULL, tr("SnmpB error"),
+        QMessageBox::critical(NULL, tr("MIB Navigator error"),
                               tr("Must enable at least one transport protocol."),
                               QMessageBox::Ok);
         p->EnableIPv6->setCheckState(Qt::Checked);
@@ -424,19 +468,9 @@ bool Preferences::ShouldListenStdTrapPort6()
     return enableipv6 && trapport6 == STANDARD_TRAP_PORT;
 }
 
-void Preferences::SaveCurrentProfile(QString &name, int proto)
+int Preferences::GetTrapHistoryLimit(void) const
 {
-    curprofile = name;
-    curproto = proto;
-    QSettings settings;
-    settings.setValue("ui/selectedprofile", curprofile);
-    settings.setValue("ui/selectedproto", curproto);
-}
-
-int Preferences::GetCurrentProfile(QString &name)
-{
-    name = curprofile;
-    return curproto;
+    return traphistorylimit;
 }
 
 void Preferences::SelectedPreferences(QTreeWidgetItem * item, QTreeWidgetItem *)
@@ -475,5 +509,7 @@ void Preferences::SelectedPreferences(QTreeWidgetItem * item, QTreeWidgetItem *)
         p->ExpandTrapBinding->setCheckState(expandtrapbinding==true?Qt::Checked:Qt::Unchecked);
         p->ShowAgentName->setCheckState(showagentname==true?Qt::Checked:Qt::Unchecked);
     }
+    else if (item == requestDefaults)
+        p->PreferencesProps->setCurrentIndex(4);
 }
 

@@ -22,48 +22,56 @@
 
 #include "ui_mainw.h"
 
-#define SNMPB_VERSION_STRING "1.0"
+#include "snmpb_version.h"
 
 class MibModule;
 class Trap;
 class Agent;
-class GraphManager;
 class MibEditor;
 class LogSnmpb;
-class Discovery;
-class AgentProfileManager;
 class USMProfileManager;
+class UsmCredentialService;
+class CommunityCredentialService;
 class Preferences;
+class QDockWidget;
+class MibLibraryWidget;
+class WorkbenchShell;
+class StartupCoordinator;
 
 class Snmpb: public QObject
 {
     Q_OBJECT
     
 public:
-    Snmpb(void);
+    Snmpb(bool offline = false);
+    ~Snmpb() override;
     void BindToGUI(QMainWindow *mw);
+    void StartDeferredInitialization();
     Ui_MainW* MainUI(void);
     Agent* AgentObj(void);
     Trap* TrapObj(void);
     MibViewLoader* MibLoaderObj(void);
     MibModule* MibModuleObj(void);
     MibEditor* MibEditorObj(void);
-    AgentProfileManager* APManagerObj(void);
+    MibLibraryWidget* MibLibraryObj(void) { return mibLibrary; }
     USMProfileManager* UPManagerObj(void);
+    UsmCredentialService* UsmCredentials(void);
+    CommunityCredentialService* CommunityCredentials(void);
     Preferences* PreferencesObj(void);
+    StartupCoordinator* StartupCoordinatorObj(void) { return startup; }
+    void Shutdown();
+    void ShowEditorDocument();
 
     void CheckForConfigFiles(void);
     QString GetBootCounterConfigFile(void);
     QString GetSmiConfigFile(void);
     QString GetUsmUsersConfigFile(void);
-    QString GetAgentsConfigFile(void);
     QString GetLogConfigFile(void);
-    QString GetGraphsConfigFile(void);
+    QString GetCredentialIdentitiesConfigFile(void);
+    QString GetCommunityCredentialsConfigFile(void);
 
 public slots:
     void TabSelected(void);
-    void ManageAgentProfiles(bool);
-    void ManageUSMProfiles(bool);
     void ManagePreferences(bool);
     void AboutBox(bool);
 
@@ -72,21 +80,26 @@ private:
 
 private:
     Ui_MainW w;
-    AgentProfileManager *apm;
     USMProfileManager *upm;
+    CommunityCredentialService *communityCredentialService;
     Preferences *prefs;
 
     MibModule *modules;
     MibViewLoader loader;
     Trap *trap;
     Agent *agent;
-    GraphManager *gm;
     MibEditor *editor;
     LogSnmpb *logsnmpb;
-    Discovery *discovery;
+    MibLibraryWidget *mibLibrary;
+    WorkbenchShell *workbench = nullptr;
+    StartupCoordinator *startup = nullptr;
+    QMainWindow *mainWindow = nullptr;
+    class CredentialsDialog *credentialsDialog = nullptr;
 
     QString start_msg;
     bool start_issuccess;
+    bool initializingMibProfile = true;
+    bool startupCatalogRequested = false;
 };
 
 #endif /* SNMPB_H */

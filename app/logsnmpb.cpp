@@ -18,10 +18,16 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 #include "logsnmpb.h"
+#include "diagnosticlogger.h"
+
+#include <QPushButton>
 
 LogSnmpb::LogSnmpb(Snmpb *snmpb)
 {
     s = snmpb;
+    DiagnosticLogger::attachLogWidget(s->MainUI()->LogOutput);
+    connect(s->MainUI()->LogClear, &QPushButton::clicked,
+            this, &LogSnmpb::ClearDisplayedLog);
 
     settings = new QSettings(s->GetLogConfigFile(), QSettings::IniFormat, this);
  
@@ -68,6 +74,11 @@ LogSnmpb::LogSnmpb(Snmpb *snmpb)
                                           Qt::Checked:Qt::Unchecked);
 
     SetLoggingState (s->MainUI()->LogEnable->checkState());
+}
+
+void LogSnmpb::ClearDisplayedLog()
+{
+    DiagnosticLogger::clearDisplayedLog();
 }
 
 void LogSnmpb::SetLoggingState ( int state )

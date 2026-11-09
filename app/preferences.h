@@ -26,6 +26,8 @@
 #include <qtreewidget.h>
 #include <qsettings.h>
 
+class QSpinBox;
+
 class Preferences: public QObject
 {
     Q_OBJECT
@@ -43,9 +45,9 @@ public:
     bool ShouldListenStdTrapPort6();
     bool GetExpandTrapBinding(void);
     bool GetShowAgentName(void);
+    int GetTrapHistoryLimit(void) const;
     int GetAutomaticLoading(void);
-    void SaveCurrentProfile(QString &name, int proto);
-    int GetCurrentProfile(QString &name);
+    QStringList DefaultMibPaths() const;
 
 public slots:
     void SetEnableIPv4(bool checked);
@@ -66,7 +68,6 @@ protected slots:
     void MibPathDelete();
     void MibPathReset();
     void MibPathRefresh();
-    void MibPreloadsReset();
 
 private:
     Snmpb *s;
@@ -77,6 +78,12 @@ private:
     QTreeWidgetItem *mibtree;
     QTreeWidgetItem *modules;
     QTreeWidgetItem *traps;
+    QTreeWidgetItem *requestDefaults;
+    QSpinBox *requestPortSpin;
+    QSpinBox *requestTimeoutSpin;
+    QSpinBox *requestRetriesSpin;
+    QSpinBox *bulkNonRepeatersSpin;
+    QSpinBox *bulkMaxRepetitionsSpin;
 
     bool horizontalsplit;
     int trapport4;
@@ -85,9 +92,8 @@ private:
     bool enableipv6;
     bool expandtrapbinding;
     bool showagentname;
+    int traphistorylimit;
     int automaticloading;
-    QString curprofile;
-    int curproto;
 };
 
 #endif /* PREFERENCES_H */

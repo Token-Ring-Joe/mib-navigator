@@ -25,13 +25,15 @@
 #include <qdialog.h>
 #include <qtreewidget.h>
 #include <qlist.h>
+#include <QPointer>
+#include "credentialrecords.h"
 
 class USMProfile: public QObject
 {
     Q_OBJECT
     
 public:
-    USMProfile(Ui_USMProfile *uiup, QString *n = NULL);
+    USMProfile(Ui_USMProfile *uiup, const UsmCredentialRecord &record);
     ~USMProfile();
 
     int IsPartOfUSMProfile(QTreeWidgetItem *item);
@@ -51,17 +53,14 @@ public:
     void SetPrivPass(void);
     QString GetPrivPass(void);
     void SetSecurity(int aprot, QString apass, int pprot, QString ppass);
+    const UsmCredentialRecord &GetRecord() const { return record; }
 
 protected:
     Ui_USMProfile *up;
 
     QTreeWidgetItem *user;
 
-    QString name;
-    int authproto;
-    QString authpass;
-    int privproto;
-    QString privpass;
+    UsmCredentialRecord record;
 };
 
 class USMProfileManager: public QObject
@@ -70,12 +69,24 @@ class USMProfileManager: public QObject
 
 public:
     USMProfileManager(Snmpb *snmpb);
-    void Execute(void);
+    ~USMProfileManager() override;
+
+    // The SNMPv3 user editor is hosted by the Credentials screen, which owns the OK and Cancel
+    // buttons. PrepareEditor() reloads the saved users (dropping unsaved edits); ApplyEditor()
+    // validates and saves them, or explains why it could not and returns false.
+    QWidget *EditorWidget();
+    void PrepareEditor();
+    bool ApplyEditor();
 
     QStringList GetUsersList(void);
+    class UsmCredentialService *Credentials() const;
+
+signals:
+    void CredentialsChanged();
 
 protected:
     QAction *addAct;
+    QAction *duplicateAct;
     QAction *deleteAct;
 
 protected slots:
@@ -87,6 +98,7 @@ protected slots:
     void SelectedUSMProfile( QTreeWidgetItem * item, QTreeWidgetItem * old);
     void USMSecNameChange(QTreeWidgetItem * item, int column);
     void Add(void);
+    void Duplicate(void);
     void Delete(void);
     void ContextMenu ( const QPoint & );
 
@@ -97,12 +109,15 @@ protected slots:
     int LibPrivToUiPriv(int prot);
 
 private:
+    void RebuildEditor();
+    QList<UsmCredentialRecord> EditorRecords();
     Snmpb *s;
     Ui_USMProfile up;
-    QDialog upw;
+    QPointer<QDialog> editorDialog;
 
     USMProfile* currentprofile;
     QList<USMProfile *> users;
+    class UsmCredentialService *credentialService;
 };
 
 #endif /* USMPROFILE_H */

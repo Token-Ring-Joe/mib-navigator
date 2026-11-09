@@ -19,23 +19,31 @@
 */
 #ifndef AGENT_H
 #define AGENT_H
-
+#include <memory>
 #include <qtimer.h>
 
 #include "snmpb.h"
 #include "mibview.h"
 #include "trap.h"
 #include "mibselection.h"
-#include "agentprofile.h"
+#include "agentrequestselection.h"
+#include "connectionmodel.h"
+#include "snmprequestconfig.h"
+#include "snmprequestcontext.h"
+#include "snmptableasyncrunner.h"
+#include "snmpinstanceasyncrunner.h"
 #include "ui_varbinds.h"
 #include "snmp_pp/snmp_pp.h"
+
+class ConnectionBar;
 
 class Agent: public QObject
 {
     Q_OBJECT
     
 public:
-    Agent(Snmpb *snmpb);
+    Agent(Snmpb *snmpb, bool offline = false);
+    ~Agent() override;
     bool GetStartupResult(QString &Err);
     void StartTrapTimer(void);
     void Init(void);
@@ -44,27 +52,48 @@ public:
     void AsyncCallbackTrap(int reason, Pdu &pdu, SnmpTarget &target);
     void AsyncCallbackSet(int reason, Pdu &pdu, SnmpTarget &target);
     
-    static char *GetPrintableValue(SmiNode *node, Vb *vb);
-    void ConfigTargetFromSettings(snmp_version v,
-                                  SnmpTarget *t, AgentProfile *ap);
-    Oid ConfigPduFromSettings(snmp_version v, const QString& oid, 
-                              Pdu *p, AgentProfile *ap, bool usevblist = false);
-    
-    // Used by graph update timer
-    unsigned long GetSyncValue(const QString& oid);
-
-    inline USM *GetUSMObj(void) { return v3mp->get_usm(); }
+    void ConfigTargetFromSettings(const SnmpRequestConfig& config,
+                                  SnmpTarget *target);
+    Oid ConfigPduFromSettings(const SnmpRequestConfig& config,
+                              const QString& oid, Pdu *p,
+                              bool usevblist = false);
 
     int SelectTableInstance(const QString& oid, QString& outinstance);
 
-    static SmiNode* GetNodeFromOid(Oid &oid);
+    // The connection bar (Target, Credential, MIB Profile) is the authority for who a
+    // request goes to and how it authenticates.
+    void SetConnectionBar(ConnectionBar *bar);
+    // Every request is recorded here, with how it ended.
+    void SetRequestLog(class RequestLog *log) { requestLog = log; }
+
+    inline USM *GetUSMObj(void) { return v3mp->get_usm(); }
 
 protected:
-    int Setup(const QString& oid, SnmpTarget **t, Pdu **p, bool usevblist = false);
+    int SetupFromCurrentSelection(const QString& oid, SnmpTarget **t, Pdu **p,
+              bool usevblist = false,
+              SnmpRequestConfig *resolvedConfig = nullptr);
+    int Setup(const AgentRequestSelection &selection, const QString& oid,
+              SnmpTarget **t, Pdu **p, bool usevblist = false,
+              SnmpRequestConfig *resolvedConfig = nullptr);
+    AgentSelectionError ResolveCurrentSelection(
+        AgentRequestSelection *selection) const;
+    // Same as above for a request the user just asked for: explains what is missing.
+    bool ResolveForRequest(AgentRequestSelection *selection);
+    void BeginRequest(const SnmpRequestConfig &config,
+                      SnmpRequestOperation operation);
 
 private:
+    void ConnectionSelectionChanged();
+    void UpdateTableQueryAvailability();
+    ConnectionBar *connectionBar = nullptr;
+    class RequestLog *requestLog = nullptr;
+    quint64 activeLogId = 0;
+    void finishLog(const QString &resultHtml, int objectCount);
+    mutable ConnectionError lastConnectionError = ConnectionError::None;
     QString GetValueString(MibSelection &ms, Vb* vb);
     void VarbindsBuildList(void);
+    void PresentTableResult(const SnmpTableResult &result);
+    void PresentInstanceResult(const SnmpInstanceResult &result);
 
 public slots:
     void WalkFrom(const QString& oid);
@@ -82,13 +111,10 @@ public slots:
     void VarbindsFrom(const QString& oid);
     void GetTypedTableInstance(void);
     void StopTimer(void);
+    void Shutdown();
 
 protected slots:
     void TimerExpired(void);    
-    void ShowAgentSettings(void);
-    void SelectAgentProfile(QString *prefprofile = NULL, int prefproto = -1);
-    void SelectAgentProto(void);
-    void AgentProfileListChange(void);
     void VarbindsNew(void);
     void VarbindsEdit(void);
     void VarbindsDelete(void);
@@ -108,6 +134,8 @@ signals:
 private:
     Snmpb *s;
     bool start_result;
+    bool offline;
+    bool shutdownComplete = false;
     QString start_err;
  
     Snmp *snmp;
@@ -125,6 +153,12 @@ private:
     bool stop;
 
     QVector<Vb> vblist;
+
+    std::unique_ptr<SnmpRequestContext> activeRequestContext;
+    SnmpTableAsyncRunner *tableRunner = nullptr;
+    SnmpInstanceAsyncRunner *instanceRunner = nullptr;
+    QString pendingInstanceOid;
+    int pendingInstanceOperation = 0;
 
     Ui_Varbinds *vbui;
     QDialog *vbd;

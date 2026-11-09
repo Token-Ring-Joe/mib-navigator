@@ -23,6 +23,7 @@
 #include <QSyntaxHighlighter>
 #include <QTextCharFormat>
 #include <QHash>
+#include <QRegularExpression>
 
 class QTextDocument;
 
@@ -39,14 +40,14 @@ protected:
 private:
     struct MibHighlightingRule
     {
-        QRegExp pattern;
+        QRegularExpression pattern;
         QTextCharFormat format;
     };
 
     QVector<MibHighlightingRule> rules;
 
-    QRegExp string_start;
-    QRegExp string_end;
+    QRegularExpression string_start;
+    QRegularExpression string_end;
 
     QTextCharFormat reserved_word;
     QTextCharFormat keyword;
