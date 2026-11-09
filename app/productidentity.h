@@ -6,7 +6,7 @@
 namespace ProductIdentity
 {
 inline constexpr auto Name = "MIB Navigator";
-inline constexpr auto ProjectUrl = "https://github.com/transientuser/snmpb-next";
+inline constexpr auto ProjectUrl = "https://github.com/Token-Ring-Joe/mib-navigator";
 inline constexpr auto OriginalProjectUrl = "https://sourceforge.net/projects/snmpb/";
 inline constexpr auto OriginalSourceUrl =
     "https://sourceforge.net/p/snmpb/code/ci/master/tree/";

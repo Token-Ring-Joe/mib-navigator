@@ -10,7 +10,7 @@ MIB Navigator is not an official release of SnmpB, and no endorsement by the
 original authors or project is implied. Original SnmpB source is available from
 the [SourceForge repository](https://sourceforge.net/p/snmpb/code/ci/master/tree/).
 MIB Navigator source is at
-[github.com/transientuser/snmpb-next](https://github.com/transientuser/snmpb-next).
+[github.com/Token-Ring-Joe/mib-navigator](https://github.com/Token-Ring-Joe/mib-navigator).
 
 The application is distributed under GPL-2.0-or-later as established by
 `license.txt` and applicable source notices. Bundled third-party components
