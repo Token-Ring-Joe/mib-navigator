@@ -136,7 +136,7 @@ int main(int argc, char **argv)
                 largest = plan.effectiveModules.size(); largestName = profile.name;
                 largestPasses = plan.convergencePasses;
             }
-            slowestMsecs = std::max(slowestMsecs, elapsed);
+            slowestMsecs = (std::max)(slowestMsecs, elapsed);
             for (const QString &identity : conflictingIdentities) {
                 const auto *member = plan.member(identity);
                 if (!member) continue;

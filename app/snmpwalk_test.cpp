@@ -247,10 +247,10 @@ void failures_()
 
 void tooBig()
 {
-    FakeSnmpAgent small(config(SnmpRequestVersion::V2c, 20));
-    populate(small, 30);
-    small.setMaxVarbinds(2);
-    SnmpWalkResult result = walk(small);
+    FakeSnmpAgent smallLimit(config(SnmpRequestVersion::V2c, 20));
+    populate(smallLimit, 30);
+    smallLimit.setMaxVarbinds(2);
+    SnmpWalkResult result = walk(smallLimit);
     check(result.status == SnmpOperationStatus::Complete && result.objects == 30 && result.problem.isEmpty(),
           "tooBig: the walk asks for less and completes");
 
@@ -412,7 +412,7 @@ void asyncWalks()
         spin([&]() { return completedSeen; }, 20000);
         check(completedSeen && objects == 3000, "a slow consumer still gets every object");
         check(largest <= SnmpWalkAsyncRunner::kDeliveryChunk && batches >= 3000 / SnmpWalkAsyncRunner::kDeliveryChunk,
-              "objects are delivered in small chunks");
+              "objects are delivered in smallLimit chunks");
         check(heartbeatPositions.size() >= 2,
               "the owner's event loop runs queued heartbeats between delivery chunks");
     }

@@ -2820,6 +2820,8 @@ int main( int argc, char ** argv )
                 for (int page = 0; tabs && page < tabs->count(); ++page) {
                     tabs->setCurrentIndex(page); QCoreApplication::processEvents();
                     mw.resize(1024, 720); QCoreApplication::processEvents();
+                    // A freshly selected page can publish its minimum size one event pass late (seen on macOS).
+                    mw.resize(1024, 720); QCoreApplication::processEvents();
                     bool controlsFit = header;
                     for (const auto *name : {"ConnectionTarget", "ConnectionCredential", "MibBrowserProfileSelector", "ConnectionDetect"})
                         if (auto *control = mw.findChild<QWidget *>(name))

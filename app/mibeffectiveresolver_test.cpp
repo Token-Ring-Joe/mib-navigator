@@ -261,7 +261,7 @@ int main(int argc, char **argv)
     const auto equivalentPlan = resolve("equivalent", {equivalentRoot}, {batch, standards});
     ok &= check(equivalentPlan.isComplete() &&
                 fileProviding(equivalentPlan, "EQUIVALENT-DEP")->canonicalPath ==
-                    std::min(equivalentA, equivalentB) &&
+                    (std::min)(equivalentA, equivalentB) &&
                 fileProviding(equivalentPlan, "EQUIVALENT-DEP")->resolutionRationale.contains(
                     "byte-identical alternatives"),
                 "identical providers resolve by deterministic canonical path");

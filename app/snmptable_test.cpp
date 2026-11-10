@@ -237,11 +237,11 @@ void chunkingAndTooBig()
           "20 columns read across several requests");
 
     // An agent with a tiny response limit forces the walk to shrink its requests.
-    FakeSnmpAgent small(config(SnmpRequestVersion::V2c, 20));
-    small.setMaxVarbinds(2);
+    FakeSnmpAgent smallLimit(config(SnmpRequestVersion::V2c, 20));
+    smallLimit.setMaxVarbinds(2);
     for (int row = 1; row <= 30; ++row)
-        for (int column = 1; column <= 4; ++column) put(small, column, std::to_string(row), row);
-    result = read(small, plan(4));
+        for (int column = 1; column <= 4; ++column) put(smallLimit, column, std::to_string(row), row);
+    result = read(smallLimit, plan(4));
     check(result.status == SnmpOperationStatus::Complete && result.rows.size() == 30,
           "tooBig: recovers by asking for less");
 
