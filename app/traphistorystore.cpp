@@ -3,7 +3,7 @@
 #include <algorithm>
 
 TrapHistoryStore::TrapHistoryStore(int maximumRecords)
-    : maximum(std::max(1, maximumRecords)) {}
+    : maximum((std::max)(1, maximumRecords)) {}
 
 int TrapHistoryStore::count() const { return storedRecords.size(); }
 int TrapHistoryStore::maximumRecords() const { return maximum; }
@@ -26,7 +26,7 @@ void TrapHistoryStore::clear() { storedRecords.clear(); }
 
 void TrapHistoryStore::setMaximumRecords(int maximumRecords)
 {
-    maximum = std::max(1, maximumRecords);
+    maximum = (std::max)(1, maximumRecords);
     trim();
 }
 

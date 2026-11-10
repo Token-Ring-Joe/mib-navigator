@@ -44,6 +44,11 @@ find_package(Python3 COMPONENTS Interpreter QUIET)
 message(STATUS "Qt version: ${Qt6_VERSION}")
 message(STATUS "MIB Navigator Qt/CMake environment configured successfully")
 
+if(WIN32)
+    # windows.h defines min/max macros that break std::min/std::max and numeric_limits.
+    add_compile_definitions(NOMINMAX)
+endif()
+
 add_subdirectory(libsmi)
 add_subdirectory(libtomcrypt)
 add_subdirectory(snmp++)
