@@ -1,5 +1,6 @@
 #include "appearancecolors.h"
 #include "miblibrarywidget.h"
+#include "mibeffectiveplan.h"
 #include <QPointer>
 
 #include "diagnosticlogger.h"
@@ -1536,8 +1537,11 @@ void MibLibraryWidget::compareSelectedProviders()
     dialog->resize(1200, 700);
     auto *layout = new QVBoxLayout(dialog);
     const auto hash = [](const QByteArray &bytes) { return QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex().left(12)); };
+    const bool sameDefinition = MibNormalizedContent(leftBytes) == MibNormalizedContent(rightBytes);
     QString summary = diff.identical()
         ? tr("The two files have the same lines. They differ only in line endings or leading/trailing spaces, which the MIB environment treats as the same definition; the Library still lists them as separate files.")
+        : sameDefinition
+        ? tr("%n line(s) differ, but only in comments or spacing. The MIB environment treats the two files as the same definition; the Library still lists them as separate files.", nullptr, diff.differingRows)
         : tr("%n line(s) differ.", nullptr, diff.differingRows);
     if (!diff.aligned) summary += tr(" The files are too different to line up; they are shown row by row.");
     auto *header = new QLabel(summary, dialog); header->setWordWrap(true); layout->addWidget(header);

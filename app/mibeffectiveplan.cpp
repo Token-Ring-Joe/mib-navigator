@@ -14,6 +14,39 @@
 #include <algorithm>
 #include <functional>
 
+QByteArray MibNormalizedContent(const QByteArray &input)
+{
+    QByteArray text = input;
+    if (text.startsWith("\xEF\xBB\xBF")) text.remove(0, 3);
+    QByteArray out;
+    const auto isSpace = [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\f' || c == '\v'; };
+    const auto separate = [&out]() { if (!out.isEmpty() && !out.endsWith(' ')) out += ' '; };
+    const int size = text.size();
+    for (int i = 0; i < size;) {
+        const char c = text[i];
+        if (c == '"') {
+            int end = i + 1;                       // the closing quote, or the end if unclosed
+            while (end < size && text[end] != '"') ++end;
+            const QByteArray body = text.mid(i + 1, end - i - 1);
+            QList<QByteArray> lines = body.split('\n');
+            for (QByteArray &line : lines) line = line.trimmed();
+            out += '"' + lines.join('\n') + (end < size ? "\"" : "");
+            i = end < size ? end + 1 : end;
+        } else if (c == '-' && i + 1 < size && text[i + 1] == '-') {
+            i += 2;                                 // a comment ends at the next "--" or the line end
+            while (i < size && text[i] != '\n' && !(text[i] == '-' && i + 1 < size && text[i + 1] == '-')) ++i;
+            if (i < size && text[i] == '-') i += 2;
+            separate();
+        } else if (isSpace(c)) {
+            ++i; separate();
+        } else {
+            out += c; ++i;
+        }
+    }
+    while (out.endsWith(' ')) out.chop(1);
+    return out;
+}
+
 namespace {
 QStringList sortedUnique(QStringList values)
 {
@@ -522,9 +555,11 @@ MibEffectivePlan MibEffectiveRuntimePlanResolver::resolve(
         return file.open(QIODevice::ReadOnly) ? QString::fromLatin1(QCryptographicHash::hash(
             file.readAll(), QCryptographicHash::Sha256).toHex()) : QString();
     };
-    // Two copies whose lines differ only by leading or trailing whitespace (including CRLF versus
-    // LF) are the same definition. Identity and pins stay on the raw SHA-256; this key is used only
-    // to decide whether differing copies are a real conflict.
+    // Two copies that differ only in comments or whitespace are the same definition. Identity
+    // and pins stay on the raw SHA-256; this key is used only to decide whether differing copies
+    // are a real conflict. Quoted strings are real text and are kept (only each line's edge
+    // whitespace inside them is ignored); an unclosed quote therefore keeps the rest of the file
+    // verbatim, which can only make copies look different, never falsely identical.
     QHash<QString, QString> contentKeyCache;
     const auto contentKey = [&contentKeyCache](const MibIndexedProvider &provider) {
         if (provider.sha256.isEmpty()) return QString();
@@ -534,14 +569,7 @@ MibEffectivePlan MibEffectiveRuntimePlanResolver::resolve(
         QString value = provider.sha256;
         QFile file(provider.canonicalPath);
         if (file.open(QIODevice::ReadOnly)) {
-            QByteArray text = file.readAll();
-            if (text.startsWith("\xEF\xBB\xBF")) text.remove(0, 3);
-            QByteArray normalized;
-            for (const QByteArray &line : text.split('\n')) {
-                normalized += line.trimmed();
-                normalized += '\n';
-            }
-            while (normalized.endsWith("\n\n")) normalized.chop(1);   // trailing blank lines
+            const QByteArray normalized = MibNormalizedContent(file.readAll());
             value = QStringLiteral("n:") + QString::fromLatin1(QCryptographicHash::hash(
                 normalized, QCryptographicHash::Sha256).toHex());
         }
@@ -870,7 +898,7 @@ MibEffectivePlan MibEffectiveRuntimePlanResolver::resolve(
                 : tier == MibPlanResolutionTier::RequesterBatch ? QObject::tr("Requester batch %1").arg(winningScope)
                 : QObject::tr("Ordered scope %1").arg(winningScope);
             if (winning.size() > 1 && hashes.size() == 1)
-                rationale += QObject::tr("; %1 equivalent alternatives (identical apart from edge whitespace); chose canonical path first")
+                rationale += QObject::tr("; %1 equivalent alternatives (identical apart from comments and whitespace); chose canonical path first")
                     .arg(winning.size());
             selected.insert(key(dependency.canonicalPath), {dependency, tier, rationale});
             progress = true;

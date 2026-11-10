@@ -2495,7 +2495,10 @@ int main( int argc, char ** argv )
                                 for (const auto &where : {QStringLiteral("Beta/Prod/DUP-MIB"), QStringLiteral("Standards/DUP-MIB")}) {
                                     QFile copy(QDir(rootB).filePath(where));
                                     if (copy.open(QIODevice::WriteOnly)) {
-                                        copy.write(dup); if (where.startsWith("Standards")) copy.write("\n-- a different copy\n");
+                                        // The two copies must differ in content: comment-only differences count as the same definition.
+                                        QByteArray body = dup;
+                                        if (where.startsWith("Standards")) body.replace("90007", "90008");
+                                        copy.write(body);
                                     }
                                 }
                                 QString rootError;

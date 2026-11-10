@@ -4,6 +4,7 @@
 #include "mibdependencyindex.h"
 #include "mibprofile.h"
 
+#include <QByteArray>
 #include <QList>
 #include <QMap>
 #include <QStringList>
@@ -270,5 +271,12 @@ public:
 // folders contribute their current MIB files, listed modules the Library cannot supply and
 // followed folders that no longer exist are reported, and nothing else is guessed.
 MibEffectivePlan MibPlanForProfile(const MibProfileRecord &profile, const MibDependencyIndex &library);
+
+// The text of a MIB with everything that cannot change its meaning removed: the BOM, comments
+// ("--" to the next "--" or the end of the line), line endings, and runs of whitespace outside
+// quoted strings (all collapse to one space). Quoted strings are kept, except that each of their
+// lines loses its edge whitespace. Used only to decide whether two copies of a module are the
+// same definition; never to change a file or a file's identity.
+QByteArray MibNormalizedContent(const QByteArray &text);
 
 #endif

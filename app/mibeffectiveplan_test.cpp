@@ -221,11 +221,11 @@ int main(int argc, char **argv)
     const QByteArray equivalent = mib("EQUIVALENT-MIB");
     writeFile(QDir(productA).filePath("equivalent-a.mib"), equivalent);
     writeFile(QDir(productA).filePath("equivalent-b.mib"), equivalent);
-    writeFile(QDir(productA).filePath("conflict-a.mib"), mib("CONFLICT-MIB") + "-- A\n");
-    writeFile(QDir(productA).filePath("conflict-b.mib"), mib("CONFLICT-MIB") + "-- B\n");
+    writeFile(QDir(productA).filePath("conflict-a.mib"), mib("CONFLICT-MIB") + "A-VARIANT ::= 1\n");
+    writeFile(QDir(productA).filePath("conflict-b.mib"), mib("CONFLICT-MIB") + "B-VARIANT ::= 1\n");
     writeFile(QDir(productB).filePath("same-identity.mib"), mib("ROOT-MIB", {"DEPENDENCY-MIB"}));
-    writeFile(QDir(productA).filePath("TEST-MIB"), mib("TEST-MIB") + "-- provider A\n");
-    writeFile(QDir(productB).filePath("TEST-MIB"), mib("TEST-MIB") + "-- provider B\n");
+    writeFile(QDir(productA).filePath("TEST-MIB"), mib("TEST-MIB") + "provider-A-VARIANT ::= 1\n");
+    writeFile(QDir(productB).filePath("TEST-MIB"), mib("TEST-MIB") + "provider-B-VARIANT ::= 1\n");
     MibDependencyIndex index(QDir(temp.path()).filePath("index.json")); index.update({standards, productA, productB});
 
     // Phase F authority guard: only exact physical members reach runtime
@@ -591,7 +591,7 @@ int main(int argc, char **argv)
 
     QDir().mkpath(QDir(temp.path()).filePath("legacy-provider"));
     writeFile(QDir(temp.path()).filePath("legacy-provider/TEST-MIB"),
-              mib("TEST-MIB") + "-- stale provider\n");
+              mib("TEST-MIB") + "stale-provider-VARIANT ::= 1\n");
     legacySettings.beginWriteArray("mibpaths"); legacySettings.setArrayIndex(0);
     legacySettings.setValue("dir", QDir(temp.path()).filePath("legacy-provider"));
     legacySettings.endArray(); legacySettings.sync();
@@ -885,8 +885,8 @@ int main(int argc, char **argv)
     const QString productDependency = QDir(refreshProduct).filePath("atm_tc.mib");
     const QString standardsDependency = QDir(refreshStandards).filePath("ATM-TC-MIB");
     writeFile(refreshRootFile, mib("PRODUCT-ROOT-MIB", {"ATM-TC-MIB"}));
-    writeFile(productDependency, mib("ATM-TC-MIB") + "-- product\n");
-    writeFile(standardsDependency, mib("ATM-TC-MIB") + "-- standards\n");
+    writeFile(productDependency, mib("ATM-TC-MIB") + "product-VARIANT ::= 1\n");
+    writeFile(standardsDependency, mib("ATM-TC-MIB") + "standards-VARIANT ::= 1\n");
     MibDependencyIndex refreshIndex(QDir(refreshFixture.path()).filePath("index.json"));
     refreshIndex.update({refreshProduct, refreshStandards});
     MibProfileRecord refreshProfile;
@@ -918,7 +918,7 @@ int main(int argc, char **argv)
                 canonical(isolatedRefresh->loadedProviderPaths().value("ATM-TC-MIB")) ==
                     canonical(productDependency),
                 "isolated runtime preserves contextual exact dependency provider");
-    const QByteArray originalDependencyBytes = mib("ATM-TC-MIB") + "-- product\n";
+    const QByteArray originalDependencyBytes = mib("ATM-TC-MIB") + "product-VARIANT ::= 1\n";
     writeFile(productDependency, mib("ATM-TC-MIB") + "-- changed\n");
     const auto changedSourceStage = MibRuntimeStage::prepare(
         refreshedPlan, stageCache.path());

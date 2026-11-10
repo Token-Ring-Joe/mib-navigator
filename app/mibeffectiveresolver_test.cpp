@@ -158,7 +158,7 @@ int main(int argc, char **argv)
 
     const QString simpleRoot = write(local, "primary.my", mib("PRIMARY-MIB", {"SIMPLE-DEP"}));
     const QString simpleLocal = write(local, "dep-local.mib", mib("SIMPLE-DEP"));
-    write(standards, "SIMPLE-DEP", mib("SIMPLE-DEP") + "-- standards\n");
+    write(standards, "SIMPLE-DEP", mib("SIMPLE-DEP") + "standards-VARIANT ::= 1\n");
     const QString transitiveRoot = write(roots, "transitive.my", mib("TRANSITIVE-ROOT", {"TRANSITIVE-DEP"}));
     write(sibling, "transitive-dep.mib", mib("TRANSITIVE-DEP", {"TRANSITIVE-LEAF"}));
     write(standards, "transitive-leaf.mib", mib("TRANSITIVE-LEAF"));
@@ -170,25 +170,25 @@ int main(int argc, char **argv)
     const QString outsideRoot = write(roots, "outside-root.mib", mib("OUTSIDE-ROOT", {"OUTSIDE-ONLY"}));
     write(outside, "outside-only.mib", mib("OUTSIDE-ONLY"));
     const QString pinRoot = write(roots, "pin-root.mib", mib("PIN-ROOT", {"PIN-DEP"}));
-    const QString pinBatch = write(sibling, "pin-batch.mib", mib("PIN-DEP") + "-- batch\n");
-    const QString pinStandards = write(standards, "pin-standard.mib", mib("PIN-DEP") + "-- standard\n");
+    const QString pinBatch = write(sibling, "pin-batch.mib", mib("PIN-DEP") + "batch-VARIANT ::= 1\n");
+    const QString pinStandards = write(standards, "pin-standard.mib", mib("PIN-DEP") + "standard-VARIANT ::= 1\n");
     const QByteArray equivalent = mib("EQUIVALENT-DEP");
     const QString equivalentRoot = write(roots, "equivalent-root.mib", mib("EQUIVALENT-ROOT", {"EQUIVALENT-DEP"}));
     const QString equivalentA = write(sibling, "equivalent-a.mib", equivalent);
     const QString equivalentB = write(sibling, "equivalent-b.mib", equivalent);
     const QString ambiguityRoot = write(roots, "ambiguity-root.mib",
         mib("AMBIGUITY-ROOT", {"AMBIGUOUS-A", "AMBIGUOUS-B"}));
-    write(sibling, "ambiguous-a-1.mib", mib("AMBIGUOUS-A") + "-- one\n");
-    write(sibling, "ambiguous-a-2.mib", mib("AMBIGUOUS-A") + "-- two\n");
-    write(sibling, "ambiguous-b-1.mib", mib("AMBIGUOUS-B") + "-- one\n");
-    write(sibling, "ambiguous-b-2.mib", mib("AMBIGUOUS-B") + "-- two\n");
+    write(sibling, "ambiguous-a-1.mib", mib("AMBIGUOUS-A") + "one-VARIANT ::= 1\n");
+    write(sibling, "ambiguous-a-2.mib", mib("AMBIGUOUS-A") + "two-VARIANT ::= 1\n");
+    write(sibling, "ambiguous-b-1.mib", mib("AMBIGUOUS-B") + "one-VARIANT ::= 1\n");
+    write(sibling, "ambiguous-b-2.mib", mib("AMBIGUOUS-B") + "two-VARIANT ::= 1\n");
     const QString multiRoot = write(roots, "multi-root.mib", mib("MULTI-ROOT", {"MULTI-DEP", "EXTRA-IDENTITY"}));
     const QString multiProvider = write(sibling, "odd-multi-name.my",
         mib("MULTI-DEP") + mib("EXTRA-IDENTITY"));
     const QString conflictRoot = write(roots, "conflict-root.mib",
         mib("CONFLICT-ROOT", {"NEEDED-IDENTITY"}) + mib("OVERLAP-IDENTITY"));
     write(sibling, "conflicting-multi.mib",
-        mib("NEEDED-IDENTITY") + mib("OVERLAP-IDENTITY") + "-- different file\n");
+        mib("NEEDED-IDENTITY") + mib("OVERLAP-IDENTITY") + "different-file-VARIANT ::= 1\n");
     const QString filenameRoot = write(roots, "filename-root.mib",
         mib("FILENAME-ROOT", {"ATM-TC-MIB", "BRIDGE-MIB"}));
     const QString atm = write(sibling, "atm_tc.mib", mib("ATM-TC-MIB"));
@@ -419,11 +419,38 @@ int main(int argc, char **argv)
         const auto spaced = resolve("whitespace-only", {oldRevision, newRevision}, {batch, standards});
         ok &= check(!diagnostic(spaced, "REV-MIB") && !spaced.ambiguousModules.contains("REV-MIB"),
                     "copies differing only by edge whitespace are not a conflict");
-        write(sibling, "z-new.mib", padded + "-- really different\n");
+        QByteArray changed = padded; changed.replace("MODULE-IDENTITY", "MODULE-IDENTITY ");
+        changed.replace("LAST-UPDATED", "LAST-UPDATED-X");
+        write(sibling, "z-new.mib", changed);
         index.update({batch, standards, outside});
         const auto different = resolve("whitespace-plus-content", {oldRevision, newRevision}, {batch, standards});
         ok &= check(diagnostic(different, "REV-MIB") != nullptr,
                     "a real content difference is still reported");
+        // Comments and reflowed whitespace are not a difference either.
+        QByteArray commented = "-- vendor banner ----------------\n";
+        for (const QByteArray &line : base.split('\n')) commented += "\t" + line + "   -- note -- \n";
+        commented.replace(" ", "  ");
+        write(sibling, "z-new.mib", commented);
+        index.update({batch, standards, outside});
+        const auto reflowed = resolve("comments-and-whitespace", {oldRevision, newRevision}, {batch, standards});
+        ok &= check(!diagnostic(reflowed, "REV-MIB") && !reflowed.ambiguousModules.contains("REV-MIB"),
+                    "copies differing only by comments and whitespace are not a conflict");
+    }
+
+    // The normalization rules themselves.
+    {
+        const auto n = [](const char *text) { return MibNormalizedContent(QByteArray(text)); };
+        ok &= check(n("A  B\t\r\n C\n\n") == n("A B C"), "whitespace runs and line endings collapse");
+        ok &= check(n("\xEF\xBB\xBF" "A B") == n("A B"), "a byte-order mark is ignored");
+        ok &= check(n("A -- c -- B") == n("A B") && n("A -- to end of line\nB") == n("A B"),
+                    "comments end at the next -- or the end of the line");
+        ok &= check(n("A ---------- banner\nB") == n("A B"), "banner lines are comments");
+        ok &= check(n("A -- it's \"quoted\" in a comment\nB") == n("A B"), "quotes inside comments do not open strings");
+        ok &= check(n("D \"keep -- this\" E") != n("D \"keep\" E"), "-- inside a string is text, not a comment");
+        ok &= check(n("D \"a\n   b  \" E") == n("D \"a\nb\" E"), "string lines lose only their edge whitespace");
+        ok &= check(n("D \"a  b\" E") != n("D \"a b\" E"), "spaces inside a line of a string are significant");
+        ok &= check(n("D \"unclosed -- x\nE") != n("D \"unclosed\nE"), "an unclosed string stays verbatim, so copies look different");
+        ok &= check(n("A B") != n("A C"), "different content is different");
     }
 
     // Each declaration has its own date; fake clauses in comments/descriptions do not count.
