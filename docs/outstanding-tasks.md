@@ -103,6 +103,16 @@ does not authorize a commit, push, tag or publication.
     should count as equivalent providers and how old pins/profiles migrate.
     Raw SHA-256 is currently authoritative. Never normalize user/source MIBs as
     a side effect of this decision.
+    *Measured 2026-11-09 on a copy of the owner's Extreme collection (read-only):*
+    61 modules have differing raw copies; **none** differ only by line endings, so
+    an EOL-equivalence rule would change nothing there. Of the 38 differing modules
+    whose newest copies share a LAST-UPDATED date (so the newest-revision rule cannot
+    decide), 18 are identical once comments and whitespace are ignored and 20 differ
+    in real content; 16 more modules are decided by the newest-revision rule and 7
+    have an undated copy. Recommendation: keep raw SHA-256 for identity and pins; if
+    those 18 become a nuisance, add a *comment/whitespace-insensitive* equivalence used
+    only to classify conflicts (never for identity), computed with a proper SMI
+    tokenizer that keeps quoted strings verbatim. No migration would be needed.
 17. **Translations and remaining distribution review.** Current security,
     dependency, Library and architecture guidance has been reconciled; retired
     device/Graphs/Discovery/transfer designs and earlier credential stages are
