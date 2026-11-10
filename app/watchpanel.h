@@ -25,6 +25,7 @@ private:
     int rowOf(quint64 id) const;
     void fill(int row, const WatchRow &data);
     void selectionChanged();
+    void editInterval(quint64 id);
     quint64 selectedId() const;
 
     WatchService *service;
@@ -32,6 +33,7 @@ private:
     QTableWidget *table;
     QSpinBox *interval;
     QPushButton *pauseButton;
+    QPushButton *editIntervalButton;
     QPushButton *removeButton;
     QPushButton *clearButton;
 };

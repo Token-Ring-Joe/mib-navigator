@@ -26,6 +26,8 @@ public:
     QString credentialKey() const;
     QString credentialLabel() const;   // the chosen credential's name, for display and the Log
     int credentialProtocol() const;   // 0, 1, 2 as SnmpRequestVersion; -1 when none
+    QString mibProfileId() const;
+    QString mibProfileLabel() const;
     // Remember the current Target (and the Credential used with it) at the top of the history.
     void rememberCurrentTarget();
     void setDetectBusy(bool busy);   // disables the button while a detection runs
@@ -46,6 +48,7 @@ private:
     UsmCredentialService *usm;
     QComboBox *targetCombo;
     QComboBox *credentialCombo;
+    QComboBox *profileCombo;
     QToolButton *detectButton = nullptr;
     QList<ConnectionCredentialChoice> choices;
     bool updating = false;

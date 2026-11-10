@@ -1,3 +1,4 @@
+#include <QTimeZone>
 #include "trapdecoder.h"
 #include "traphistorystore.h"
 #include "trappresenter.h"
@@ -50,7 +51,7 @@ int main(int argc, char **argv)
     TrapEndpoint v2{QStringLiteral("192.0.2.10"), 9162,
                     TrapSnmpVersion::V2c, QStringLiteral("public"), {}};
     TrapDecoder decoder;
-    const QDateTime received(QDate(2026, 1, 2), QTime(3, 4, 5), Qt::UTC);
+    const QDateTime received(QDate(2026, 1, 2), QTime(3, 4, 5), QTimeZone::UTC);
     TrapRecord record = decoder.decode(notification(sNMP_PDU_TRAP,
         "1.3.6.1.6.3.1.1.5.1"), v2, received);
     check(record.isValid(), "v2 notification decodes");

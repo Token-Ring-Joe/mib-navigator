@@ -125,5 +125,102 @@ int main(int argc, char **argv)
         ok &= check(RenderMibValue(resolved, exception) == SnmpSyntaxName(syntax),
                     "NULL and exception values do not acquire enum interpretation");
     }
+    // Shared presentation/checking, with raw values retained on every warning.
+    const auto render = [](const MibEnvironmentNodeRecord &n, const Vb &vb) {
+        MibResolvedObject object; object.node = &n; return RenderMibValue(object, vb);
+    };
+    auto scaled = intObject; scaled.displayHint = "d-2";
+    ok &= check(render(scaled, withValue(SnmpInt32(-3))) == "-0.03", "integer decimal hints retain sign and implied decimals");
+    scaled.displayHint = "x";
+    ok &= check(render(scaled, withValue(SnmpInt32(-255))) == "-ff", "negative integer hexadecimal hint");
+    auto hinted = stringObject; hinted.displayHint = "2d-1d";
+    ok &= check(render(hinted, withValue(OctetStr::from_hex_string("010002"))) == "256-2",
+                "multi-octet hints use big endian numeric groups");
+    hinted.displayHint = "*1x:/1a";
+    ok &= check(render(hinted, withValue(OctetStr::from_hex_string("020a0b5a"))) == "0a:0b/Z",
+                "repeated hints suppress the separator before their terminator");
+    hinted.displayHint = "1x:";
+    ok &= check(render(hinted, withValue(OctetStr::from_hex_string("000aff"))) == "00:0a:ff",
+                "existing MAC/physical address rendering keeps leading zeroes");
+    hinted.displayHint = "255a";
+    c = run(&hinted, withValue(OctetStr::from_hex_string("41ff")));
+    ok &= check(anyWarning(c, "ASCII") && !c.rawValue.isEmpty(), "ASCII hints warn without dropping raw data");
+    hinted.displayHint = "255t";
+    const QByteArray utf8 = QString::fromUtf8("réseau").toUtf8();
+    Vb utf8Value = withValue(OctetStr(reinterpret_cast<const unsigned char *>(utf8.constData()), utf8.size()));
+    ok &= check(render(hinted, utf8Value) == QString::fromUtf8("réseau") && run(&hinted, utf8Value).warnings.isEmpty(),
+                "UTF-8 hints render complete characters without warnings");
+    ok &= check(anyWarning(run(&hinted, withValue(OctetStr::from_hex_string("c080"))), "UTF-8"),
+                "overlong UTF-8 warns");
+    ok &= check(render(hinted, withValue(OctetStr::from_hex_string("41c3"))) == "A",
+                "RFC hint rendering discards an incomplete final UTF-8 character");
+    hinted.displayHint = "1a:1t";
+    ok &= check(render(hinted, withValue(OctetStr::from_hex_string("41c3"))) == "A",
+                "discarded final UTF-8 cannot leave a trailing hint separator");
+    hinted.displayHint = "*1a,/";
+    ok &= check(render(hinted, withValue(OctetStr::from_hex_string("0000"))).isEmpty(),
+                "zero-repeat groups cannot leave a trailing repeat terminator");
+    ok &= check(render(hinted, withValue(OctetStr::from_hex_string("0141000142"))) == "A//B",
+                "zero-repeat punctuation remains visible when actual display text follows");
+    for (const QString &hint : {QString("0a"), QString("9d"), QString("*"), QString(600, '9')}) {
+        hinted.displayHint = hint;
+        ok &= check(render(hinted, withValue(OctetStr("plain"))) == "plain", "unsupported or excessive hints retain received data");
+    }
+    auto displayString = stringObject; displayString.textualConventionAncestry = {"SNMPv2-TC::DisplayString"};
+    ok &= check(run(&displayString, withValue(OctetStr(reinterpret_cast<const unsigned char *>("line\r\nnext\r\0"), 12))).warnings.isEmpty(),
+                "DisplayString accepts NVT newline and carriage-return sequences");
+    ok &= check(anyWarning(run(&displayString, withValue(OctetStr("line\rX"))), "carriage returns"),
+                "DisplayString warns about invalid NVT carriage-return sequences");
+    displayString.textualConventionAncestry = {"VENDOR-MIB::DisplayString"};
+    displayString.syntaxName = "DisplayString";
+    ok &= check(run(&displayString, withValue(OctetStr::from_hex_string("ff"))).warnings.isEmpty(),
+                "a vendor type sharing a standard's short name does not acquire its rules");
+    auto date = stringObject; date.textualConventionId = "SNMPv2-TC::DateAndTime";
+    date.displayHint = "2d-1d-1d,1d:1d:1d.1d,1a1d:1d";
+    const auto dateValue = withValue(OctetStr::from_hex_string("07e8021d173b3c092b0d3b"));
+    ok &= check(run(&date, dateValue).warnings.isEmpty() && render(date, dateValue) == "2024-2-29,23:59:60.9,+13:59",
+                "DateAndTime accepts leap day, leap second and its optional UTC offset");
+    ok &= check(run(&date, withValue(OctetStr::from_hex_string("0000021d00000000"))).warnings.isEmpty(),
+                "DateAndTime year zero remains permitted by its octet specification");
+    for (const char *hex : {"07e7021d00000000", "07e80d0100000000", "07e8010120000000", "07e80101000000002a0100", "01"})
+        ok &= check(anyWarning(run(&date, withValue(OctetStr::from_hex_string(hex))), "DateAndTime"),
+                    "DateAndTime flags invalid fields and lengths");
+    auto rowStatus = status; rowStatus.textualConventionId = "SNMPv2-TC::RowStatus";
+    rowStatus.namedValues.clear();
+    ok &= check(anyWarning(run(&rowStatus, withValue(SnmpInt32(4))), "SET action") &&
+                run(&rowStatus, withValue(SnmpInt32(3))).warnings.isEmpty(), "RowStatus distinguishes readable states from SET-only actions");
+    auto bounded64 = counter64Object;
+    MibEnvironmentConstraint full64; full64.minimum = unsignedValue(0); full64.maximum = unsignedValue(UINT64_MAX - 1);
+    bounded64.constraints = {full64};
+    ok &= check(anyWarning(run(&bounded64, withValue(Counter64::ll_to_c64(UINT64_MAX))), "Out of range") &&
+                run(&bounded64, withValue(Counter64::ll_to_c64(UINT64_MAX - 1))).warnings.isEmpty(),
+                "Counter64 constraints retain all 64 bits");
+    auto namedBits = bitsObject; namedBits.namedValues = {{"first", unsignedValue(0)}};
+    ok &= check(run(&namedBits, withValue(OctetStr::from_hex_string("80"))).warnings.isEmpty() &&
+                anyWarning(run(&namedBits, withValue(OctetStr::from_hex_string("81"))), "BITS"),
+                "undefined BITS positions warn while known positions remain clean");
+    auto setRanges = twoRanges; setRanges.access = MibEnvironmentAccess::ReadWrite; QString setError;
+    ok &= check(ValidateMibSetValue(&setRanges, sNMP_SYNTAX_INT32, "12", &setError) &&
+                !ValidateMibSetValue(&setRanges, sNMP_SYNTAX_INT32, "7", &setError),
+                "SET range alternatives are ORed like received-value checks");
+    setRanges.baseType = MibEnvironmentBaseType::OctetString; setRanges.constraints = {range(1, 2, true), range(4, 5, true)};
+    ok &= check(ValidateMibSetValue(&setRanges, sNMP_SYNTAX_OCTETS, "four", &setError) &&
+                !ValidateMibSetValue(&setRanges, sNMP_SYNTAX_OCTETS, "sixsix", &setError), "SET size alternatives are ORed");
+    ok &= check(ValidateMibSetValue(&setRanges, sNMP_SYNTAX_OCTETS, "four", &setError) && setError.isEmpty(),
+                "successful SET validation clears an earlier rejection");
+    hinted.displayHint = "1x:";
+    const QByteArray manyOctets(65535, char(0xab));
+    const auto largeValue = withValue(OctetStr(reinterpret_cast<const unsigned char *>(manyOctets.constData()), manyOctets.size()));
+    ok &= check(render(hinted, largeValue).size() == 65535 * 3 - 1,
+                "maximum supported octet payload renders completely with bounded output");
+    quint32 seed = 0x12345678;
+    const QString alphabet = "0123456789xdoat*:/,-";
+    for (int iteration = 0; iteration < 1000; ++iteration) {
+        QString hint;
+        for (int i = 0; i < iteration % 30; ++i) { seed = seed * 1664525u + 1013904223u; hint += alphabet[int(seed % alphabet.size())]; }
+        hinted.displayHint = hint;
+        ok &= check(render(hinted, withValue(OctetStr::from_hex_string("000102ff1020"))).size() < 2048,
+                    "deterministic malformed-hint corpus terminates with bounded presentation");
+    }
     return ok ? 0 : 1;
 }

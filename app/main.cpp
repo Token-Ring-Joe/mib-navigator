@@ -1,3 +1,6 @@
+#include "querymacrospanel.h"
+#include "querymacroservice.h"
+#include "querymacrorunner.h"
 #include "queryresultspanel.h"
 #include "appearance.h"
 /*
@@ -65,6 +68,7 @@
 #include <chrono>
 #include "mibservice.h"
 #include "preferences.h"
+#include "snmp_pp/log.h"
 #include "snmpbapp.h"
 #include "productidentity.h"
 #include "diagnosticlogger.h"
@@ -107,6 +111,7 @@ int main( int argc, char ** argv )
     QString smoke_mib_file;
     bool smoke_network = false;
     bool smoke_dependency_check = false;
+    bool smoke_macros = false;
     QString smoke_live_target;
     QString smoke_live_credential;
     QString smoke_live_walk;
@@ -132,6 +137,7 @@ int main( int argc, char ** argv )
         {
             smoke_dependency_check = true;
         }
+        else if (argument == "--smoke-macros") { smoke_macros = true; }
         else if (argument == "--smoke-network")
         {
             smoke_network = true;   // real SNMP session; only ever pointed at a loopback test agent
@@ -207,7 +213,7 @@ int main( int argc, char ** argv )
     QTranslator l10n_qt;
     const bool qt_translation_loaded =
         l10n_qt.load("qt_" + QLocale::system().name(),
-                     QLibraryInfo::location(QLibraryInfo::TranslationsPath));
+                     QLibraryInfo::path(QLibraryInfo::TranslationsPath));
     Q_UNUSED(qt_translation_loaded);
     app.installTranslator(&l10n_qt);
 
@@ -585,11 +591,84 @@ int main( int argc, char ** argv )
                   !workbenchDocuments->tabBar()->isHidden() && !workbenchDocuments->tabsClosable() &&
                   workbenchDocuments->count() == 3 && workbenchDocuments->tabText(0) == "Query" &&
                   workbenchDocuments->tabText(1) == "MIBs" && workbenchDocuments->tabText(2) == "Traps" &&
-                  queryDocuments->count() == 2 && queryDocuments->tabText(1) == "Watch" &&
+                  queryDocuments->count() == 3 && queryDocuments->tabText(1) == "Watch" && queryDocuments->tabText(2) == "Macros" &&
                   queryDocuments->widget(0) == resultsPage && !queryDocuments->tabBar()->isHidden() &&
                   outputPage->isAncestorOf(snmpb.MainUI()->Query) &&
                   outputPage->isAncestorOf(mw.findChild<QPushButton *>("OutputClear")),
-                  "permanent Query, MIBs and Traps tabs; Query contains Results and Watch");
+                  "permanent Query, MIBs and Traps tabs; Query contains Results, Watch and Macros");
+            if (smoke_macros) {
+                auto *panel = mw.findChild<QueryMacrosPanel *>("QueryMacrosPanel");
+                auto *service = snmpb.findChild<QueryMacroService *>("QueryMacroService");
+                auto *view = mw.findChild<QAction *>("ViewMacros");
+                check(panel && service && service->editable() && view, "Macros service, tab and menu are wired into the real application");
+                if (panel && service && view) {
+                    const auto profileBefore = snmpb.MibModuleObj()->CurrentEnvironment();
+                    auto *requestLog = snmpb.findChild<RequestLog *>(); const int requestsBefore = requestLog ? requestLog->entries().size() : 0;
+                    const auto existing = service->definitions();
+                    check(existing.isEmpty() || existing.first().name == "Offline smoke macro", "saved macro definition reloads on restart");
+                    view->trigger(); check(queryDocuments->currentWidget() == panel, "View Macros selects its Query-local editor");
+                    if (existing.isEmpty()) panel->findChild<QPushButton *>("QueryMacroNew")->click();
+                    const QString id = panel->selectedMacroId(); service->rename(id, "Offline smoke macro");
+                    if (existing.isEmpty()) {
+                        QueryMacroEntry raw; raw.id = QueryMacroNewId(); raw.oid = "1.3.6.1.4.1.64995.1.0";
+                        check(panel->addObject(raw), "unknown numeric exact instance can be saved offline");
+                    }
+                    if (existing.isEmpty()) for (const QString &oid : {QString("1.3.6.1.2.1.1.1"), QString("1.3.6.1.2.1.2.2.1.2")}) {
+                        QTimer::singleShot(0, &mw, [&, oid] {
+                            auto *picker = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+                            auto *tree = picker ? picker->findChild<MibModelView *>("QueryMacroPickerTree") : nullptr;
+                            if (tree) tree->SelectFromOid(oid);
+                            auto *buttons = picker ? picker->findChild<QDialogButtonBox *>() : nullptr;
+                            const bool available = tree && tree->currentObjectOid() == oid && buttons && buttons->button(QDialogButtonBox::Ok)->isEnabled();
+                            check(available, "offline macro picker accepts parsed scalar/column metadata without instance discovery");
+                            if (available) buttons->button(QDialogButtonBox::Ok)->click(); else if (picker) picker->reject();
+                        });
+                        panel->findChild<QPushButton *>("QueryMacroAddObject")->click();
+                    }
+                    const auto definition = service->definition(id);
+                    check(definition && definition->entries.size() == 3 && definition->entries[1].kind == QueryMacroKind::Scalar &&
+                          definition->entries[1].oid == "1.3.6.1.2.1.1.1" && definition->entries[2].kind == QueryMacroKind::Table,
+                          "saved macro keeps scalar object identity without .0 and explicit table-row semantics");
+                    // The MIB tree's "Add to Selected Macro" merges a same-row column and shows Macros.
+                    mw.findChild<QAction *>("ViewResults")->trigger();
+                    emit snmpb.MainUI()->MIBTree->MacroFromOid("1.3.6.1.2.1.2.2.1.10");
+                    const auto merged = service->definition(id);
+                    check(merged && merged->entries.size() == 3 &&
+                          merged->entries[2].columns == QStringList({"1.3.6.1.2.1.2.2.1.2", "1.3.6.1.2.1.2.2.1.10"}) &&
+                          queryDocuments->currentWidget() == panel,
+                          "tree context action merges a same-row column into its table group and selects Macros");
+                    QTimer::singleShot(0, &mw, [&] {
+                        auto *picker = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+                        auto *tree = picker ? picker->findChild<MibModelView *>("QueryMacroPickerTree") : nullptr;
+                        auto *proxy = tree ? qobject_cast<QSortFilterProxyModel *>(tree->model()) : nullptr;
+                        check(tree && proxy && proxy->sourceModel() != snmpb.MibLoaderObj()->TreeModel(), "macro picker owns a frozen tree model");
+                        if (tree) {
+                            tree->SelectFromOid("1.3.6.1.2.1.2.2.1.2");
+                            tree->QueryCurrent(0); tree->WalkCurrent(); tree->SetCurrent(); tree->QueryTableFromCurrent();
+                            check(!tree->queryTableAvailable(), "macro picker cannot enable network commands");
+                        }
+                        if (picker) picker->reject();
+                    });
+                    panel->findChild<QPushButton *>("QueryMacroAddObject")->click();
+                    panel->findChild<QPushButton *>("QueryMacroSave")->click();
+                    QueryMacroService persisted(service->path());
+                    check(!service->dirty() && persisted.definitions() == service->definitions(), "real macro editor saves and reloads definitions");
+                    check(service->path() == QDir(QCoreApplication::instance()->property("snmpb.isolatedStateRoot").toString()).filePath("query-macros-v1.json"), "macro state uses isolated private data, outside the MIB collection");
+                    check(snmpb.MibModuleObj()->CurrentEnvironment() == profileBefore &&
+                          (!requestLog || requestLog->entries().size() == requestsBefore), "macro creation and picker leave Profile and request log unchanged");
+                    if (!smoke_network) {
+                        const auto previous = snmpb.Results()->csvRecords();
+                        const auto definition = service->definition(id);
+                        if (definition) snmpb.AgentObj()->RunMacro(*definition);
+                        auto *runner = snmpb.AgentObj()->findChild<QueryMacroRunner *>("QueryMacroRunner");
+                        check(runner && !runner->isBusy() && snmpb.Results()->csvRecords() == previous &&
+                              panel->findChild<QLabel *>("QueryMacroStatus")->text().contains("transport is unavailable") &&
+                              (!requestLog || requestLog->entries().size() == requestsBefore),
+                              "macro-run: an offline session cannot create a transport or replace Results");
+                    }
+                    mw.findChild<QAction *>("ViewResults")->trigger();
+                }
+            }
             check(bottomTabs && resultsPage && bottomTabs->count() == 3 &&
                   bottomTabs->tabText(0) == "Output" && bottomTabs->widget(0) == outputPage &&
                   resultsPage->isAncestorOf(mw.findChild<QTableWidget *>("StructuredQueryResults")) &&
@@ -636,7 +715,6 @@ int main( int argc, char ** argv )
                 mw.findChild<QAction *>("ViewResults")->trigger();
                 auto *target = mw.findChild<QComboBox *>("ConnectionTarget");
                 focus("WorkbenchFocusTarget", target);
-                focus("WorkbenchFocusOid", mw.findChild<QLineEdit *>("QueryObjectAddress"));
                 QSet<QWidget *> reached;
                 target->setFocus();
                 for (int i = 0; i < 80; ++i) {
@@ -647,7 +725,7 @@ int main( int argc, char ** argv )
                     QApplication::sendEvent(current, &tab);
                 }
                 for (const char *name : {"ConnectionTarget", "ConnectionCredential", "ConnectionManageCredentials",
-                    "MibBrowserProfileSelector", "ConnectionDetect", "WorkbenchPanelToggle", "QueryObjectAddress",
+                    "MibBrowserProfileSelector", "ConnectionDetect", "WorkbenchPanelToggle",
                     "CollectionSearch", "MibTreeFilter", "MIBTree", "ResultsFilter", "ResultsDisplayMode",
                     "StructuredQueryResults", "NodeInfo"}) {
                     auto *control = mw.findChild<QWidget *>(name);
@@ -733,13 +811,13 @@ int main( int argc, char ** argv )
                 }
                 appearance.setMode(originalMode);
             }
+            int smokeLibraryTabsY = -1;
             QWidget *queryToolbar = mw.findChild<QWidget *>("QueryToolBar");
             QWidget *header = mw.findChild<QWidget *>("CurrentDeviceContext");
             check(queryToolbar && header && !header->isAncestorOf(queryToolbar) &&
                   mw.findChild<QWidget *>("WorkbenchQueryWorkspace")->isAncestorOf(queryToolbar) &&
-                  queryToolbar->isAncestorOf(mw.findChild<QLineEdit *>("QueryObjectAddress")) &&
                   queryToolbar->isAncestorOf(mw.findChild<QLineEdit *>("CollectionSearch")),
-                  "OID navigation and collection search belong inside Query, below permanent workspace navigation");
+                  "the combined name / OID search belongs inside Query, below permanent workspace navigation");
             bool duplicateOperations = false;
             if (queryToolbar) for (auto *button : queryToolbar->findChildren<QToolButton *>())
                 duplicateOperations |= !button->property("appearanceIcon").toString().isEmpty();
@@ -860,6 +938,8 @@ int main( int argc, char ** argv )
                     QCoreApplication::processEvents();
                     check(workbenchDocuments->mapTo(&mw, QPoint()).y() == navigationTop && header->height() == connectionHeight,
                           "workspace navigation and connection bar keep the same height in Query and MIBs");
+                    if (auto *libraryTabs = mw.findChild<QTabWidget *>("MibLibraryTabs"))
+                        smokeLibraryTabsY = libraryTabs->tabBar()->mapTo(&mw, QPoint()).y();
                     mw.grab().save(QDir(smoke_config_dir).filePath("mibs-workspace.png"));
                     QWidget *queryRow = mw.findChild<QWidget *>("QueryToolBar");
                     check(workbenchDocuments->count() == 3 &&
@@ -878,6 +958,9 @@ int main( int argc, char ** argv )
                           snmpb.MainUI()->MIBTree->isVisibleTo(&mw) && inspectorDock && !inspectorDock->isHidden() &&
                           bottomDock && bottomDock->isHidden() == panelWasHidden && queryRow && !!queryRow->isVisibleTo(&mw),
                           "returning to Query restores tree and Inspector and preserves panel state");
+                    if (auto *queryTabs = mw.findChild<QTabWidget *>("WorkbenchQueryDocuments"))
+                        check(smokeLibraryTabsY >= 0 && queryTabs->tabBar()->mapTo(&mw, QPoint()).y() == smokeLibraryTabsY,
+                              "the Results / Watch / Macros tabs start at the same height as the MIBs Library / Profiles / Editor tabs");
                     // The environment badge opens MIB Problems from Query.
                     viewOutput->trigger();
                     if (QLabel *badge = mw.findChild<QLabel *>("CurrentEnvironmentStatus")) {
@@ -942,15 +1025,15 @@ int main( int argc, char ** argv )
             {
                 auto *tree = snmpb.MainUI()->MIBTree;
                 auto *copy = mw.findChild<QToolButton *>("InspectorCopyOid");
-                auto *address = mw.findChild<QLineEdit *>("QueryObjectAddress");
+                auto *address = mw.findChild<QLineEdit *>("CollectionSearch");
                 const QString selected = tree->currentObjectOid();
                 if (!selected.isEmpty() && copy && address) {
                     address->setText("1.3.6.1.4.1.999999"); copy->click();
                     check(QApplication::clipboard()->text() == selected,
                           "Inspector copies its selected OID independently of unsubmitted navigation text");
                     tree->setCurrentIndex({});
-                    check(!copy->isEnabled() && address->text().isEmpty() && snmpb.MainUI()->NodeInfo->toPlainText().isEmpty(),
-                          "clearing Query selection clears OID navigation and disables Inspector Copy");
+                    check(!copy->isEnabled() && snmpb.MainUI()->NodeInfo->toPlainText().isEmpty(),
+                          "clearing Query selection disables Inspector Copy");
                     tree->SelectFromOid(selected);
                 }
                 auto *iana = mw.findChild<QDialog *>("IanaMibDialog");
@@ -1145,7 +1228,7 @@ int main( int argc, char ** argv )
                           "dialog-polish: compact Preferences keeps its footer outside scrollable sections");
                     if (scroll) {
                         preferenceSections->setCurrentItem(preferenceSections->topLevelItem(1));
-                        auto *last = preferencesDialog->findChild<QSpinBox *>("BulkMaxRepetitions");
+                        auto *last = preferencesDialog->findChild<QLineEdit *>("RequestContextName");
                         scroll->ensureWidgetVisible(last); last->setFocus(); QCoreApplication::processEvents();
                         check(scroll->viewport()->rect().intersects(QRect(last->mapTo(scroll->viewport(), QPoint()), last->size())),
                               "dialog-polish: the last SNMP setting remains reachable in compact Preferences");
@@ -1154,6 +1237,7 @@ int main( int argc, char ** argv )
 
                     preferencesDialog->findChild<QSpinBox *>("TrapPort")->setValue(30162);
                     preferencesDialog->findChild<QSpinBox *>("RequestTimeout")->setValue(27);
+                    preferencesDialog->findChild<QLineEdit *>("RequestContextName")->setText("pending-context");
                     preferencesDialog->findChild<QSpinBox *>("TrapHistoryLimit")->setValue(77);
                     preferencesDialog->findChild<QCheckBox *>("ExpandTrapBinding")->setChecked(!beforePreferences.expandTrapBinding);
                     preferencesDialog->findChild<QCheckBox *>("ShowAgentName")->setChecked(!beforePreferences.showAgentName);
@@ -1177,6 +1261,8 @@ int main( int argc, char ** argv )
                     buttons->button(QDialogButtonBox::Cancel)->click();
                 });
                 snmpb.MainUI()->actionPreferences->trigger();
+                check(preferencesDialog->findChild<QLineEdit *>("RequestContextName")->text() == beforePreferences.contextName,
+                      "Cancel restores the pending SNMPv3 context");
                 check(savedBytes() == originalBytes &&
                       snmpb.PreferencesObj()->GetTrapPort4() == beforePreferences.trapPort4 &&
                       snmpb.PreferencesObj()->GetTrapHistoryLimit() == beforePreferences.trapHistoryLimit,
@@ -1184,6 +1270,7 @@ int main( int argc, char ** argv )
                 QTimer::singleShot(0, preferencesDialog, [&]() {
                     check(preferencesDialog->findChild<QSpinBox *>("RequestTimeout")->value() == beforePreferences.requestTimeout,
                           "reopening Preferences starts with applied values after cancellation");
+                    preferencesDialog->findChild<QLineEdit *>("RequestContextName")->setText("saved-context");
                     preferencesDialog->findChild<QSpinBox *>("TrapHistoryLimit")->setValue(123);
                     preferencesDialog->findChild<QDialogButtonBox *>("OKCancelBox")->button(QDialogButtonBox::Ok)->click();
                 });
@@ -1192,6 +1279,12 @@ int main( int argc, char ** argv )
                       snmpb.TrapObj()->service()->history().maximumRecords() == 123,
                       "OK commits the actual Preferences dialog and updates live trap retention");
             }
+            if (smoke_live_target.isEmpty() && !smoke_mib_file.isEmpty()) {
+                QSettings contextSettings;
+                check(PreferencesSettings::load(contextSettings).contextName == "saved-context",
+                      "the actual Preferences dialog persists the SNMPv3 context");
+            }
+            preferencesDialog->findChild<QLineEdit *>("RequestContextName")->setText(beforePreferences.contextName);
             QSpinBox *trapHistoryLimit = mw.findChild<QSpinBox *>("TrapHistoryLimit");
             const int previousTrapLimit = beforePreferences.trapHistoryLimit;
             check(trapHistoryLimit != nullptr, "trap history preference control exists");
@@ -1211,6 +1304,24 @@ int main( int argc, char ** argv )
                   settings.contains("mibpaths/size") == hadLegacyPaths,
                   "preferences saved to isolated configuration");
 
+            {
+                LogEntryImpl entry("diagnostic-workflow", INFO_LOG);
+                entry += "library-workflow-first\nlibrary-workflow-second community=adapter-secret";
+                *DefaultLog::log() += &entry;
+                LogEntryImpl keyEntry("diagnostic-workflow", DEBUG_LOG | 15);
+                keyEntry += "USMUserTable: New key"; keyEntry += "key-material-with spaces";
+                *DefaultLog::log() += &keyEntry;
+                snmpb.MibModuleObj()->LogError("parser-workflow-line password=parser-secret");
+                QCoreApplication::sendPostedEvents();
+                QFile log(DiagnosticLogger::logFilePath());
+                const QByteArray bytes = log.open(QIODevice::ReadOnly) ? log.readAll() : QByteArray();
+                const QString shown = snmpb.MainUI()->LogOutput->toPlainText();
+                check(bytes.contains("[SNMP++] library-workflow-first") && bytes.contains("[SNMP++] library-workflow-second") &&
+                      bytes.contains("[libsmi] parser-workflow-line") &&
+                      !bytes.contains("adapter-secret") && !bytes.contains("parser-secret") && !bytes.contains("key-material-with") &&
+                      shown.contains("[libsmi] parser-workflow-line"),
+                      "raw SNMP++ and parser diagnostics share structured file/UI logging and redaction");
+            }
             QTranslator translation_probe;
             check(translation_probe.load(":/i18n/snmpb.uk_UA"),
                   "bundled application translation loads");
@@ -1251,6 +1362,46 @@ int main( int argc, char ** argv )
                     table->selectRow(0);
                     check(detail->toPlainText().contains("Why:"),
                           "reselecting the same Problems row restores its explanation");
+                }
+                auto *filter = mw.findChild<QLineEdit *>("WorkbenchProblemFilter");
+                auto *severity = mw.findChild<QComboBox *>("WorkbenchProblemSeverity");
+                auto *copy = mw.findChild<QPushButton *>("WorkbenchProblemCopy");
+                auto *exportButton = mw.findChild<QPushButton *>("WorkbenchProblemExport");
+                check(filter && severity && copy && exportButton, "Problems exposes filtering and CSV tools");
+                if (filter && severity && copy && exportButton) {
+                    filter->setText("NO-PROBLEM-CAN-MATCH-THIS-EXACT-TEXT");
+                    check(table->rowCount() == 0 && !copy->isEnabled() && !exportButton->isEnabled(),
+                          "empty Problems filters disable copy/export and retain the underlying report");
+                    filter->clear();
+                    severity->setCurrentIndex(1);
+                    bool onlyErrors = true;
+                    for (int row = 0; row < table->rowCount(); ++row) onlyErrors &= table->item(row, 0)->text() == "Error";
+                    check(onlyErrors, "Problems severity filtering includes only matching report rows");
+                    severity->setCurrentIndex(0);
+                    table->sortItems(1, Qt::DescendingOrder);
+                    if (table->rowCount()) {
+                        const QString firstModule = table->item(0, 1)->text();
+                        copy->click(); const QString snapshot = QApplication::clipboard()->text();
+                        check(snapshot.startsWith("Severity,Module,Problem,") && snapshot.contains(firstModule),
+                              "Copy Problems CSV follows the visible sorted report and includes its header");
+                        const QString path = QDir(smoke_config_dir).filePath("exported-problems.csv");
+                        QFile::remove(path); // task-owned previous smoke export only
+                        QObject exportContext;
+                        QTimer::singleShot(0, &exportContext, [&]() {
+                            auto *dialog = qobject_cast<QFileDialog *>(QApplication::activeModalWidget());
+                            check(dialog, "Problems export opens the actual file chooser");
+                            if (dialog) {
+                                filter->setText("changed-while-export-chooser-is-open");
+                                dialog->selectFile(path); QMetaObject::invokeMethod(dialog, "accept", Qt::DirectConnection);
+                            }
+                        });
+                        exportButton->click();
+                        QFile file(path);
+                        check(file.open(QIODevice::ReadOnly) && file.readAll() == snapshot.toUtf8(),
+                              "Problems export keeps its captured CSV when filtering changes during the chooser");
+                        filter->clear();
+                    }
+                    table->sortItems(0, Qt::AscendingOrder);
                 }
                 mw.grab().save(QDir(smoke_config_dir).filePath("problems-tab-notes.png"));
                 if (QAction *viewOutput = mw.findChild<QAction *>("ViewResults")) viewOutput->trigger();
@@ -2020,6 +2171,145 @@ int main( int argc, char ** argv )
                             }
                         }
                         if (smoke_live_target.startsWith("127.0.0.1")) {
+                            // Real macro controls -> captured batches -> grouped Results/Log.
+                            auto *macroService = snmpb.findChild<QueryMacroService *>("QueryMacroService");
+                            auto *macroPanel = mw.findChild<QueryMacrosPanel *>("QueryMacrosPanel");
+                            auto *runner = snmpb.AgentObj()->findChild<QueryMacroRunner *>("QueryMacroRunner");
+                            auto *groups = mw.findChild<QComboBox *>("ResultsGroup");
+                            auto *runButton = macroPanel ? macroPanel->findChild<QPushButton *>("QueryMacroRun") : nullptr;
+                            auto *log = snmpb.findChild<RequestLog *>();
+                            check(macroService && macroPanel && runner && groups && runButton && log,
+                                  "macro-run: real definition, Run, runner, Results and Log are connected");
+                            if (macroService && macroPanel && runner && groups && runButton && log) {
+                                const auto await = [](const std::function<bool()> &done) {
+                                    QEventLoop loop; QTimer poll, limit; limit.setSingleShot(true);
+                                    QObject::connect(&poll, &QTimer::timeout, &loop, [&] { if (done()) loop.quit(); });
+                                    QObject::connect(&limit, &QTimer::timeout, &loop, &QEventLoop::quit);
+                                    poll.start(5); limit.start(30000); if (!done()) loop.exec(); return done();
+                                };
+                                targetBox->setEditText(smoke_live_target); credentialBox->setCurrentIndex(credentialIndex);
+                                auto *profileCombo = mw.findChild<QComboBox *>("MibBrowserProfileSelector");
+                                const QString requestedProfile = profileCombo ? profileCombo->currentData().toString() : QString();
+                                check(await([&] {
+                                    const auto environment = snmpb.MibModuleObj()->CurrentEnvironment();
+                                    return environment && environment->profileId() == requestedProfile &&
+                                        environment->nodeByOid("1.3.6.1.4.1.90001.2");
+                                }), "macro-run: Detect's selected Profile is published before metadata assertions");
+                                if (profileCombo) {
+                                    const auto previous = snmpb.Results()->csvRecords();
+                                    const int before = log->entries().size(), selected = profileCombo->currentIndex();
+                                    const int pending = profileCombo->findData("custom.other");
+                                    check(pending >= 0 && pending != selected, "macro-run: a distinct pending Profile fixture is available");
+                                    const QString probe = macroService->create();
+                                    QueryMacroEntry entry; entry.id = QueryMacroNewId(); entry.oid = "1.3.6.1.2.1.1.1.0";
+                                    macroService->putEntry(probe, entry); macroPanel->selectMacro(probe);
+                                    {
+                                        // Deterministically hold the selector ahead of publication,
+                                        // as happens while its asynchronous Environment is loading.
+                                        const QSignalBlocker blocker(profileCombo);
+                                        profileCombo->setCurrentIndex(pending); runButton->click();
+                                        check(!runner->isBusy() && log->entries().size() == before && snmpb.Results()->csvRecords() == previous &&
+                                              macroPanel->findChild<QLabel *>("QueryMacroStatus")->text().contains("MIB Profile"),
+                                              "macro-run: an unpublished selected Profile refuses Run and preserves previous Results without requests");
+                                        profileCombo->setCurrentIndex(selected);
+                                    }
+                                    macroService->remove(probe);
+                                }
+                                const auto capturedEnvironment = snmpb.MibModuleObj()->CurrentEnvironment();
+                                const QString profileId = capturedEnvironment->profileId();
+                                const QString id = macroService->create(); macroService->rename(id, "Live captured macro");
+                                for (int i = 0; i < 25; ++i) {
+                                    QueryMacroEntry entry; entry.id = QueryMacroNewId();
+                                    entry.kind = i % 2 ? QueryMacroKind::ExactInstance : QueryMacroKind::Scalar;
+                                    entry.oid = i % 2 ? "1.3.6.1.2.1.1.1.0" : "1.3.6.1.4.1.90001.1";
+                                    entry.label = QString("Captured entry %1").arg(i); macroService->putEntry(id, entry);
+                                }
+                                QueryMacroEntry missing; missing.id = QueryMacroNewId(); missing.oid = "1.3.6.1.2.1.1.1.999";
+                                macroService->putEntry(id, missing);
+                                QueryMacroEntry changedKind; changedKind.id = QueryMacroNewId(); changedKind.kind = QueryMacroKind::Scalar;
+                                changedKind.oid = "1.3.6.1.4.1.90001.2"; macroService->putEntry(id, changedKind);
+                                QueryMacroEntry table; table.id = QueryMacroNewId(); table.kind = QueryMacroKind::Table;
+                                table.oid = "1.3.6.1.4.1.90001.2.1"; table.columns = {"1.3.6.1.4.1.90001.2.1.2"};
+                                macroService->putEntry(id, table);
+                                macroPanel->selectMacro(id); mw.findChild<QAction *>("ViewMacros")->trigger();
+                                const int logsBefore = log->entries().size();
+                                runButton->click();
+                                check(runner->isBusy() && snmpb.AgentObj()->ForegroundQueryBusy() && !runButton->isEnabled() &&
+                                      queryDocuments->currentWidget() == resultsPage && groups->count() == 2,
+                                      "macro-run: explicit Run reserves foreground ownership and selects grouped Results once");
+                                snmpb.AgentObj()->GetFrom("1.3.6.1.2.1.1.3.0", 0);
+                                check(log->entries().size() == logsBefore && runner->snapshot().name == "Live captured macro",
+                                      "macro-run: another Query cannot replace the macro before the first batch starts");
+                                targetBox->setEditText("127.0.0.1:1"); credentialBox->setCurrentIndex(-1);
+                                macroService->rename(id, "Edited during run"); macroService->remove(id);
+                                snmpb.MibLibraryObj()->selectProfile("custom.other");
+                                groups->setCurrentIndex(1); mw.findChild<QAction *>("ViewWatch")->trigger();
+                                check(await([&] { return !runner->isBusy(); }), "macro-run: captured batches complete through real transport");
+                                const auto run = runner->snapshot();
+                                smoke_output << "launch-smoke: MACRO-RUN " << run.summary()
+                                    << " profile=" << run.profile << " rows=" << run.groups[0].reads.size()
+                                    << " kindProblem=" << run.groups[0].reads.last().problem << Qt::endl;
+                                check(run.state == QueryMacroRunState::Partial && run.valueCount() == 25 && run.requests == 4 &&
+                                      run.groups[0].reads.size() == 27 && run.groups[0].reads[26].problem.contains("readable scalar") &&
+                                      run.environment == capturedEnvironment && run.name == "Live captured macro" && run.target == smoke_live_target,
+                                      "macro-run: edits/deletion and connection/profile changes cannot retarget or reinterpret the run");
+                                check(groups->currentData().toString() == table.id && queryDocuments->currentWidget() != resultsPage &&
+                                      !snmpb.MainUI()->actionStop->isEnabled(),
+                                      "macro-run: background delivery preserves selected group/workspace and restores Stop");
+                                mw.findChild<QAction *>("ViewResults")->trigger(); groups->setCurrentIndex(0);
+                                const auto csv = snmpb.Results()->csvRecords();
+                                check(results->rowCount() == 27 && snmpb.Results()->warningCount() == 13 && csv.size() == 28 &&
+                                      results->item(0, 4)->text() == "42" && !results->item(25, 4)->text().isEmpty(),
+                                      "macro-run: captured MIB warnings, received values and failed entries remain visible and exportable");
+                                bool capturedLogs = log->entries().size() == logsBefore + run.requests;
+                                for (int i = logsBefore; i < log->entries().size(); ++i) {
+                                    const auto &entry = log->entries()[i];
+                                    capturedLogs &= entry.operation.contains("Live captured macro") && entry.target == smoke_live_target &&
+                                        !entry.identity.contains("smokero") && entry.outcome != RequestOutcome::Running;
+                                }
+                                check(capturedLogs, "macro-run: every actual GET batch has captured, secret-free Log context");
+                                check(await([&] { const auto e = snmpb.MibModuleObj()->CurrentEnvironment(); return e && e->profileId() == "custom.other"; }),
+                                      "macro-run: the newly chosen Profile can publish independently");
+                                snmpb.MibLibraryObj()->selectProfile(profileId);
+                                check(await([&] { const auto e = snmpb.MibModuleObj()->CurrentEnvironment(); return e && e->profileId() == profileId; }),
+                                      "macro-run: the original Profile restores after the captured run");
+                                targetBox->setEditText(smoke_live_target); credentialBox->setCurrentIndex(credentialIndex);
+                                const QString stopId = macroService->create(); macroService->rename(stopId, "Stopped macro");
+                                for (int i = 0; i < 24; ++i) {
+                                    QueryMacroEntry entry; entry.id = QueryMacroNewId(); entry.oid = "1.3.6.1.2.1.1.1.0";
+                                    macroService->putEntry(stopId, entry);
+                                }
+                                macroPanel->selectMacro(stopId);
+                                QObject stopContext;
+                                QObject::connect(runner, &QueryMacroRunner::requestStarted, &stopContext, [&](const QStringList &) {
+                                    log->clear();
+                                    const auto *activity = mw.findChild<QLabel *>("WorkbenchActivityStatus");
+                                    check(activity && activity->text().contains("1 running"),
+                                          "macro-run: clearing Log cannot erase the running operation indicator");
+                                });
+                                QObject::connect(runner, &QueryMacroRunner::requestFinished, &stopContext,
+                                    [&](const QString &, int, bool, bool, bool) {
+                                        const auto *activity = mw.findChild<QLabel *>("WorkbenchActivityStatus");
+                                        check(activity && activity->text().contains("1 running"),
+                                              "macro-run: operation remains visible between completed and queued batches");
+                                        snmpb.MainUI()->actionStop->trigger();
+                                    });
+                                runButton->click();
+                                check(await([&] { return !runner->isBusy(); }) && runner->snapshot().state == QueryMacroRunState::Stopped &&
+                                      runner->snapshot().requests == 1 && runner->snapshot().valueCount() == 8 && !snmpb.AgentObj()->ForegroundQueryBusy(),
+                                      "macro-run: Stop preserves the first batch and prevents later requests");
+                                macroService->remove(stopId);
+                                check(!macroService->dirty(), "macro-run: task-owned definitions leave no unsaved close prompt");
+                                // Invalid connections must preserve the current Results snapshot.
+                                const auto beforeInvalid = snmpb.Results()->csvRecords();
+                                targetBox->setEditText("");
+                                auto invalid = QueryMacroDefinition{QueryMacroNewId(), "Invalid target", {missing}};
+                                snmpb.AgentObj()->RunMacro(invalid);
+                                check(!runner->isBusy() && snmpb.Results()->csvRecords() == beforeInvalid &&
+                                      !macroPanel->findChild<QLabel *>("QueryMacroStatus")->text().isEmpty(),
+                                      "macro-run: invalid connection explains refusal and preserves previous Results");
+                                targetBox->setEditText(smoke_live_target);
+                            }
                             // Ask the test agent to exit so the scenario ends without waiting.
                             targetBox->setEditText(smoke_live_target);
                             QEventLoop quitWait; QTimer::singleShot(1500, &quitWait, &QEventLoop::quit);
@@ -2153,6 +2443,270 @@ int main( int argc, char ** argv )
                                 if (QAction *viewOutput = mw.findChild<QAction *>("ViewResults")) viewOutput->trigger();
                                 profiles->remove(followId, &folderError);
                             }
+                            // Changing the Library location re-bases every derived subsystem.
+                            {
+                                const QString rootA = QSettings().value("mib-library/root").toString();
+                                const QString rootB = QDir(smoke_config_dir).filePath("MIB-Library-B");
+                                QFile source(QDir(rootA).filePath("Acme/Prod/GOOD-MIB"));
+                                QByteArray text = source.open(QIODevice::ReadOnly) ? source.readAll() : QByteArray();
+                                text.replace("GOOD-MIB", "BETA-MIB");
+                                QDir().mkpath(QDir(rootB).filePath("Beta/Prod"));
+                                QFile out(QDir(rootB).filePath("Beta/Prod/BETA-MIB"));
+                                const bool wrote = out.open(QIODevice::WriteOnly) && out.write(text) == text.size();
+                                out.close();
+                                snmpb.MibLibraryObj()->selectProfile(QStringLiteral("auto:Acme/Prod"));
+                                { QEventLoop settle; QTimer::singleShot(3000, &settle, &QEventLoop::quit); settle.exec(); }
+                                const QString activeBefore = autoCombo->currentData().toString();
+                                // A module with two different copies: one in the vendor folder, one in Standards.
+                                source.close();
+                                QByteArray dup = source.open(QIODevice::ReadOnly) ? source.readAll() : QByteArray();
+                                source.close();
+                                dup.replace("GOOD-MIB", "DUP-MIB").replace("goodValue", "dupValue").replace("90001", "90007");
+                                QDir().mkpath(QDir(rootB).filePath("Standards"));
+                                for (const auto &where : {QStringLiteral("Beta/Prod/DUP-MIB"), QStringLiteral("Standards/DUP-MIB")}) {
+                                    QFile copy(QDir(rootB).filePath(where));
+                                    if (copy.open(QIODevice::WriteOnly)) {
+                                        copy.write(dup); if (where.startsWith("Standards")) copy.write("\n-- a different copy\n");
+                                    }
+                                }
+                                QString rootError;
+                                const bool changed = wrote && snmpb.MibLibraryObj()->changeLibraryRoot(rootB, &rootError);
+                                check(changed, ("changing the Library location succeeds: " + rootError).toUtf8().constData());
+                                QCoreApplication::processEvents();
+                                { QEventLoop settle; QTimer::singleShot(3000, &settle, &QEventLoop::quit); settle.exec(); }
+                                const QString activeAfter = autoCombo->currentData().toString();
+                                bool staleEnv = false;
+                                if (const MibEnvironmentPtr cur = snmpb.MibModuleObj()->CurrentEnvironment())
+                                    for (const auto &module : cur->modules()) staleEnv = staleEnv || module.identity == "GOOD-MIB";
+                                check(activeBefore == "auto:Acme/Prod" && activeAfter != activeBefore && !staleEnv,
+                                      "a profile from the old location is not left active, and its MIBs are not left in the tree");
+                                const int betaIndex = autoCombo ? autoCombo->findData(QStringLiteral("auto:Beta/Prod")) : -1;
+                                check(betaIndex >= 0 && autoCombo->findData(QStringLiteral("auto:Acme/Prod")) < 0,
+                                      "after a location change the Automatic profiles come from the new location only");
+                                if (betaIndex >= 0) {
+                                    QString builtFor; QEventLoop wait; QTimer limit; limit.setSingleShot(true);
+                                    QObject::connect(&limit, &QTimer::timeout, &wait, &QEventLoop::quit);
+                                    QObject::connect(snmpb.MibModuleObj(), &MibModule::profileRuntimeReady, &wait,
+                                        [&](const QString &id, const MibEffectivePlan &, MibEnvironmentPtr, const QStringList &, bool, bool) {
+                                            if (id == "auto:Beta/Prod") { builtFor = id; wait.quit(); } });
+                                    limit.start(60000);
+                                    snmpb.MibLibraryObj()->selectProfile(QStringLiteral("auto:Beta/Prod"));
+                                    if (builtFor.isEmpty()) wait.exec();
+                                    bool hasBeta = false;
+                                    if (const MibEnvironmentPtr built = snmpb.MibModuleObj()->CurrentEnvironment())
+                                        for (const auto &module : built->modules()) hasBeta = hasBeta || module.identity == "BETA-MIB";
+                                    check(builtFor == "auto:Beta/Prod" && hasBeta,
+                                          "a profile from the new location builds its environment");
+                                }
+                                // Conflicts are judged for the profile being viewed, not the whole collection.
+                                {
+                                    QTableWidget *libraryTable = mw.findChild<QTableWidget *>("MibLibraryTable");
+                                    QComboBox *scope = mw.findChild<QComboBox *>("MibLibraryScope");
+                                    const auto rowFor = [libraryTable](const QString &module) {
+                                        for (int r = 0; libraryTable && r < libraryTable->rowCount(); ++r)
+                                            if (libraryTable->item(r, 1)->text() == module) return r;
+                                        return -1; };
+                                    if (libraryTable && scope) {
+                                        scope->setCurrentIndex(scope->findData(QStringLiteral("auto:Beta/Prod")));
+                                        QCoreApplication::processEvents();
+                                        int row = rowFor("DUP-MIB");
+                                        check(row >= 0 && !libraryTable->isRowHidden(row) && libraryTable->item(row, 2)->text() == "Ready" &&
+                                              libraryTable->item(row, 5)->text().replace('\\', '/') == "Beta/Prod/DUP-MIB" &&
+                                              libraryTable->item(row, 3)->text().contains("Beta"),
+                                              "a profile that can choose between two copies shows Ready, the copy it uses, and its own name");
+                                        check(row >= 0 && rowFor("SNMPv2-MIB") >= 0 && libraryTable->isRowHidden(rowFor("BETA-MIB")) == false,
+                                              "the profile view lists the profile's own modules");
+                                        {
+                                            QTableWidget *providers = mw.findChild<QTableWidget *>("MibLibraryProviders");
+                                            QLabel *summary = mw.findChild<QLabel *>("MibLibraryProvidersSummary");
+                                            libraryTable->setCurrentCell(row, 1); QCoreApplication::processEvents();
+                                            int usedRows = 0;
+                                            for (int r = 0; providers && r < providers->rowCount(); ++r) usedRows += providers->item(r, 0)->text() == "Used";
+                                            int outsideRows = 0;
+                                            for (int r = 0; providers && r < providers->rowCount(); ++r) outsideRows += providers->item(r, 0)->text() == "Outside profile";
+                                            check(providers && summary && providers->rowCount() == 1 && usedRows == 1 && outsideRows == 0 &&
+                                                  summary->text().contains("do not matter here"),
+                                                  "the Providers tab lists only the copies the viewed profile can use, and says others do not matter");
+                                            QCheckBox *showOutside = mw.findChild<QCheckBox *>("MibLibraryProvidersShowOutside");
+                                            if (showOutside) showOutside->setChecked(true);
+                                            QCoreApplication::processEvents();
+                                            outsideRows = 0;
+                                            for (int r = 0; providers && r < providers->rowCount(); ++r) outsideRows += providers->item(r, 0)->text() == "Outside profile";
+                                            check(providers && providers->rowCount() == 2 && outsideRows == 1,
+                                                  "ticking the checkbox lists copies outside the profile, marked as such");
+                                            if (showOutside) showOutside->setChecked(false);
+                                            QCoreApplication::processEvents();
+                                            // File Information describes the file this profile uses, not the Library's global record.
+                                            const auto infoText = [&mw](const char *name) {
+                                                const QLabel *label = mw.findChild<QLabel *>(name); return label ? label->text() : QString(); };
+                                            check(infoText("MibLibraryInfo_path").replace('\\', '/').endsWith("Beta/Prod/DUP-MIB") &&
+                                                  infoText("MibLibraryInfo_filename") == "DUP-MIB" &&
+                                                  infoText("MibLibraryInfo_origin").replace('\\', '/') == "Beta/Prod",
+                                                  "File Information shows the profile's file, its filename, and its folder instead of 'Imported'");
+                                        }
+                                        check(row >= 0 && libraryTable->item(row, 6) && libraryTable->item(row, 6)->text() == "DUP-MIB" &&
+                                              libraryTable->horizontalHeader()->visualIndex(6) < libraryTable->horizontalHeader()->visualIndex(2),
+                                              "the Library lists each module's filename, next to the module name");
+                                        if (QTableWidget *providers = mw.findChild<QTableWidget *>("MibLibraryProviders")) {
+                                            if (QCheckBox *outsideBox = mw.findChild<QCheckBox *>("MibLibraryProvidersShowOutside"))
+                                                outsideBox->setChecked(true);
+                                            QCoreApplication::processEvents();
+                                            providers->selectAll(); QCoreApplication::processEvents();
+                                            QPushButton *compare = mw.findChild<QPushButton *>("MibLibraryProvidersCompare");
+                                            check(compare && compare->isEnabled(), "two selected copies can be compared");
+                                            if (compare && compare->isEnabled()) {
+                                                compare->click(); QCoreApplication::processEvents();
+                                                QDialog *dialog = mw.findChild<QDialog *>("MibCompareDialog");
+                                                bool marked = false;
+                                                if (dialog) for (QLabel *label : dialog->findChildren<QLabel *>()) marked = marked || label->text().contains("line(s) differ");
+                                                check(dialog && marked, "the comparison window opens and says how many lines differ");
+                                                if (dialog) dialog->close();
+                                            }
+                                            if (QCheckBox *outsideBox = mw.findChild<QCheckBox *>("MibLibraryProvidersShowOutside"))
+                                                outsideBox->setChecked(false);
+                                        }
+                                        {
+                                            // Two unchanged files that both define DUP-MIB: the profile cannot choose between them.
+                                            // That is a conflict, never "Changed since added"; Use This Copy resolves it.
+                                            MibProfileService *svc = snmpb.MibLibraryObj()->profileService();
+                                            QString perr;
+                                            const QString twoId = svc->create("Two Copies", &perr);
+                                            const bool added = !twoId.isEmpty() && svc->addFiles(twoId,
+                                                {QDir(rootB).filePath("Beta/Prod/DUP-MIB"), QDir(rootB).filePath("Standards/DUP-MIB")},
+                                                MibProfileMemberReason::Added, &perr);
+                                            emit snmpb.MibLibraryObj()->profilesChanged();
+                                            snmpb.MibLibraryObj()->refresh();
+                                            QCoreApplication::processEvents();
+                                            QComboBox *editor = mw.findChild<QComboBox *>("MibProfileEditorSelector");
+                                            if (editor) editor->setCurrentIndex(editor->findData(twoId));
+                                            QCoreApplication::processEvents();
+                                            bool conflictShown = false, falseChanged = false;
+                                            if (QTreeWidget *memberTree = mw.findChild<QTreeWidget *>("MibProfileMemberTree"))
+                                                for (int i = 0; i < memberTree->topLevelItemCount(); ++i) {
+                                                    const QString state = memberTree->topLevelItem(i)->text(2);
+                                                    conflictShown = conflictShown || state.startsWith("Conflict");
+                                                    falseChanged = falseChanged || state.contains("Changed");
+                                                }
+                                            check(added && conflictShown && !falseChanged,
+                                                  "unchanged files that the profile cannot choose between are reported as a Conflict, not 'Changed since added'");
+                                            scope->setCurrentIndex(scope->findData(twoId));
+                                            QCoreApplication::processEvents();
+                                            row = rowFor("DUP-MIB");
+                                            check(row >= 0 && libraryTable->item(row, 2)->text() == "Conflict",
+                                                  "the profile with both copies shows the module as a Conflict");
+                                            libraryTable->setCurrentCell(row, 1); QCoreApplication::processEvents();
+                                            QTableWidget *providers = mw.findChild<QTableWidget *>("MibLibraryProviders");
+                                            QPushButton *use = mw.findChild<QPushButton *>("MibLibraryProvidersUse");
+                                            bool selected = false;
+                                            for (int r = 0; providers && !selected && r < providers->rowCount(); ++r)
+                                                if (providers->item(r, 1)->data(Qt::UserRole).toString().endsWith("Beta/Prod/DUP-MIB")) {
+                                                    providers->selectRow(r); selected = true; }
+                                            QCoreApplication::processEvents();
+                                            check(selected && use && use->isEnabled(), "Use This Copy is offered for a selected copy");
+                                            if (selected && use && use->isEnabled()) {
+                                                use->click(); QCoreApplication::processEvents();
+                                                row = rowFor("DUP-MIB");
+                                                const auto *record = svc->find(twoId);
+                                                check(record && record->providerPins.contains("DUP-MIB") && row >= 0 &&
+                                                      libraryTable->item(row, 2)->text() == "Ready" &&
+                                                      libraryTable->item(row, 5)->text().replace('\\', '/') == "Beta/Prod/DUP-MIB",
+                                                      "Use This Copy pins the chosen copy and the conflict is resolved");
+                                            }
+                                            svc->remove(twoId, &perr);
+                                            // Different copies where one has a newer revision: resolved, and labelled as such.
+                                            QByteArray older = dup, newer = dup;
+                                            older.replace("DUP-MIB", "REVD-MIB");
+                                            newer.replace("DUP-MIB", "REVD-MIB").replace("202601010000Z", "202701010000Z");
+                                            const QString oldPath = QDir(rootB).filePath("Beta/Prod/REVD-MIB");
+                                            const QString newPath = QDir(rootB).filePath("Standards/REVD-MIB");
+                                            for (const auto &pair : {qMakePair(oldPath, older), qMakePair(newPath, newer)}) {
+                                                QFile out(pair.first);
+                                                if (out.open(QIODevice::WriteOnly)) out.write(pair.second);
+                                            }
+                                            emit qGuiApp->applicationStateChanged(Qt::ApplicationActive);
+                                            {
+                                                QElapsedTimer waited; waited.start();
+                                                while (rowFor("REVD-MIB") < 0 && waited.elapsed() < 60000) {
+                                                    QCoreApplication::processEvents(QEventLoop::AllEvents, 50); QThread::msleep(20);
+                                                }
+                                            }
+                                            collection->rebuildNow();
+                                            check(collection->waitForBuild(60000) && rowFor("REVD-MIB") >= 0,
+                                                  "the Library and collection index see the revision fixtures");
+                                            const QString revId = svc->create("Revision Copies", &perr);
+                                            const bool revAdded = !revId.isEmpty() && svc->addFiles(revId, {oldPath, newPath},
+                                                MibProfileMemberReason::Added, &perr);
+                                            emit snmpb.MibLibraryObj()->profilesChanged();
+                                            snmpb.MibLibraryObj()->refresh();
+                                            QCoreApplication::processEvents();
+                                            scope->setCurrentIndex(scope->findData(revId));
+                                            QCoreApplication::processEvents();
+                                            row = rowFor("REVD-MIB");
+                                            check(revAdded && row >= 0 && libraryTable->item(row, 2)->text() == "Resolved conflict" &&
+                                                  libraryTable->item(row, 5)->text().replace('\\', '/') == "Standards/REVD-MIB",
+                                                  "copies where one is newer are shown as a resolved conflict using the newest");
+                                            libraryTable->setCurrentCell(row, 1); QCoreApplication::processEvents();
+                                            if (QLabel *summary = mw.findChild<QLabel *>("MibLibraryProvidersSummary"))
+                                                check(summary->text().contains("Resolved") && summary->text().contains("newest revision"),
+                                                      "the Providers tab says the conflict is resolved by the newest revision");
+                                            svc->remove(revId, &perr);
+                                            emit snmpb.MibLibraryObj()->profilesChanged();
+                                        }
+                                        scope->setCurrentIndex(scope->findData(QStringLiteral("@all")));
+                                        QCoreApplication::processEvents();
+                                        row = rowFor("DUP-MIB");
+                                        check(row >= 0 && !libraryTable->isRowHidden(row) && libraryTable->item(row, 2)->text() == "Conflict",
+                                              "the whole-collection view still flags the two different copies");
+                                        libraryTable->setCurrentCell(row, 1); QCoreApplication::processEvents();
+                                        if (QLabel *summary = mw.findChild<QLabel *>("MibLibraryProvidersSummary"))
+                                            check(summary->text().contains("different content") && summary->text().contains("Choose a profile"),
+                                                  "the collection view explains the conflict and points to the profile view");
+                                        scope->setCurrentIndex(0); QCoreApplication::processEvents();
+                                    } else check(false, "Library table and view chooser exist");
+                                }
+                                collection->rebuildNow();
+                                check(collection->waitForBuild(60000), "the collection index rebuilds for the new location");
+                                searchBox->setText("goodValue"); emit searchBox->returnPressed();
+                                bool staleHit = false;
+                                for (int r = 0; r < searchTable->rowCount(); ++r) staleHit = staleHit || cell(r, 2) == "GOOD-MIB";
+                                check(searchTable->rowCount() == 1 && !staleHit && cell(0, 2) == "BETA-MIB",
+                                      "search reports only the new location's MIBs");
+                                QString backError;
+                                check(snmpb.MibLibraryObj()->changeLibraryRoot(rootA, &backError),
+                                      "switching back to the original location succeeds");
+                                QCoreApplication::processEvents();
+                                collection->rebuildNow(); collection->waitForBuild(60000);
+                                check(autoCombo->findData(QStringLiteral("auto:Acme/Prod")) >= 0,
+                                      "switching back restores the original Automatic profiles");
+                                {
+                                    // New files extracted into the Library folder while the app is open appear when
+                                    // the owner comes back to the window, without a manual Refresh or a restart.
+                                    QTableWidget *libraryTable = mw.findChild<QTableWidget *>("MibLibraryTable");
+                                    const QString latePath = QDir(rootA).filePath("Acme/Prod/LATE-MIB");
+                                    QFile goodSource(QDir(rootA).filePath("Acme/Prod/GOOD-MIB"));
+                                    QByteArray late = goodSource.open(QIODevice::ReadOnly) ? goodSource.readAll() : QByteArray();
+                                    late.replace("GOOD-MIB", "LATE-MIB").replace("goodValue", "lateValue").replace("90001", "90011");
+                                    QFile lateFile(latePath);
+                                    const bool wroteLate = lateFile.open(QIODevice::WriteOnly) && lateFile.write(late) == late.size();
+                                    lateFile.close();
+                                    const auto hasModule = [libraryTable](const QString &name) {
+                                        for (int r = 0; libraryTable && r < libraryTable->rowCount(); ++r)
+                                            if (libraryTable->item(r, 1) && libraryTable->item(r, 1)->text() == name) return true;
+                                        return false; };
+                                    const auto waitFor = [&](bool wanted) {
+                                        QElapsedTimer waited; waited.start();
+                                        while (hasModule("LATE-MIB") != wanted && waited.elapsed() < 60000) {
+                                            QCoreApplication::processEvents(QEventLoop::AllEvents, 50); QThread::msleep(20);
+                                        }
+                                        return hasModule("LATE-MIB") == wanted; };
+                                    emit qGuiApp->applicationStateChanged(Qt::ApplicationActive);
+                                    check(wroteLate && waitFor(true), "a MIB file added to the Library folder appears when the owner returns to the app");
+                                    QFile::remove(latePath);
+                                    emit qGuiApp->applicationStateChanged(Qt::ApplicationActive);
+                                    check(waitFor(false), "a MIB file removed from the Library folder disappears when the owner returns to the app");
+                                    collection->rebuildNow(); collection->waitForBuild(60000);
+                                }
+                            }
                             snmpb.MibLibraryObj()->selectProfile(QStringLiteral("custom.test"));
                         }
                     searchBox->setText("goodValue");
@@ -2163,6 +2717,15 @@ int main( int argc, char ** argv )
                     check(bottomSearch->tabText(bottomSearch->currentIndex()) == "Search" &&
                           bottomSearch->currentWidget()->isAncestorOf(searchTable),
                           "searching opens the Search tab in the middle area and brings it forward");
+                    {
+                        // The same box also goes straight to an OID the active tree has.
+                        auto *tree = snmpb.MainUI()->MIBTree;
+                        tree->setCurrentIndex({});
+                        searchBox->setText("1.3.6.1.4.1.90001.1"); emit searchBox->returnPressed();
+                        QCoreApplication::processEvents();
+                        check(tree->currentObjectOid() == "1.3.6.1.4.1.90001.1",
+                              "typing an OID the tree has, in the search box, selects it in the tree");
+                    }
                     }
                     searchBox->setText("sysDescr");
                     emit searchBox->returnPressed();
@@ -2557,6 +3120,87 @@ int main( int argc, char ** argv )
                 check(diagnosticLog.open(QIODevice::ReadOnly) &&
                       diagnosticLog.readAll().contains("rebuilding"),
                       "edit: the diagnostic log records the save as rebuilding the active profile");
+            }
+            if (!smoke_network && !smoke_mib_file.isEmpty() && smoke_edit_from.isEmpty()) {
+                auto *service = snmpb.findChild<WatchService *>();
+                auto *table = mw.findChild<QTableWidget *>("WatchTable");
+                auto *intervalButton = mw.findChild<QPushButton *>("WatchEditInterval");
+                check(service && table && intervalButton, "saved Watch service, table and interval action exist");
+                if (service && table && intervalButton) {
+                    if (settings.value("smoke/saved-watch-expected", false).toBool()) {
+                        const auto ids = service->ids();
+                        const auto *row = ids.size() == 1 ? service->row(ids.first()) : nullptr;
+                        check(row && row->paused && row->polls == 0 && row->spec.intervalSeconds == 17 &&
+                              row->spec.target == "127.0.0.1:1" && row->spec.contextName == "saved-context" &&
+                              table->rowCount() == 1,
+                              "saved Watch returns paused in the actual application after restart without polling");
+                    } else {
+                        check(service->ids().isEmpty(), "a fresh application has no saved watches");
+                        WatchSpec spec; spec.target = "127.0.0.1:1"; spec.credentialKey = "community:missing:v2c";
+                        spec.oid = "1.3.6.1.2.1.1.3.0"; spec.contextName = "saved-context";
+                        service->add(spec, true);
+                    }
+                    if (QAction *view = mw.findChild<QAction *>("ViewWatch")) view->trigger();
+                    // Match the compact-workspace workflow above: collapse the shared panel
+                    // before checking the Query controls, then restore its prior state.
+                    const QSize previousSize = mw.size();
+                    auto *bottom = mw.findChild<QDockWidget *>("WorkbenchBottomDock");
+                    const bool bottomHidden = !bottom || bottom->isHidden();
+                    if (bottom) bottom->hide();
+                    QCoreApplication::processEvents(); // let the dock layout release its old minimum height
+                    mw.resize(1024, 720); QCoreApplication::processEvents();
+                    auto *watchPage = mw.findChild<QWidget *>("WorkbenchWatchPage");
+                    smoke_output << "launch-smoke: WATCH-LAYOUT window=" << mw.width() << "x" << mw.height()
+                                 << " page=" << (watchPage ? watchPage->width() : 0) << "x" << (watchPage ? watchPage->height() : 0)
+                                 << " minimum=" << mw.minimumWidth() << "x" << mw.minimumHeight()
+                                 << " action=" << intervalButton->mapTo(watchPage, QPoint()).x() << ","
+                                 << intervalButton->mapTo(watchPage, QPoint()).y() << " "
+                                 << intervalButton->width() << "x" << intervalButton->height() << Qt::endl;
+                    bool actionsFit = watchPage && intervalButton->isVisibleTo(&mw);
+                    for (const char *name : {"WatchEditInterval", "WatchPause", "WatchRemove", "WatchClear"}) {
+                        auto *button = mw.findChild<QPushButton *>(name);
+                        actionsFit &= button && watchPage && button->isVisibleTo(&mw) &&
+                            watchPage->rect().contains(QRect(button->mapTo(watchPage, QPoint()), button->size()));
+                    }
+                    check(mw.width() <= 1024 && mw.height() <= 720 && actionsFit,
+                          "Watch row actions fit in the compact Query workspace");
+                    mw.grab().save(QDir(smoke_config_dir).filePath("watch-compact.png"));
+                    if (!service->ids().isEmpty()) {
+                        const auto id = service->ids().first();
+                        table->selectRow(0);
+                        QObject intervalContext;
+                        QTimer::singleShot(0, &intervalContext, [&]() {
+                            auto *dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget());
+                            check(dialog && dialog->objectName() == "WatchIntervalDialog", "the selected Watch interval editor opens");
+                            if (dialog) { dialog->setIntValue(17); dialog->accept(); }
+                        });
+                        intervalButton->click();
+                        check(service->row(id) && service->row(id)->spec.intervalSeconds == 17 &&
+                              service->row(id)->paused && table->item(0, 8)->text() == "17 s",
+                              "the real interval editor changes only the selected watch and updates Every");
+                        QTimer::singleShot(0, &intervalContext, [&]() {
+                            auto *dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget());
+                            if (dialog) { dialog->setIntValue(29); dialog->reject(); }
+                        });
+                        intervalButton->click();
+                        check(service->row(id)->spec.intervalSeconds == 17, "Cancel leaves the Watch interval unchanged");
+                        WatchSpec disposable = service->row(id)->spec;
+                        const auto removed = service->add(disposable, true);
+                        table->selectRow(table->rowCount()-1);
+                        QTimer::singleShot(0, &intervalContext, [&]() {
+                            auto *dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget());
+                            service->remove(removed);
+                            if (dialog) { dialog->setIntValue(31); dialog->accept(); }
+                        });
+                        intervalButton->click();
+                        check(!service->row(removed) && service->ids().size() == 1 && table->rowCount() == 1,
+                              "a removed row cannot be recreated by its open interval editor");
+                        settings.setValue("smoke/saved-watch-expected", true); settings.sync();
+                        check(service->persistenceError().isEmpty(), "the actual Watch UI saves its definitions successfully");
+                    }
+                    if (bottom) bottom->setVisible(!bottomHidden);
+                    mw.resize(previousSize); QCoreApplication::processEvents();
+                }
             }
             if (!smoke_mib_file.isEmpty()) {
                 bool deliveredAfterStop = false;

@@ -516,8 +516,9 @@ MibLibraryFileInfo MibLibraryFileInformation(const MibLibraryRecord &record,
     MibLibraryFileInfo info;
     info.origin = MibLibraryOriginText(record);
     info.revision = record.revision.isEmpty() ? unavailable : record.revision;
-    info.filename = record.sourceFilename.isEmpty()
-        ? QFileInfo(record.localPath).fileName() : record.sourceFilename;
+    // The file on disk is what the user looks for; the catalog's name is only a fallback.
+    info.filename = record.localPath.isEmpty() ? record.sourceFilename
+                                               : QFileInfo(record.localPath).fileName();
     if (info.filename.isEmpty()) info.filename = unavailable;
     info.localPath = record.localPath.isEmpty() ? unavailable : record.localPath;
     info.provider = record.sourceName;

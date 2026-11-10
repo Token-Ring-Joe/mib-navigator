@@ -37,7 +37,8 @@ public:
     explicit RequestLog(QObject *parent = nullptr, int limit = 1000);
     quint64 begin(const QString &operation, const QString &target, const QString &identity, const QString &oid);
     // outcome Running means "work it out from the text".
-    void finish(quint64 id, const QString &resultHtml, int objects);
+    void finish(quint64 id, const QString &resultHtml, int objects,
+                RequestOutcome outcome = RequestOutcome::Running);
     void clear();
     const QList<RequestLogEntry> &entries() const { return list; }
     const RequestLogEntry *entry(quint64 id) const;

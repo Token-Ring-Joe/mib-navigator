@@ -438,7 +438,7 @@ foreach(kind IN ITEMS selected dependency)
     run_scenario(newest-revision-${kind} REQUIRE_EXIT_ZERO
         FILES "Prod/A-old=DUP_MIB_A" "Prod/Z-new=DUP_MIB_NEW" "Prod/IMPORTER-MIB=IMPORTER_MIB"
         ROOTS ${revision_roots}
-        EXPECT "category=\"Conflicting definitions\" module=DUP-MIB"
+        EXPECT "category=\"Conflicting definitions \\(resolved\\)\" module=DUP-MIB"
                "Z-new.*revision 2026-10-01 00:00.*— used"
                "Selection: newest LAST-UPDATED revision"
         REJECT "Profile Environment build failed")
@@ -448,7 +448,7 @@ endforeach()
 run_scenario(edited-conflicting-roots REQUIRE_EXIT_ZERO
     FILES "Prod/A-old=DUP_MIB_A" "Prod/Z-new=DUP_MIB_NEW"
     ROOTS "DUP-MIB@Prod/A-old" "DUP-MIB@Prod/Z-new" MODIFIED_ROOTS "DUP-MIB"
-    EXPECT "category=\"Conflicting definitions\" module=DUP-MIB"
+    EXPECT "category=\"Conflicting definitions \\(resolved\\)\" module=DUP-MIB"
            "category=\"Modified\" module=DUP-MIB file=Z-new"
            "Selection: newest LAST-UPDATED revision"
     REJECT "Profile Environment build failed")

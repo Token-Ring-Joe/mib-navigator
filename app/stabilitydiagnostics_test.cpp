@@ -7,6 +7,8 @@
 #include <QTemporaryDir>
 #include <QTextEdit>
 #include <iostream>
+#include <thread>
+#include <memory>
 
 namespace {
 bool check(bool condition, const char *message)
@@ -45,6 +47,36 @@ int main(int argc, char **argv)
     deliverQueuedCalls();
     ok &= check(displayed.toPlainText().contains("message after clear"),
                 "messages continue after Clear Log");
+    std::thread worker([] {
+        DiagnosticLogger::log("SNMP++", "library first\r\nlibrary second\ncommunity=library-secret\n<literal-not-markup>");
+    });
+    worker.join(); deliverQueuedCalls();
+    const auto displayedLines = displayed.toPlainText().split('\n');
+    bool libraryLinesPrefixed = true; int libraryLines = 0;
+    const QRegularExpression prefix(QStringLiteral(R"(^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+[+-][0-9]{2}:[0-9]{2} .+ \[SNMP\+\+\] )"));
+    for (const auto &line : displayedLines) if (line.contains("[SNMP++]")) {
+        ++libraryLines; libraryLinesPrefixed &= prefix.match(line).hasMatch();
+    }
+    ok &= check(libraryLines == 4 && libraryLinesPrefixed &&
+                displayed.toPlainText().contains("<literal-not-markup>") &&
+                !displayed.toPlainText().contains("library-secret"),
+                "multiline worker library logs have ISO timestamps on every line, safe literal text and redaction");
+    auto destroyed = std::make_unique<QTextEdit>();
+    DiagnosticLogger::attachLogWidget(destroyed.get());
+    DiagnosticLogger::log("Test", "message for destroyed recipient");
+    destroyed.reset();
+    DiagnosticLogger::attachLogWidget(&displayed); deliverQueuedCalls();
+    ok &= check(!displayed.toPlainText().contains("message for destroyed recipient"),
+                "queued logging cannot move a destroyed recipient's message to another widget");
+    ok &= check(!DiagnosticLogger::redactLibraryMessage("password: a secret, with; spaces\nand another line").contains("secret") &&
+                !DiagnosticLogger::redactLibraryMessage("USMUserTable: New key: (AA BB CC DD)").contains("AA BB"),
+                "native unquoted/multiline library secrets never reach the diagnostic logger");
+    const QString protectedKey = DiagnosticLogger::redact("USMUserTable: New key: (AA BB CC DD)");
+    ok &= check(!protectedKey.contains("AA BB") && protectedKey.contains("[REDACTED]") &&
+                !DiagnosticLogger::redact("password=\"a secret with spaces\"").contains("with spaces") &&
+                DiagnosticLogger::redact("Could not generate localized key: Unsupported auth protocol")
+                    .contains("Unsupported auth protocol"),
+                "SNMP++ key/quoted-secret redaction preserves useful failure explanations");
     const QString timestamp = DiagnosticLogger::structuredTimestamp();
     ok &= check(QRegularExpression(
         QStringLiteral("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}[+-]\\d{2}:\\d{2}$"))
@@ -52,6 +84,7 @@ int main(int argc, char **argv)
     ok &= check(QDateTime::fromString(timestamp, Qt::ISODateWithMs).offsetFromUtc() ==
         QDateTime::currentDateTime().offsetFromUtc(), "timestamp uses current OS local offset");
     const QString path = DiagnosticLogger::logFilePath();
+    DiagnosticLogger::log("Test", "stale-session-marker");
     DiagnosticLogger::shutdown();
     QFile log(path);
     ok &= check(log.open(QIODevice::ReadOnly), "diagnostic log creation");
@@ -66,6 +99,11 @@ int main(int argc, char **argv)
     ok &= check(DiagnosticLogger::initialize("isolated", app.arguments()) &&
                 DiagnosticLogger::logFilePath().startsWith(temporary.filePath("isolated/logs/")),
                 "isolated logger stays inside the isolated state directory without an override");
+    QTextEdit nextSession;
+    DiagnosticLogger::attachLogWidget(&nextSession); deliverQueuedCalls();
+    ok &= check(!displayed.toPlainText().contains("stale-session-marker") &&
+                !nextSession.toPlainText().contains("stale-session-marker"),
+                "shutdown/reinitialize rejects delivery from the previous diagnostic session");
     DiagnosticLogger::shutdown();
 
     UdpPortOwner owner;

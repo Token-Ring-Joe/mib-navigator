@@ -4,6 +4,15 @@
 #include "snmpreport.h"
 
 #include <QCoreApplication>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QRegularExpression>
+#include <QSaveFile>
+#include <QLockFile>
 #include <QMetaObject>
 #include <QPointer>
 #include <QRunnable>
@@ -11,6 +20,21 @@
 
 namespace {
 const char *const kUptimeOid = "1.3.6.1.2.1.1.3.0";
+constexpr int kMaximumDefinitions = 10000;
+constexpr qint64 kMaximumStoreBytes = 16 * 1024 * 1024;
+
+bool validDefinition(const WatchSpec &spec)
+{
+    static const QRegularExpression numeric(QStringLiteral(R"(^[0-9]+(?:\.[0-9]+)+$)"));
+    if (spec.target.trimmed().isEmpty() || spec.credentialKey.isEmpty() ||
+        spec.intervalSeconds < 1 || spec.intervalSeconds > 3600 ||
+        !numeric.match(spec.oid).hasMatch()) return false;
+    for (const auto &part : spec.oid.split('.')) {
+        bool ok = false; const auto value = part.toULongLong(&ok);
+        if (!ok || value > 0xffffffffULL) return false;
+    }
+    return Oid(spec.oid.toLatin1().constData()).valid();
+}
 
 WatchSample::Kind kindFor(int syntax)
 {
@@ -169,17 +193,20 @@ WatchService::~WatchService()
 
 void WatchService::startTimer(int intervalMs) { timer.start(intervalMs); }
 
-quint64 WatchService::add(const WatchSpec &spec)
+quint64 WatchService::add(const WatchSpec &spec, bool paused)
 {
     WatchRow row;
     row.id = nextId++;
     row.spec = spec;
     row.spec.intervalSeconds = qBound(1, spec.intervalSeconds, 3600);
+    if (order.size() >= kMaximumDefinitions || !validDefinition(row.spec)) return 0;
     row.objectLabel = spec.oid;
-    row.status = tr("Waiting for the first answer");
+    row.paused = paused;
+    row.status = paused ? tr("Paused") : tr("Waiting for the first answer");
     row.nextDueMs = 0;   // poll as soon as the timer next fires
     rows.insert(row.id, row);
     order.append(row.id);
+    persistDefinitions();
     emit rowAdded(row.id);
     return row.id;
 }
@@ -188,13 +215,29 @@ void WatchService::remove(quint64 id)
 {
     if (!rows.remove(id)) return;
     order.removeAll(id);
+    persistDefinitions();
     emit rowRemoved(id);
 }
 
 void WatchService::clear()
 {
     const QList<quint64> all = order;
+    const bool previous = restoring; restoring = true;
     for (quint64 id : all) remove(id);
+    restoring = previous;
+    persistDefinitions();
+}
+
+bool WatchService::setInterval(quint64 id, int seconds)
+{
+    auto it = rows.find(id);
+    if (it == rows.end() || seconds < 1 || seconds > 3600) return false;
+    if (it->spec.intervalSeconds == seconds) return true;
+    it->spec.intervalSeconds = seconds;
+    it->nextDueMs = clock.elapsed() + qint64(seconds) * 1000;
+    persistDefinitions();
+    emit rowChanged(id);
+    return true;
 }
 
 void WatchService::setPaused(quint64 id, bool paused)
@@ -257,6 +300,7 @@ void WatchService::startPoll(WatchRow &row)
         emit rowChanged(row.id);
         return;
     }
+    config.contextName = row.spec.contextName;
     row.inFlight = true;
     ++outstanding;
     pool.start(new PollTask(QPointer<WatchService>(this), row.id, config, row.spec.oid,
@@ -288,4 +332,106 @@ void WatchService::applyResult(quint64 id, const PollResult &result)
         row.status = tr("OK");
     }
     emit rowChanged(id);
+}
+
+
+void WatchService::setStoreError(const QString &error)
+{
+    if (storeError == error) return;
+    storeError = error;
+    emit persistenceErrorChanged(storeError);
+}
+
+bool WatchService::restoreDefinitions(const QString &fileName)
+{
+    if (!definitionsFile.isEmpty() || !order.isEmpty()) return false;
+    definitionsFile = fileName;
+    QFile file(fileName);
+    if (!file.exists()) return true;
+    const auto failed = [this, &fileName](const QString &reason) {
+        storeBlocked = true;
+        setStoreError(tr("Saved watches could not be loaded: %1. The original file is kept at %2. Fix it and restart before saving changes.")
+                      .arg(reason, fileName));
+        return false;
+    };
+    if (!file.open(QIODevice::ReadOnly)) return failed(file.errorString());
+    const QByteArray bytes = file.read(kMaximumStoreBytes + 1);
+    if (file.error() != QFileDevice::NoError) return failed(file.errorString());
+    if (bytes.size() > kMaximumStoreBytes) return failed(tr("file is too large"));
+    QJsonParseError parse;
+    const auto document = QJsonDocument::fromJson(bytes, &parse);
+    if (parse.error != QJsonParseError::NoError || !document.isObject())
+        return failed(tr("invalid JSON"));
+    const auto object = document.object();
+    if (object.value("schemaVersion") != QJsonValue(1) || !object.value("watches").isArray())
+        return failed(tr("unsupported or incomplete format"));
+    const auto array = object.value("watches").toArray();
+    if (array.size() > kMaximumDefinitions) return failed(tr("too many definitions"));
+    QList<WatchSpec> specs;
+    for (const auto &value : array) {
+        if (!value.isObject()) return failed(tr("invalid watch definition"));
+        const auto item = value.toObject();
+        for (const char *key : {"target", "credential", "oid", "context"})
+            if (!item.value(QLatin1String(key)).isString()) return failed(tr("invalid watch definition"));
+        WatchSpec spec;
+        spec.target = item.value("target").toString();
+        spec.credentialKey = item.value("credential").toString();
+        spec.oid = item.value("oid").toString();
+        spec.contextName = item.value("context").toString();
+        const auto interval = item.value("intervalSeconds");
+        if (!interval.isDouble() || interval.toDouble() != interval.toInt(-1))
+            return failed(tr("invalid polling interval"));
+        spec.intervalSeconds = interval.toInt();
+        if (!validDefinition(spec)) return failed(tr("invalid watch definition"));
+        specs.append(spec);
+    }
+    storeExisted = true;
+    storedBytes = bytes;
+    restoring = true;
+    for (const auto &spec : specs) add(spec, true);
+    restoring = false;
+    setStoreError({});
+    return true;
+}
+
+void WatchService::persistDefinitions()
+{
+    if (definitionsFile.isEmpty() || restoring || storeBlocked) return;
+    QJsonArray definitions;
+    for (quint64 id : order) {
+        const WatchSpec spec = rows.value(id).spec;
+        definitions.append(QJsonObject{{"target", spec.target}, {"credential", spec.credentialKey},
+            {"oid", spec.oid}, {"context", spec.contextName}, {"intervalSeconds", spec.intervalSeconds}});
+    }
+    const QByteArray bytes = QJsonDocument(QJsonObject{{"schemaVersion", 1}, {"watches", definitions}})
+                             .toJson(QJsonDocument::Indented);
+    const auto failed = [this](const QString &reason) {
+        setStoreError(tr("Watches remain available this session but could not be saved to %1: %2")
+                      .arg(definitionsFile, reason));
+    };
+    if (!QDir().mkpath(QFileInfo(definitionsFile).absolutePath())) {
+        failed(tr("the settings folder could not be created")); return;
+    }
+    if (bytes.size() > kMaximumStoreBytes) { failed(tr("definitions exceed the file size limit")); return; }
+    QLockFile lock(definitionsFile + QStringLiteral(".lock"));
+    if (!lock.tryLock(0)) { failed(tr("another process is saving watches; try another edit shortly")); return; }
+    QFile previous(definitionsFile);
+    if (previous.exists() != storeExisted ||
+        (storeExisted && (!previous.open(QIODevice::ReadOnly) || previous.read(kMaximumStoreBytes + 1) != storedBytes))) {
+        storeBlocked = true;
+        failed(tr("the file changed outside this session; restart to reload it before saving"));
+        return;
+    }
+    previous.close();
+    if (storeExisted && bytes == storedBytes) { setStoreError({}); return; }
+    QSaveFile file(definitionsFile);
+    if (!file.open(QIODevice::WriteOnly)) { failed(file.errorString()); return; }
+    if (!file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner)) {
+        failed(file.errorString()); file.cancelWriting(); return;
+    }
+    if (file.write(bytes) != bytes.size()) { failed(file.errorString()); file.cancelWriting(); return; }
+    if (!file.commit()) { failed(file.errorString()); return; }
+    storedBytes = bytes;
+    storeExisted = true;
+    setStoreError({});
 }

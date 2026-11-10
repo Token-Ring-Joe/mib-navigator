@@ -153,6 +153,14 @@ inline QList<MibProblem> MibBuildProblemReport(const MibProblemInput &input)
             problem.suggestion = QObject::tr("Remove or rename the copy you do not want, or pin the one you do.");
             break;
         }
+        case MibPlanResolutionTier::NewestRevision:
+            problem.severity = MibProblemSeverity::Note;
+            problem.category = QObject::tr("Conflicting definitions (resolved)");
+            problem.module = finding.identity;
+            problem.file = providerPath(plan, finding.identity);
+            problem.why = finding.reason;
+            problem.effect = QObject::tr("Nothing to do: the newest revision is used. The older copies are ignored.");
+            break;
         case MibPlanResolutionTier::ProviderConflict:
             problem.severity = MibProblemSeverity::Warning;
             problem.category = QObject::tr("Conflicting file");

@@ -23,6 +23,7 @@
 #include <qsettings.h>
 
 #include "snmpb.h"
+#include "diagnosticlogger.h"
 #include "snmp_pp/snmp_pp.h"
 #include "snmp_pp/log.h"
 
@@ -47,16 +48,10 @@ private:
     QSettings *settings;
 };
 
-class SnmpbAgentLog: public QObject, public AgentLog
+class SnmpbAgentLog: public AgentLog
 {
-    Q_OBJECT
-
 public:
-    SnmpbAgentLog(QTextEdit *out)
-    {
-        connect(this, SIGNAL ( SendLog(QString) ), 
-                out, SLOT ( append (QString) ));
-    }
+    SnmpbAgentLog() = default;
 
     ~SnmpbAgentLog() {}
 
@@ -67,12 +62,11 @@ public:
 
     AgentLog& operator+=(const LogEntry *log)
     {
-        emit SendLog(log->get_value());
+        if (log) DiagnosticLogger::log(QStringLiteral("SNMP++"),
+            DiagnosticLogger::redactLibraryMessage(QString::fromUtf8(log->get_value())));
         return *this;
     }
 
-signals:
-    void SendLog(QString str);
 };
 
 #endif /* LOGSNMPB_H */

@@ -30,6 +30,7 @@ public:
         QWidget *search = nullptr;
         QWidget *traps = nullptr;
         QWidget *watch = nullptr; // permanent local Query tab
+        QWidget *macros = nullptr; // offline definitions; execution is owned outside the widget
     };
     struct BottomPages {
         QWidget *output = nullptr;

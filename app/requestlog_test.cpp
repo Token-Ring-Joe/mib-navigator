@@ -55,5 +55,9 @@ int main(int argc, char **argv)
                 "the log exports as tab-separated text, one line per request");
     log.clear();
     ok &= check(log.entries().isEmpty() && cleared == 1, "clearing empties the log");
+    const auto refused = log.begin("Macro / GET", "target:161", "Lab credential", "1.3.6.1.0");
+    log.finish(refused, "Authentication failed without a wire REPORT", 0, RequestOutcome::Refused);
+    ok &= check(log.entry(refused)->outcome == RequestOutcome::Refused,
+                "typed macro request outcomes preserve security refusal independently of translated wording");
     return ok ? 0 : 1;
 }

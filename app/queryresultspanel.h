@@ -18,6 +18,12 @@ class QTableWidgetItem;
 struct QueryResultValue
 {
     QString object, instance, oid, syntax, type, interpreted, raw, received, warnings, time;
+    QString id, problem; // Stable row identity and an unavailable-read explanation.
+};
+
+struct QueryResultGroup {
+    QString id, name, status;
+    QList<QueryResultValue> values;
 };
 struct QueryResultTableRow
 {
@@ -30,13 +36,15 @@ class QueryResultsPanel : public QWidget
     Q_OBJECT
 public:
     enum Role { OidRole = Qt::UserRole + 1, InterpretedRole, RawRole, WarningRole,
-                SearchRole, MissingRole, SortRole };
+                SearchRole, MissingRole, SortRole, IdentityRole, ProblemRole };
     explicit QueryResultsPanel(QWidget *parent = nullptr);
     void addControl(QWidget *widget);
     void beginQuery(const QString &object, const QString &oid);
     void appendValue(const QueryResultValue &value);
     void showTable(const QStringList &columns, const QList<QueryResultTableRow> &rows);
     void finishQuery();
+    void beginGroups(const QString &name, const QString &captured);
+    void updateGroups(const QList<QueryResultGroup> &groups, const QString &status, bool failed = false);
     QTableWidget *table() const { return results; }
     bool isTableResult() const { return tableMode; }
     QString oidAt(int row, int column) const;
@@ -55,9 +63,13 @@ private:
     void updateSummary();
     void showColumnMenu(const QPoint &position);
     void showValueMenu(const QPoint &position);
+    void showGroup();
     QHBoxLayout *controls;
     QTableWidget *results;
     QLabel *summary;
+    QLabel *groupContext, *groupStatus;
+    QComboBox *groupSelector;
+    QList<QueryResultGroup> groups;
     QLineEdit *filter;
     QComboBox *display;
     QElapsedTimer elapsed;

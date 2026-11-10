@@ -193,6 +193,18 @@ int main(int argc, char **argv)
         ok &= check(service.unfollowFolders(id, {aruba}, &error) && service.find(id)->folders.size() == 1 &&
                     service.find(id)->folders.at(0).canonicalPath == fabric,
                     "a followed folder can be removed");
+        {
+            MibProviderPin pin; pin.canonicalPath = fabric + "/old.mib"; pin.sha256 = "abc"; pin.reason = "chosen in test";
+            ok &= check(service.pinProvider(id, "DUP-MIB", pin, &error) && service.find(id)->providerPins.contains("DUP-MIB"),
+                        "a Custom profile can choose which copy of a module it uses");
+            MibProfileService reloaded{MibProfileRepository(profilesPath)};
+            ok &= check(reloaded.find(id) && reloaded.find(id)->providerPins.value("DUP-MIB").canonicalPath == pin.canonicalPath &&
+                        reloaded.find(id)->folders.size() == 1, "the chosen copy is saved with the profile and survives a restart");
+            ok &= check(!service.pinProvider("standards", "DUP-MIB", pin, &error) && !service.pinProvider(id, "", pin, &error),
+                        "built-in profiles and incomplete choices are refused");
+            ok &= check(service.unpinProvider(id, "DUP-MIB", &error) && service.find(id)->providerPins.isEmpty() &&
+                        !service.unpinProvider(id, "DUP-MIB", &error), "a chosen copy can be released");
+        }
         ok &= check(service.remove(copy, &error) &&
                     !readAll(foldersPath).contains(copy.toUtf8()),
                     "deleting a profile removes its followed folders from the companion file");

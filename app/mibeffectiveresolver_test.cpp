@@ -363,18 +363,19 @@ int main(int argc, char **argv)
     const auto editedConflict = resolver.resolve(editedConflictInput, index);
     bool conflictReported = false, modifiedReported = false;
     for (const auto &finding : editedConflict.resolutionDiagnostics) {
-        conflictReported |= finding.tier == MibPlanResolutionTier::Ambiguous;
+        conflictReported |= finding.tier == MibPlanResolutionTier::NewestRevision;
         modifiedReported |= finding.tier == MibPlanResolutionTier::ModifiedRoot;
     }
-    ok &= check(conflictReported && modifiedReported && editedConflict.ambiguousModules.contains("REV-MIB"),
-                "a Modified note cannot hide the same module's conflict warning");
+    ok &= check(conflictReported && modifiedReported && editedConflict.resolvedByRevision("REV-MIB") &&
+                !editedConflict.ambiguousModules.contains("REV-MIB"),
+                "a Modified note cannot hide the same module's conflict finding; a newer revision resolves it");
     editedConflictInput.roots = MibProfileMembersFromFiles({oldRevision, newRevision});
     editedConflictInput.roots.first().sha256 = QString(64, 'f');
     const auto modifiedLoser = resolver.resolve(editedConflictInput, index);
     bool shadowedClaimedLoaded = false;
     for (const auto &finding : modifiedLoser.resolutionDiagnostics)
         shadowedClaimedLoaded |= finding.tier == MibPlanResolutionTier::ModifiedRoot;
-    ok &= check(!shadowedClaimedLoaded && modifiedLoser.ambiguousModules.contains("REV-MIB"),
+    ok &= check(!shadowedClaimedLoaded && modifiedLoser.resolvedByRevision("REV-MIB"),
                 "a shadowed modified duplicate is explained as a conflict, never claimed to be loaded");
     MibEffectivePlanResolverInput staleConflictInput;
     staleConflictInput.id = "stale-pin-conflict";
@@ -385,7 +386,7 @@ int main(int argc, char **argv)
     bool staleReported = false; conflictReported = false;
     for (const auto &finding : staleConflict.resolutionDiagnostics) {
         staleReported |= finding.tier == MibPlanResolutionTier::StalePin;
-        conflictReported |= finding.tier == MibPlanResolutionTier::Ambiguous;
+        conflictReported |= finding.tier == MibPlanResolutionTier::NewestRevision;
     }
     ok &= check(staleReported && conflictReported && fileProviding(staleConflict, "REV-MIB") &&
                 fileProviding(staleConflict, "REV-MIB")->canonicalPath == newRevision,
@@ -398,6 +399,12 @@ int main(int argc, char **argv)
         const auto *chosen = fileProviding(fallback, "REV-MIB");
         ok &= check(chosen && chosen->canonicalPath == oldRevision,
                     "equal or missing revisions fall back to path");
+        const auto *tie = diagnostic(fallback, "REV-MIB");
+        // (The first variant is byte-identical to the other copy, so there is nothing to resolve.)
+        ok &= check(date == QByteArray("9901010000Z") ||
+                    (tie && tie->tier == MibPlanResolutionTier::Ambiguous && !fallback.resolvedByRevision("REV-MIB") &&
+                     fallback.ambiguousModules.contains("REV-MIB")),
+                    "when revisions cannot decide, the conflict stays unresolved");
     }
 
     // Each declaration has its own date; fake clauses in comments/descriptions do not count.

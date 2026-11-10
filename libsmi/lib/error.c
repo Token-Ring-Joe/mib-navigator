@@ -1126,12 +1126,15 @@ printError(Parser *parser, int id, int line, va_list ap)
                         smiVasprintf(&buffer, errors[i].fmt, ap);
                         (smiHandle->errorHandler) (parser->path, line,
                         errors[i].level, buffer, errors[i].tag);
+                        /* The handler borrows the formatted message for this call. */
+                        smiFree(buffer);
         }
     } else {
             if (errors[i].level <= smiHandle->errorLevel) {
                 smiVasprintf(&buffer, errors[i].fmt, ap);
                 (smiHandle->errorHandler) (NULL, 0, errors[i].level,
                                buffer, errors[i].tag);
+                smiFree(buffer);
             }
     }
 }

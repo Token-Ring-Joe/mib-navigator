@@ -2,6 +2,7 @@
 #include <QRegularExpressionValidator>
 #include <QRegularExpression>
 #include "queryresultspanel.h"
+#include "querymacrorunner.h"
 /*
     Copyright (C) 2004-2011 Martin Jolicoeur (snmpb1@gmail.com) 
 
@@ -158,6 +159,38 @@ Agent::Agent(Snmpb *snmpb, bool offline_mode)
     singleRunner = new SnmpSingleAsyncRunner(this);
     connect(singleRunner, &SnmpSingleAsyncRunner::completed,
             this, &Agent::PresentSingleResult);
+    macroRunner = new QueryMacroRunner(this);
+    macroRunner->setObjectName("QueryMacroRunner");
+    connect(this, &Agent::StartWalk, this, &Agent::foregroundBusyChanged);
+    connect(macroRunner, &QueryMacroRunner::started, this, [this] {
+        const auto &run = macroRunner->snapshot();
+        lastTable.clear();
+        if (s->Results()) s->Results()->beginGroups(tr("Macro: %1").arg(run.name),
+            tr("Target: %1  |  Credential: %2  |  MIB Profile: %3  |  Started: %4")
+                .arg(run.target, run.credential, run.profile, run.started.toString(Qt::ISODateWithMs)));
+        s->MainUI()->Query->append(tr("Macro started: %1").arg(run.name).toHtmlEscaped());
+        stop = false; s->MainUI()->actionStop->setEnabled(true); emit StartWalk(true);
+    });
+    connect(macroRunner, &QueryMacroRunner::requestStarted, this, [this](const QStringList &oids) {
+        if (!requestLog) return;
+        const auto &run = macroRunner->snapshot();
+        activeLogId = requestLog->begin(tr("Macro %1 / Objects and values / GET").arg(run.name),
+            run.target, run.credential, oids.join(QStringLiteral(", ")));
+    });
+    connect(macroRunner, &QueryMacroRunner::requestFinished, this,
+        [this](const QString &detail, int count, bool failed, bool timeout, bool refused) {
+            if (requestLog && activeLogId) requestLog->finish(activeLogId, detail.toHtmlEscaped(), count,
+                refused ? RequestOutcome::Refused : timeout ? RequestOutcome::TimedOut
+                : failed ? RequestOutcome::Failed : RequestOutcome::Succeeded);
+            activeLogId = 0;
+        });
+    connect(macroRunner, &QueryMacroRunner::changed, this, &Agent::PresentMacroResult);
+    connect(macroRunner, &QueryMacroRunner::completed, this, [this] {
+        if (s->Results()) s->Results()->finishQuery();
+        const auto &run = macroRunner->snapshot();
+        s->MainUI()->Query->append(run.summary().toHtmlEscaped());
+        activeRequestContext.reset(); s->MainUI()->actionStop->setEnabled(false); emit StartWalk(false);
+    });
     walkRunner = new SnmpWalkAsyncRunner(this);
     connect(walkRunner, &SnmpWalkAsyncRunner::progress,
             this, &Agent::PresentWalkBatch);
@@ -189,7 +222,8 @@ Agent::Agent(Snmpb *snmpb, bool offline_mode)
         if (status != SNMP_CLASS_SUCCESS)
         {
             status2 = status;
-            // Try dropping IPv6
+            // Try dropping IPv6; the failed session is still owned here.
+            delete snmp;
             snmp = new Snmp(status, UdpAddress("0.0.0.0"));
             if (status != SNMP_CLASS_SUCCESS)
             {
@@ -197,7 +231,8 @@ Agent::Agent(Snmpb *snmpb, bool offline_mode)
                                     .arg(Snmp::error_msg(status));
                 // Disable IPv4, for the current run only
                 s->PreferencesObj()->SetEnableIPv4(false);
-                // Try dropping IPv4
+                // Try dropping IPv4.
+                delete snmp;
                 snmp = new Snmp(status, UdpAddress("::"));
                 if (status != SNMP_CLASS_SUCCESS)
                 {
@@ -383,7 +418,7 @@ void Agent::Init(void)
         QString err = tr("Error loading snmpEngineBoots counter: %1\n")
                               .arg(status);
         QMessageBox::warning ( NULL, "MIB Navigator", err,
-                               QMessageBox::Ok, Qt::NoButton);
+                               QMessageBox::Ok);
     }
     
     // increase the boot counter
@@ -397,7 +432,7 @@ void Agent::Init(void)
         QString err = tr("Error saving snmpEngineBoots counter: %1\n")
                               .arg(status);
         QMessageBox::warning ( NULL, "MIB Navigator", err,
-                               QMessageBox::Ok, Qt::NoButton);
+                               QMessageBox::Ok);
     }
     
     // If _SNMPv3 is enabled we MUST create ONE v3MP object!
@@ -407,7 +442,7 @@ void Agent::Init(void)
         QString err = tr("Could not create v3MP object:\n%1")
                               .arg(QString::fromLatin1(Snmp::error_msg(status)));
         QMessageBox::warning ( NULL, "MIB Navigator", err,
-                               QMessageBox::Ok, Qt::NoButton);
+                               QMessageBox::Ok);
     }
     
     // The v3MP creates a USM object, get the pointer to it
@@ -484,8 +519,12 @@ Agent::~Agent()
     walkRunner = nullptr;
     delete singleRunner;
     singleRunner = nullptr;
+    delete macroRunner;
+    macroRunner = nullptr;
     delete snmp;
     snmp = nullptr;
+    delete vbui; // Generated Ui wrapper; the dialog owns its widgets.
+    vbui = nullptr;
     Snmp::socket_cleanup();
 }
 
@@ -499,6 +538,7 @@ void Agent::Shutdown()
     if (tableRunner) tableRunner->cancel();
     if (instanceRunner) instanceRunner->cancel();
     if (walkRunner) walkRunner->cancel();
+    if (macroRunner) macroRunner->shutdown();
     DiagnosticLogger::log("Traps", "Agent cooperative shutdown end", false);
 }
 
@@ -539,7 +579,7 @@ int Agent::Setup(const AgentRequestSelection &selection, const QString& oid,
         QString err = tr("Invalid Address or DNS Name: %1\n")
                               .arg(config.address);
         QMessageBox::warning ( NULL, "MIB Navigator", err,
-                               QMessageBox::Ok, Qt::NoButton);
+                               QMessageBox::Ok);
         return -1;
     }
 
@@ -600,6 +640,70 @@ void Agent::BeginRequest(const SnmpRequestConfig &config,
     if (s->Results()) s->Results()->beginQuery(name + QStringLiteral(" ") +
         (theoid.valid() ? RenderMibOid(activeRequestContext->environment(), theoid) : tr("multiple objects")), numeric);
     activeLogId = startLog(name, config, numeric);
+    emit foregroundBusyChanged(true);
+}
+
+bool Agent::ForegroundQueryBusy() const
+{
+    return shutdownComplete || activeRequestContext || tableQueryPending ||
+        (singleRunner && singleRunner->isBusy()) || (walkRunner && walkRunner->isBusy()) ||
+        (tableRunner && tableRunner->isRunning()) || (instanceRunner && instanceRunner->isRunning()) ||
+        (macroRunner && macroRunner->isBusy());
+}
+
+void Agent::RunMacro(const QueryMacroDefinition &definition)
+{
+    if (ForegroundQueryBusy()) { emit macroRejected(tr("Another query is running. Stop it or wait before running a macro.")); return; }
+    if (offline || !snmp) {
+        emit macroRejected(tr("SNMP transport is unavailable in this session. Previous results have been kept.")); return;
+    }
+    AgentRequestSelection selection;
+    if (ResolveCurrentSelection(&selection) != AgentSelectionError::None) {
+        emit macroRejected(ConnectionModel::errorText(lastConnectionError)); return;
+    }
+    SnmpRequestConfig config;
+    if (!selection.requestConfig(&config) || !UdpAddress(config.endpoint().toLatin1().constData()).valid()) {
+        emit macroRejected(tr("The target or credential is invalid. Previous results have been kept.")); return;
+    }
+    const auto environment = MibEnvironmentRegistry::active();
+    if (!connectionBar || !environment || environment->profileId() != connectionBar->mibProfileId()) {
+        emit macroRejected(tr("The selected MIB Profile is still loading or unavailable. Wait for it to finish, or choose another Profile. Previous results have been kept."));
+        return;
+    }
+    activeRequestContext = std::make_unique<SnmpRequestContext>(config, SnmpRequestOperation::Get, environment);
+    QString error;
+    const QString target = config.address.contains(':') ? QStringLiteral("[%1]:%2").arg(config.address, config.port)
+                                                       : QStringLiteral("%1:%2").arg(config.address, config.port);
+    if (!macroRunner->start(definition, *activeRequestContext, target,
+            connectionBar->credentialLabel(), connectionBar->mibProfileLabel(),
+            [](const SnmpRequestConfig &captured) { return std::make_unique<SnmpPlusTransport>(captured); }, &error)) {
+        activeRequestContext.reset(); emit macroRejected(error); return;
+    }
+    if (connectionBar) connectionBar->rememberCurrentTarget();
+}
+
+void Agent::PresentMacroResult()
+{
+    const auto &run = macroRunner->snapshot();
+    QList<QueryResultGroup> groups;
+    for (const auto &source : run.groups) {
+        QueryResultGroup group; group.id = source.id; group.name = source.name; group.status = source.problem;
+        for (const auto &read : source.reads) {
+            if (!read.finished) continue;
+            QueryResultValue value;
+            const Oid oid(read.oid.toLatin1().constData());
+            if (read.value) {
+                value = resultValue(ResolveMibObject(run.environment, oid), oid, *read.value);
+                value.time = read.received.toString(QStringLiteral("HH:mm:ss.zzz"));
+            } else { value.oid = read.oid; value.object = read.oid; value.problem = read.problem; }
+            value.id = read.id;
+            if (!read.label.isEmpty()) value.object = read.label;
+            group.values.append(value);
+        }
+        groups.append(group);
+    }
+    if (s->Results()) s->Results()->updateGroups(groups, run.summary(),
+        run.state == QueryMacroRunState::Partial || run.state == QueryMacroRunState::Failed || run.state == QueryMacroRunState::Refused);
 }
 
 void Agent::finishLog(const QString &resultHtml, int objectCount)
@@ -808,7 +912,7 @@ void Agent::ReleaseResultSorting()
 
 void Agent::WalkFrom(const QString& oid)
 {
-    if (activeRequestContext || tableQueryPending || walkRunner->isBusy())
+    if (ForegroundQueryBusy())
         return;
     SnmpRequestConfig requestConfig;
 
@@ -912,7 +1016,7 @@ void Agent::GetBulk(const QString& oid, bool usevblist)
 // PresentSingleResult. A request already in flight is not replaced.
 void Agent::RunSingleRequest(const QString& oid, bool usevblist, SnmpRequestOperation operation)
 {
-    if (activeRequestContext || tableQueryPending || singleRunner->isBusy())
+    if (ForegroundQueryBusy())
         return;
     SnmpRequestConfig requestConfig;
 
@@ -955,6 +1059,7 @@ void Agent::RunSingleRequest(const QString& oid, bool usevblist, SnmpRequestOper
         presentRequestStatus(s, msg, 0);
         finishLog(msg, 0);
         activeRequestContext.reset();
+        emit foregroundBusyChanged(false);
     }
 }
 
@@ -990,6 +1095,7 @@ void Agent::FinishQuery(const SnmpQueryText &text, bool restoreControls)
         s->MainUI()->actionStop->setEnabled(false);
     }
     activeRequestContext.reset();
+    emit foregroundBusyChanged(false);
 }
 
 void Agent::Set(const QString& oid, bool usevblist)
@@ -1022,6 +1128,7 @@ void Agent::SetFrom(const QString& oid)
 void Agent::Stop(void)
 {
     stop = true;
+    if (macroRunner) macroRunner->cancel();
     if (tableRunner)
         tableRunner->cancel();
     if (instanceRunner)
@@ -1035,7 +1142,7 @@ void Agent::TableRowSelectFrom(const QString& oid) { QueryTableFrom(oid, true); 
 
 void Agent::QueryTableFrom(const QString &oid, bool selectInstance)
 {
-    if (activeRequestContext || tableQueryPending || tableRunner->isRunning() || instanceRunner->isRunning())
+    if (ForegroundQueryBusy())
         return;
     AgentRequestSelection selection;
     if (!ResolveForRequest(&selection))
@@ -1309,7 +1416,7 @@ void Agent::VarbindsEdit(void)
     {
         QMessageBox::critical( NULL, tr("Edit VarBind"),
                 tr("Please select only one VarBind"),
-                QMessageBox::Ok, Qt::NoButton);
+                QMessageBox::Ok);
         return;
     }
 
@@ -1588,6 +1695,7 @@ void Agent::PresentInstanceResult(const SnmpInstanceResult &result)
 
 int Agent::SelectTableInstance(const QString &oid, QString &outinstance)
 {
+    if (ForegroundQueryBusy()) return 0;
     AgentRequestSelection selection;
     if (!ResolveForRequest(&selection)) return 0;
     SnmpTarget *target;
@@ -1635,7 +1743,7 @@ int Agent::SelectTableInstance(const QString &oid, QString &outinstance)
 
 void Agent::GetFromSelectInstance(const QString& oid, int op)
 {
-    if (activeRequestContext || tableQueryPending || instanceRunner->isRunning()) return;
+    if (ForegroundQueryBusy()) return;
     AgentRequestSelection selection;
     if (!ResolveForRequest(&selection)) return;
     SnmpTarget *target;

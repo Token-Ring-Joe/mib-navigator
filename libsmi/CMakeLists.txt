@@ -98,6 +98,10 @@ target_link_libraries(snmpb_smilint
 
 if(BUILD_TESTING)
 
+    add_executable(snmpb_smi_diagnostic_lifetime_test tests/diagnostic-lifetime.c)
+    target_link_libraries(snmpb_smi_diagnostic_lifetime_test PRIVATE snmpb_libsmi)
+    add_test(NAME libsmi.diagnostic-lifetime COMMAND snmpb_smi_diagnostic_lifetime_test)
+
     set(SMILINT_REGRESSION_MIBS
         SNMPv2-MIB
         IF-MIB

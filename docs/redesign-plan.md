@@ -5,7 +5,7 @@ product direction and build order. Where older design documents in `docs/`
 disagree with it, this document wins. Standing engineering rules remain in
 `AGENTS.md`.
 
-## Current checkpoint — 2026-11-07
+## Current checkpoint — 2026-11-08
 
 Phase 4 is active. The main visual refresh, Menus/Settings/Help, Library/Profiles
 cleanup and dialog consistency are implemented. The 2026-11-07 finishing pass
@@ -16,13 +16,63 @@ validated artifact are recorded in
 reports are historical checkpoints, and their temporary install paths may have
 been lost at reboot.
 
+### MIBs page rework (2026-11-09, owner feedback rounds 1-3)
+
+The Library is now viewed from a profile's point of view, because conflicts only
+matter to a profile that cannot choose between copies.
+
+- **View chooser** on the search row: Active profile, Entire collection, or any
+  profile by name (no "Profile:" prefix). Status, "In Profiles", Source file and
+  Filename are judged for that view. Columns are manually resizable and remembered.
+- **Library folder location is a Preference** (Preferences > MIB Library), not a
+  Library-page control. Changing it re-bases the Library, Profiles, search and Tree and
+  asks for confirmation. The Library page keeps only Open MIB Folder.
+- **One search box** on the Query page searches MIBs by name or OID; a numeric OID
+  the tree knows is selected directly. The separate Go to OID box and its shortcut
+  are gone.
+- **Providers tab** lists the files that provide the selected module: those the viewed
+  profile can reach (Used / Candidate / Older copy), with copies outside the profile
+  hidden unless "Show copies outside this profile" is ticked. File Information describes
+  the file the view uses (folder, real filename), not the global record.
+- **Compare Selected Copies** opens a read-only side-by-side diff. A full merge in the
+  Editor remains undecided.
+- **Conflict rule (owner decision 2026-11-09):** among the different copies of a module
+  that a profile can reach, the copy with the strictly newest revision is used and the
+  module is reported as a **Resolved conflict** (information only). Ties and copies
+  without a readable revision date stay an unresolved **Conflict**. An explicit pin on a
+  Custom profile still wins. **Use This Copy** pins a copy (Automatic profiles first offer
+  an editable Custom copy) and leaves out the other listed copies.
+- **Member state wording** on Profiles: "Changed since added" now means only that the
+  file's own content changed; unused unchanged files read "Older copy" or "Conflict".
+- **Responsiveness:** plan lookups are memoized and cached and Refresh scans on a worker
+  thread (real Extreme collection: refresh 58 s to about 2 s, profile switch 20 s to
+  about 1.4 s). The Library rescans when the window is reactivated and files changed.
+
 [Query Macros v1](query-macros-v1-design.md) now has a concrete scope, architecture,
 four-milestone sequence and effort estimate agreed by the owner on 2026-11-07.
-Implementation remains deferred. Watch-all/table expansion remains a separate deferred discussion.
+Milestone 1 is implemented and validated. The owner authorized milestone 2
+on 2026-11-08: captured scalar/exact runs, grouped Results, Stop and request
+logging. See [the milestone 2 checkpoint](query-macros-milestone-2.md). Table
+retrieval and legacy-dialog retirement remain milestones 3 and 4. Watch-all/table
+expansion remains a separate deferred discussion.
 The owner approved the accumulated work and authorized its commit on 2026-11-07.
 Cross-platform release validation and any remaining native/lab acceptance are
 still outstanding; approval does not claim those tests were performed. See the
 [current outstanding-task inventory](outstanding-tasks.md).
+
+The autonomous five-item follow-up (2026-11-07) implements the global context
+preference, saved Watch definitions, selected-row intervals, Problems tools and
+consistent library diagnostic logging. See [its validation record](autonomous-five-validation.md).
+That checkpoint preceded the current Query Macros milestone. The separate
+Watch-column/table design remains deferred.
+
+The next five-item maintenance/release batch (2026-11-07) addresses Qt/unchecked
+return warnings, measured diagnostic/UI leaks, broader shared value checking,
+Linux archive verification and stale documentation. Its evidence/status is in
+[maintenance-five-validation.md](maintenance-five-validation.md). Query Macros
+milestone 1 was authorized after the resulting status review. See
+[the current checkpoint and working notes](query-macros-milestone-1.md). No push, publication,
+real-device test or desktop launch is included.
 
 ## Product intent
 
@@ -77,9 +127,10 @@ Obsolete design documents (historical record only): `device-manager.md`,
 - **Detect** button next to the MIB Profile dropdown (see Phase 3).
 - Port, timeout, retries, GETBULK max-repetitions, and transport are **global
   settings** reached from the menu bar. They are not shown in the main window.
-  Planned: expose SNMPv3 context name as a global setting. The current
-  connection bar creates requests with the default empty context; its preference
-  control is not implemented yet. Per-query context may be considered later.
+  SNMPv3 context name is a global Preferences setting (implemented 2026-11-07).
+  Empty keeps the default context. New operations capture its exact UTF-8 value;
+  existing operations and Watch rows keep their captured context. Per-query
+  context remains a later possibility.
 
 ### Traps
 
@@ -118,7 +169,7 @@ vendor names or enterprise numbers. Mapping comes from the MIB collection.
 File  Edit  View  MIB  SNMP  Settings  Help
 Target [...]  Credential [...]  MIB Profile [...] [Detect]   (activity) [Show panel]
 [Query] [MIBs] [Traps]
-Query: OID navigation and collection search; MIB tree | [Results] [Watch] [Search when open] | Inspector
+Query: OID navigation and collection search; MIB tree | [Results] [Watch] [Macros] [Search when open] | Inspector
 MIBs:  [Library] [Profiles] [Editor]
 Traps: trap list and selected trap details
 [Output] [Log]                                (shared panel; collapsed initially)
@@ -190,19 +241,21 @@ It preserves normal Tab order and fixes restored windows whose lower controls we
 off-screen. See [finishing validation](finish-review-validation.md). No general
 compact-density preference is introduced.
 
-## Deferred feature priority
+## Query Macros priority and milestone boundary
 
-Query Macros is a high-priority deferred feature (owner decision, 2026-11-04),
+Query Macros is the current authorized feature (original owner priority, 2026-11-04),
 near the top of `todo.txt`. Named persistent collections describe what to read;
 the connection bar supplies Target, Credential and MIB Profile when run.
 Bulk-style grouped results, scalar .0 resolution and table instance choices
 (all, choose at run time, fixed) are the intended direction. Unrelated indexes
 remain separate and unknown numeric OIDs need explicit instances. Query Macros
 is read-focused; it replaces the current temporary multiple-varbind workflow.
-Do not implement it until the other reported menu/Help/Preferences issues are
-fixed and its final design/estimate is agreed. The agreed design and estimate
-are in [query-macros-v1-design.md](query-macros-v1-design.md); the owner agreed them
-on 2026-11-07 and implementation remains deferred. Existing single-object SET remains.
+The menu/Help/Preferences work and design/estimate review preceded authorization.
+The [agreed design](query-macros-v1-design.md) separates four working milestones.
+Milestone 1 is implemented. The owner authorized milestone 2 on 2026-11-08:
+captured scalar/exact-instance runs, grouped Results, Stop and request logging.
+Table retrieval and legacy-dialog retirement remain milestones 3 and 4. Existing
+single-object SET remains.
 
 ## Build order
 
@@ -325,8 +378,11 @@ into smaller steps, each with its own working build.
     retargets a row (`snmpb.watch-service`, `snmpb.watch-calculator`, and the loopback
     scenario, which points the bar elsewhere while a watch keeps polling). Watch now
     starts from both Tree and Results and lives beside Results inside Query (18b).
-    Remaining: saved watches, per-row interval editing, and the separately deferred
-    column/table Watch expansion.
+    Follow-up (2026-11-07): definitions save atomically without secrets or results,
+    restore paused, and support per-row interval editing. New Watch rows capture
+    the resolved port and context as well as their credential reference. Corrupt/
+    newer stores and external edits are preserved with a visible error. Column/
+    table Watch expansion remains a separate deferred design.
 11. **Traps**: Copy source IP, plus raw/interpreted varbinds from step 9.
     Implemented (2026-11-03): typed SNMP++ value copies retain exact binary data
     and Counter64 precision; the shared MIB renderer/checker supplies interpreted
@@ -371,7 +427,9 @@ into smaller steps, each with its own working build.
     loading, a structured problem report with parser line numbers, and a
     Problems tab (see `mib-architecture.md`). Provider conflict reports now name
     candidates, revisions and the chosen provider (18a-4); Problems is MIB-only
-    (18b). Further filtering/sorting and copy/export remain refinements.*
+    (18b). Follow-up (2026-11-07): text/severity filters, semantic severity sorting
+    and CSV copy/export operate on the published report. Exports snapshot the
+    visible sort/filter before the file chooser and retain full source details.*
 14. **Collection-wide search** (#7) by name, qualified name, or numeric OID
     across the whole MIB collection, not only the loaded tree. Results say which
     module and which profiles contain the match. *Done (2026-10-31):* the "Search all

@@ -1,3 +1,4 @@
+#include <QTimeZone>
 #include "mibservice.h"
 #include "mibservice_internal.h"
 #include "mibdiagnosticmodel.h"
@@ -148,7 +149,7 @@ int main(int argc, char **argv)
           accounting.description.contains("collection and storage of"),
           "organization/contact/description preserve multiline metadata");
     check(accounting.lastRevision.toUTC() ==
-          QDateTime(QDate(1998, 9, 28), QTime(10, 0), Qt::UTC) &&
+          QDateTime(QDate(1998, 9, 28), QTime(10, 0), QTimeZone::UTC) &&
           !accounting.revisions.isEmpty(), "latest revision date snapshot");
     const MibModuleRecord bridge = SnapshotMibModule(smiGetModule("BRIDGE-MIB"));
     check(bridge.name == "BRIDGE-MIB" && bridge.reference.isEmpty(),

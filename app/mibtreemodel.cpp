@@ -131,16 +131,18 @@ MibTreeFilterModel::MibTreeFilterModel(QObject *parent) : QSortFilterProxyModel(
 
 void MibTreeFilterModel::setVisibleModules(const QStringList &modules)
 {
+    beginFilterChange();
     moduleFilterEnabled = true;
     allowedModules = QSet<QString>(modules.cbegin(), modules.cend());
-    invalidateFilter();
+    endFilterChange(QSortFilterProxyModel::Direction::Rows);
 }
 
 void MibTreeFilterModel::showAllModules()
 {
+    beginFilterChange();
     moduleFilterEnabled = false;
     allowedModules.clear();
-    invalidateFilter();
+    endFilterChange(QSortFilterProxyModel::Direction::Rows);
 }
 
 bool MibTreeFilterModel::acceptsModuleOrDescendant(const QModelIndex &sourceIndex) const

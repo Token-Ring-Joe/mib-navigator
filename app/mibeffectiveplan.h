@@ -128,7 +128,11 @@ enum class MibPlanResolutionTier { Root, ExplicitPin, RequesterDirectory, Reques
                                   // A module the profile lists that the Library cannot supply.
                                   ListedNotFound,
                                   // A folder the profile follows that does not exist.
-                                  FolderNotFound };
+                                  FolderNotFound,
+                                  // Several different copies of a module are reachable, and exactly one
+                                  // has the newest revision. That copy is used. Resolved, informational:
+                                  // contrast Ambiguous, where no rule can pick one.
+                                  NewestRevision };
 
 struct MibPlanResolutionDiagnostic {
     QString identity;
@@ -206,6 +210,12 @@ struct MibEffectivePlan {
     bool hasResolverInput = false;
 
     const MibEffectivePlanMember *member(const QString &identity) const;
+    // True when the module has several different copies and the newest revision decided between them.
+    bool resolvedByRevision(const QString &identity) const {
+        for (const auto &finding : resolutionDiagnostics)
+            if (finding.tier == MibPlanResolutionTier::NewestRevision && finding.identity == identity) return true;
+        return false;
+    }
     bool isComplete() const { return authorityError.isEmpty() && converged && missingModules.isEmpty() &&
         ambiguousModules.isEmpty() && pinFailureModules.isEmpty(); }
 };

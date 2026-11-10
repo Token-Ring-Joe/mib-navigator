@@ -971,6 +971,32 @@ bool MibProfileService::unfollowFolders(const QString &id, const QStringList &fo
     return update(changed, error);
 }
 
+bool MibProfileService::pinProvider(const QString &id, const QString &module, const MibProviderPin &pin, QString *error)
+{
+    const MibProfileRecord *current = find(id);
+    if (!current || current->type != MibProfileType::Custom || isBuiltIn(id)) {
+        if (error) *error = QObject::tr("Only a Custom profile can choose a copy of a module.");
+        return false;
+    }
+    if (module.isEmpty() || pin.canonicalPath.isEmpty()) {
+        if (error) *error = QObject::tr("A module and a file are needed to choose a copy.");
+        return false;
+    }
+    MibProfileRecord changed = *current;
+    changed.providerPins.insert(module, pin);
+    return update(changed, error);
+}
+
+bool MibProfileService::unpinProvider(const QString &id, const QString &module, QString *error)
+{
+    const MibProfileRecord *current = find(id);
+    if (!current || current->type != MibProfileType::Custom || isBuiltIn(id) || !current->providerPins.contains(module))
+        return false;
+    MibProfileRecord changed = *current;
+    changed.providerPins.remove(module);
+    return update(changed, error);
+}
+
 bool MibProfileService::setFilesExcluded(const QString &id, const QStringList &files, bool excluded,
                                          QString *error)
 {

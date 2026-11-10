@@ -1,3 +1,4 @@
+#include <QTimeZone>
 #include "mibenvironmentextractor.h"
 #include "mibengine.h"
 #include "mibparsernodesafety.h"
@@ -342,7 +343,7 @@ MibEnvironmentPtr MibEnvironmentExtractor::extract(const MibEffectivePlan &plan,
         }
         for (SmiRevision *revision = smiGetFirstRevision(module); revision;
              revision = smiGetNextRevision(revision)) {
-            MibEnvironmentRevisionRecord value{QDateTime::fromSecsSinceEpoch(revision->date, Qt::UTC),
+            MibEnvironmentRevisionRecord value{QDateTime::fromSecsSinceEpoch(revision->date, QTimeZone::UTC),
                                                 text(revision->description)};
             record.revisions.append(value);
             if (!record.lastUpdated.isValid() || value.date > record.lastUpdated) record.lastUpdated = value.date;

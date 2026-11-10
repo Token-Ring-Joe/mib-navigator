@@ -14,8 +14,11 @@ bool check(bool value, const char *message)
 QString touch(const QDir &root, const QString &relative)
 {
     const QString path = root.filePath(relative);
-    QDir().mkpath(QFileInfo(path).absolutePath());
-    QFile file(path); file.open(QIODevice::WriteOnly); file.write("x");
+    if (!QDir().mkpath(QFileInfo(path).absolutePath()))
+        qFatal("Cannot create test fixture directory");
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly) || file.write("x") != 1)
+        qFatal("Cannot write test fixture %s: %s", qPrintable(path), qPrintable(file.errorString()));
     return QFileInfo(path).canonicalFilePath();
 }
 

@@ -20,6 +20,14 @@
 */
 #include <QCoreApplication>
 #include <QDir>
+#include <QFileDialog>
+#include <QGroupBox>
+#include <QHBoxLayout>
+#include <QLineEdit>
+#include <QSettings>
+#include <QLabel>
+#include "mibcollection.h"
+#include "miblibrarywidget.h"
 #include <QMessageBox>
 #include <QPushButton>
 #include "preferences.h"
@@ -52,6 +60,24 @@ void Preferences::Init()
         [this](QTreeWidgetItem *item) {
             if (item) p->PreferencesProps->setCurrentIndex(p->PreferencesTree->indexOfTopLevelItem(item));
         });
+    // MIB Library location: a global setting that re-bases the whole MIB collection.
+    if (auto *general = pw->findChild<QWidget *>("GeneralProps"); general && general->layout()) {
+        auto *group = new QGroupBox(tr("MIB Library"), general);
+        auto *row = new QHBoxLayout(group);
+        libraryRoot = new QLineEdit(group); libraryRoot->setObjectName("PreferencesLibraryRoot");
+        libraryRoot->setAccessibleName(tr("MIB Library location"));
+        auto *browse = new QPushButton(tr("Browse..."), group); browse->setObjectName("PreferencesLibraryBrowse");
+        row->addWidget(libraryRoot, 1); row->addWidget(browse);
+        qobject_cast<QVBoxLayout *>(general->layout())->insertWidget(2, group);
+        auto *help = new QLabel(tr("Folder holding your MIB files (Standards, Unassigned and Vendor / Product folders). "
+            "Changing it rescans everything and rebuilds the Automatic profiles from the new folder."), general);
+        help->setWordWrap(true);
+        qobject_cast<QVBoxLayout *>(general->layout())->insertWidget(3, help);
+        connect(browse, &QPushButton::clicked, this, [this]() {
+            const QString chosen = QFileDialog::getExistingDirectory(pw, tr("Choose MIB Library Location"), libraryRoot->text());
+            if (!chosen.isEmpty()) libraryRoot->setText(QDir::toNativeSeparators(chosen));
+        });
+    }
     connect(p->EnableIPv4, &QCheckBox::toggled, this, [this]() { UpdateValidation(); });
     connect(p->EnableIPv6, &QCheckBox::toggled, this, [this]() { UpdateValidation(); });
     LoadControls();
@@ -60,6 +86,11 @@ void Preferences::Init()
 
 void Preferences::LoadControls()
 {
+    if (libraryRoot && s->MibLibraryObj())
+    {
+        QSettings settings;
+        libraryRoot->setText(QDir::toNativeSeparators(MibCollection::configuredRoot(settings)));
+    }
     p->EnableIPv4->setChecked(applied.enableIpv4);
     p->EnableIPv6->setChecked(applied.enableIpv6);
     p->TrapPort->setValue(applied.trapPort4);
@@ -72,6 +103,7 @@ void Preferences::LoadControls()
     p->RequestRetries->setValue(applied.requestRetries);
     p->BulkNonRepeaters->setValue(applied.bulkNonRepeaters);
     p->BulkMaxRepetitions->setValue(applied.bulkMaxRepetitions);
+    p->RequestContextName->setText(applied.contextName);
     UpdateValidation();
 }
 
@@ -92,6 +124,7 @@ PreferencesSettings Preferences::ReadControls() const
     values.requestRetries = p->RequestRetries->value();
     values.bulkNonRepeaters = p->BulkNonRepeaters->value();
     values.bulkMaxRepetitions = p->BulkMaxRepetitions->value();
+    values.contextName = p->RequestContextName->text();
     return values;
 }
 
@@ -111,9 +144,31 @@ void Preferences::Execute()
     }
     const bool restart = ReadControls().networkRestartRequired(applied);
     if (!Save()) return;
+    ApplyLibraryRoot();
     if (restart)
         QMessageBox::information(pw, tr("Restart needed"),
             tr("Transport protocol or trap listen port changed. Restart MIB Navigator for these changes to take effect."));
+}
+
+void Preferences::ApplyLibraryRoot()
+{
+    if (!libraryRoot || !s->MibLibraryObj()) return;
+    const QString wanted = QDir::cleanPath(QDir::fromNativeSeparators(libraryRoot->text().trimmed()));
+    QSettings settings;
+    const QString current = QDir::cleanPath(MibCollection::configuredRoot(settings));
+    if (wanted.isEmpty() || wanted == current) return;
+    if (QMessageBox::question(pw, tr("Change MIB Library location"),
+            tr("Switch the MIB Library to:\n%1\n\nMIB Navigator will rescan it and rebuild the Automatic profiles. "
+               "Your files in the current location are not moved or deleted, and Custom profiles that use them will report missing MIBs.")
+               .arg(QDir::toNativeSeparators(wanted)),
+            QMessageBox::Ok | QMessageBox::Cancel, QMessageBox::Cancel) != QMessageBox::Ok) {
+        LoadControls(); return;
+    }
+    QString error;
+    if (!s->MibLibraryObj()->changeLibraryRoot(wanted, &error))
+        QMessageBox::warning(pw, tr("MIB Library location"),
+            tr("The location was not changed: %1").arg(error));
+    LoadControls();
 }
 
 bool Preferences::Save()

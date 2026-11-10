@@ -1,5 +1,40 @@
 # MIB browser and loader architecture
 
+## Current architecture — 2026-11-07
+
+[Redesign Plan](redesign-plan.md) governs product direction; the sections below
+this checkpoint retain the implementation history and may describe superseded
+phases. Current responsibilities are:
+
+- The user-visible collection and Library provider/dependency index own global
+  knowledge. Automatic Profiles derive from Vendor/Product folders; Custom
+  Profiles hold explicit user selections. Dependencies remain a Library concern.
+- The effective plan authorizes actual providers. Pins retain precedence;
+  applicable duplicates resolve by newest valid revision and stable path order.
+  A bad root/import produces a Partial Environment with an actionable report
+  while other authorized modules continue loading.
+- Published Environments contain copied values. Query runs capture an immutable
+  Environment; Watch interpretation uses the Environment selected for each poll;
+  retained traps follow the active Profile. Presentation retains no parser-owned
+  pointers across resets. Serialized parser work restores the latest Profile.
+- Query, MIBs (Library/Profiles/Editor), Traps and the shared Operations panel
+  replace old Modules arrows, Graphs, Discovery and saved-device screens. Legacy
+  preload/search-path settings do not silently override the active plan.
+- Shared rendering/checking supplies Results, tables, Watch and Traps. Standard
+  textual-convention and DISPLAY-HINT checks warn about received values without
+  refusing MIB loading or editing source files. Unsupported hints retain raw
+  presentation. The new checks and narrow allocation-lifetime fixes are covered
+  by [maintenance validation](maintenance-five-validation.md).
+
+See [settings-schema.md](settings-schema.md), [mib-library-v1.md](mib-library-v1.md)
+and [outstanding-tasks.md](outstanding-tasks.md) for current workflows and limits.
+
+## Historical implementation notes
+
+These notes preserve earlier design stages. Claims about Discovery, Qwt, legacy
+Modules controls, temporary libsmi lookup, or unfinished UI describe those stages,
+not the current application. The checkpoint above and Redesign Plan supersede them.
+
 ## Governing decision: Model C accepted with amendments
 
 The governing MIB architecture is:
@@ -220,9 +255,11 @@ remain reusable; runtime reconstruction occurs only after semantic work actually
 loaded temporary providers.
 
 Structured application diagnostics use local ISO-8601 timestamps with
-milliseconds and an explicit numeric UTC offset. Backlog: normalize or wrap
-raw libsmi callbacks and SNMP++ messages so every displayed entry ultimately
-uses that same timestamp form. This remains a dedicated future logging task.
+milliseconds and an explicit numeric UTC offset. Raw libsmi callbacks and
+SNMP++ messages now use the same redacted file/UI delivery (2026-11-07), with a
+prefix on each physical line. Original library text, including any embedded
+library timestamp, is retained inside the wrapped message. Parser diagnostics
+and severity generation are unchanged.
 
 ## User MIB collection and product profiles
 

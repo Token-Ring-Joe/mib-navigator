@@ -103,6 +103,12 @@ WorkbenchShell::WorkbenchShell(QMainWindow *window, QWidget *,
             QStyle::SH_TabBar_CloseButtonPosition, nullptr, queryTabs->tabBar()));
         queryTabs->tabBar()->setTabButton(i, side, nullptr);
     }
+    if (pages.macros) {
+        const int i = queryTabs->addTab(pages.macros, tr("Macros"));
+        const auto side = static_cast<QTabBar::ButtonPosition>(queryTabs->style()->styleHint(
+            QStyle::SH_TabBar_CloseButtonPosition, nullptr, queryTabs->tabBar()));
+        queryTabs->tabBar()->setTabButton(i, side, nullptr);
+    }
     queryTabs->tabBar()->setVisible(queryTabs->count() > 1);
     connect(queryTabs, &QTabWidget::tabCloseRequested, this,
             [this](int i) { closeDocument(queryTabs->widget(i)); });
@@ -215,10 +221,11 @@ WorkbenchShell::WorkbenchShell(QMainWindow *window, QWidget *,
         setPanelExpanded(true);
         focusContent(bottomTabs->currentWidget());
     });
-    focusAction("WorkbenchGlobalSearch", tr("Search MIBs"), "Ctrl+Shift+F", [this]() {
+    focusAction("WorkbenchGlobalSearch", tr("Search MIBs / Go to OID"), "Ctrl+Shift+F", [this]() {
         workspaceTabs->setCurrentWidget(queryPage);
-        if (auto *filter = mainWindow->findChild<QLineEdit *>(QStringLiteral("CollectionSearch")))
-            filter->setFocus(Qt::ShortcutFocusReason);
+        if (auto *filter = mainWindow->findChild<QLineEdit *>(QStringLiteral("CollectionSearch"))) {
+            filter->setFocus(Qt::ShortcutFocusReason); filter->selectAll();
+        }
     });
     connect(bottomTabs, &QTabWidget::currentChanged, this, [this]() {
         pendingPanelId.clear();
@@ -230,12 +237,6 @@ WorkbenchShell::WorkbenchShell(QMainWindow *window, QWidget *,
         if (auto *target = mainWindow->findChild<QComboBox *>("ConnectionTarget")) {
             target->setFocus(Qt::ShortcutFocusReason);
             if (target->lineEdit()) target->lineEdit()->selectAll();
-        }
-    });
-    focusAction("WorkbenchFocusOid", tr("Go to OID"), "Ctrl+Shift+L", [this]() {
-        workspaceTabs->setCurrentWidget(queryPage);
-        if (auto *oid = mainWindow->findChild<QLineEdit *>("QueryObjectAddress")) {
-            oid->setFocus(Qt::ShortcutFocusReason); oid->selectAll();
         }
     });
     buildViewMenu(window);
@@ -274,6 +275,8 @@ void WorkbenchShell::buildViewMenu(QMainWindow *window)
         add("ViewTraps", tr("Traps"), [this]() { openDocument(workbenchPages.traps); });
     if (workbenchPages.watch)
         add("ViewWatch", tr("Watch"), [this]() { openDocument(workbenchPages.watch); });
+    if (workbenchPages.macros)
+        add("ViewMacros", tr("Query Macros"), [this]() { openDocument(workbenchPages.macros); });
     view->addSeparator();
     auto *inspectorAction = inspectorPanel->toggleViewAction();
     inspectorAction->setObjectName("WorkbenchToggleInspector");
@@ -297,7 +300,7 @@ void WorkbenchShell::openDocument(QWidget *document)
     if (!document) return;
     if (document == workbenchPages.editor) { showMibLibrary(2); return; }
     if (document == workbenchPages.results) { showResults(); return; }
-    if (document == workbenchPages.watch) {
+    if (document == workbenchPages.watch || document == workbenchPages.macros) {
         workspaceTabs->setCurrentWidget(queryPage);
         queryTabs->setCurrentWidget(document);
         return;

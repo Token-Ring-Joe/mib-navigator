@@ -8,6 +8,7 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
+#include <QInputDialog>
 #include <QMenu>
 #include <QPushButton>
 #include <QSpinBox>
@@ -30,6 +31,16 @@ WatchPanel::WatchPanel(WatchService *watchService,
     hint->setObjectName("WatchHint");
     hint->setWordWrap(true);
     layout->addWidget(hint);
+    auto *saveStatus = new QLabel(this);
+    saveStatus->setObjectName("WatchPersistenceStatus");
+    saveStatus->setWordWrap(true);
+    saveStatus->setTextFormat(Qt::PlainText);
+    saveStatus->setText(service->persistenceError());
+    saveStatus->setVisible(!service->persistenceError().isEmpty());
+    layout->addWidget(saveStatus);
+    connect(service, &WatchService::persistenceErrorChanged, saveStatus, [saveStatus](const QString &error) {
+        saveStatus->setText(error); saveStatus->setVisible(!error.isEmpty());
+    });
     auto *bar = new QHBoxLayout;
     bar->addWidget(new QLabel(tr("New watches repeat every"), this));
     interval = new QSpinBox(this);
@@ -37,6 +48,10 @@ WatchPanel::WatchPanel(WatchService *watchService,
     interval->setRange(1, 3600); interval->setValue(5); interval->setSuffix(tr(" s"));
     bar->addWidget(interval);
     bar->addStretch();
+    editIntervalButton = new QPushButton(tr("Interval…"), this);
+    editIntervalButton->setObjectName("WatchEditInterval");
+    editIntervalButton->setAccessibleName(tr("Change selected watch interval"));
+    editIntervalButton->setEnabled(false);
     pauseButton = new QPushButton(tr("Pause"), this);
     removeButton = new QPushButton(tr("Remove"), this);
     clearButton = new QPushButton(tr("Remove all"), this);
@@ -45,8 +60,12 @@ WatchPanel::WatchPanel(WatchService *watchService,
     clearButton->setObjectName(QStringLiteral("WatchClear"));
     for (QPushButton *button : {pauseButton, removeButton}) button->setEnabled(false);
     clearButton->setEnabled(false);
-    bar->addWidget(pauseButton); bar->addWidget(removeButton); bar->addWidget(clearButton);
     layout->addLayout(bar);
+    auto *actions = new QHBoxLayout;
+    actions->addStretch();
+    actions->addWidget(editIntervalButton); actions->addWidget(pauseButton);
+    actions->addWidget(removeButton); actions->addWidget(clearButton);
+    layout->addLayout(actions);
 
     table = new QTableWidget(0, ColumnCount, this);
     table->setObjectName(QStringLiteral("WatchTable"));
@@ -65,7 +84,7 @@ WatchPanel::WatchPanel(WatchService *watchService,
     layout->addWidget(table, 1);
     setProperty("workbenchFocusTarget", QStringLiteral("WatchTable"));
 
-    connect(service, &WatchService::rowAdded, this, [this, hint](quint64 id) {
+    const auto addRow = [this, hint](quint64 id) {
         const WatchRow *data = service->row(id);
         if (!data) return;
         const int row = table->rowCount();
@@ -74,7 +93,13 @@ WatchPanel::WatchPanel(WatchService *watchService,
         table->item(row, Target)->setData(Qt::UserRole, QVariant::fromValue(id));
         fill(row, *data);
         clearButton->setEnabled(true);
-        hint->setText(tr("Each row keeps its own target and credential. Select a row to pause or remove it."));
+        hint->setText(tr("Watches are saved automatically and return paused after restart. Each row keeps its target, credential and context; select Resume to poll."));
+    };
+    connect(service, &WatchService::rowAdded, this, addRow);
+    for (quint64 id : service->ids()) addRow(id);
+    connect(editIntervalButton, &QPushButton::clicked, this, [this]() { editInterval(selectedId()); });
+    connect(table, &QTableWidget::cellDoubleClicked, this, [this](int row, int column) {
+        if (column == Every) editInterval(table->item(row, Target)->data(Qt::UserRole).toULongLong());
     });
     connect(service, &WatchService::rowChanged, this, [this](quint64 id) {
         const int row = rowOf(id);
@@ -106,10 +131,12 @@ WatchPanel::WatchPanel(WatchService *watchService,
         QMenu menu(table);
         QAction *pause = menu.addAction(data->paused ? tr("Resume") : tr("Pause"));
         QAction *poll = menu.addAction(tr("Poll now"));
+        QAction *changeInterval = menu.addAction(tr("Change interval…"));
         QAction *remove = menu.addAction(tr("Remove"));
         QAction *chosen = menu.exec(table->viewport()->mapToGlobal(position));
         if (chosen == pause) service->setPaused(id, !wasPaused);
         else if (chosen == poll) service->pollNow(id);
+        else if (chosen == changeInterval) editInterval(id);
         else if (chosen == remove) service->remove(id);
     });
 }
@@ -134,6 +161,7 @@ void WatchPanel::selectionChanged()
     const WatchRow *data = service->row(selectedId());
     pauseButton->setEnabled(data != nullptr);
     removeButton->setEnabled(data != nullptr);
+    editIntervalButton->setEnabled(data != nullptr);
     pauseButton->setText(data && data->paused ? tr("Resume") : tr("Pause"));
 }
 
@@ -156,4 +184,20 @@ void WatchPanel::fill(int row, const WatchRow &data)
             : !data.warnings.isEmpty() ? AppearanceColors::Warning : AppearanceColors::None);
         item->setData(AppearanceColors::MutedRole, data.paused);
     }
+}
+
+
+void WatchPanel::editInterval(quint64 id)
+{
+    const WatchRow *data = service->row(id);
+    if (!data) return;
+    const int seconds = data->spec.intervalSeconds; // value copy before the modal event loop
+    QInputDialog dialog(this);
+    dialog.setObjectName("WatchIntervalDialog");
+    dialog.setWindowTitle(tr("Watch interval"));
+    dialog.setLabelText(tr("Repeat this watch every (seconds):"));
+    dialog.setInputMode(QInputDialog::IntInput);
+    dialog.setIntRange(1, 3600);
+    dialog.setIntValue(seconds);
+    if (dialog.exec() == QDialog::Accepted) service->setInterval(id, dialog.intValue());
 }

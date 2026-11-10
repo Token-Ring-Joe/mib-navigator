@@ -11,7 +11,11 @@ bool check(bool value, const char *message)
 { if (!value) std::cerr << "FAIL: " << message << '\n'; return value; }
 
 void write(const QString &path, const QByteArray &text)
-{ QFile f(path); f.open(QIODevice::WriteOnly | QIODevice::Truncate); f.write(text); }
+{
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate) || f.write(text) != text.size())
+        qFatal("Cannot write test fixture %s: %s", qPrintable(path), qPrintable(f.errorString()));
+}
 
 QByteArray mib(const char *module, const char *name, int number)
 {

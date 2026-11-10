@@ -26,6 +26,12 @@ add_custom_target(snmpb_build_identity
 )
 
 include(CTest)
+if(BUILD_TESTING)
+    add_test(NAME snmpb.release-tree-policy
+        COMMAND ${CMAKE_COMMAND}
+            "-DSNMPB_FIXTURE_DIR=${PROJECT_BINARY_DIR}/release-tree-policy-fixture"
+            -P "${PROJECT_SOURCE_DIR}/cmake/VerifyReleaseTree_test.cmake")
+endif()
 include(GNUInstallDirs)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -71,6 +77,10 @@ install(FILES
     docs/release-candidate-validation.md
     docs/release-notes-1.0.0-rc1.md
     docs/security.md
+    docs/settings-schema.md
+    docs/maintenance-five-validation.md
+    docs/query-macros-milestone-1.md
+    docs/query-macros-milestone-2.md
     docs/manual-real-device-acceptance.md
     docs/third-party-dependencies.md
     docs/mib-library-v1.md

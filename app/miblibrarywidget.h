@@ -60,12 +60,23 @@ public:
         // Every file the Library index knows (the same list profiles are planned from), for the
         // Profiles page's folder tree and its followed-folder contents.
         std::function<QList<MibDependencyFileRecord>()> libraryFiles;
+        // Every indexed file that declares a module (for the Providers tab).
+        std::function<QList<MibIndexedProvider>(const QString &)> providersFor;
+        // Changes whenever the indexed files change (part of the planning cache key).
+        std::function<quint64()> libraryGeneration;
     };
     explicit MibLibraryWidget(const QStringList &bundledPaths,
                               QWidget *parent = nullptr,
                               MibDownloadTransport *transport = nullptr,
                               Callbacks callbacks = {});
     void refresh();
+    // Same result as refresh(), but the file scan runs on a worker thread so the window stays responsive.
+    void refreshInBackground();
+    // Connected to the Library index-changed signal.
+    void refreshOnIndexChange();
+    // Re-bases the whole MIB collection on another folder (Preferences and Browse use this).
+    // Returns false with an explanation, leaving the previous location in force.
+    bool changeLibraryRoot(const QString &path, QString *error, int *conflicts = nullptr);
     void activate();
     PerformanceCounters performanceCounters() const { return counters; }
     MibProfileService *profileService() { return &profiles; }
@@ -77,6 +88,8 @@ public:
     void publishPreparedProfile(const QString &id, const MibEffectivePlan &plan);
     void beginInitialRefresh(quint64 generation);
     bool initialRefreshReady() const { return initialReady; }
+    // Names of the profiles whose environment contains a module (shown in the collection view).
+    void setProfilesContaining(std::function<QStringList(const QString &)> lookup) { profilesContaining = std::move(lookup); }
     bool operationRunning() const { return dependencyCheckRunning || catalogRefreshInProgress || !downloadQueue.isEmpty(); }
     void showWorkspaceMode(int mode);   // 0 Library, 1 Profiles, 2 Editor
     void setEditorPage(QWidget *page);
@@ -103,12 +116,34 @@ private slots:
     void deleteProfile();
     void addProfileMembers();
     void removeProfileMembers();
-    void browseLibraryRoot();
     void openLibraryRoot();
     void openProfileFolder();
 private:
     // Refreshes the derived Automatic profiles; true when the list changed.
     bool applyAutomaticProfiles();
+    void applyScope();
+    QString collectionFingerprint() const;
+    QString lastFingerprint;
+    bool refreshRunning = false, refreshQueued = false, deferIndexRefresh = false;
+    void rescanCollection();
+    bool restoringColumns = false;
+    mutable QHash<QString, MibEffectivePlan> planCache;
+    void requiredDependencyMenu(const QPoint &position);
+    void afterProfileChoice(const QString &profileId);
+    void updateProviders();
+    void compareSelectedProviders();
+    void useSelectedProvider();
+    QPushButton *providersCompare = nullptr;
+    QPushButton *providersUse = nullptr;
+    QCheckBox *providersShowOutside = nullptr;
+    QString viewProfileId;
+    QTableWidget *providersTable = nullptr;
+    QLabel *providersSummary = nullptr;
+    MibEffectivePlan viewPlan;
+    QString viewProfileName;
+    QString sourceDisplay(const QString &path) const;
+    QComboBox *scopeCombo = nullptr;
+    std::function<QStringList(const QString &)> profilesContaining;
     void loadCachedCatalog();
     QString catalogCachePath() const;
     QStringList selectedModules() const;
@@ -190,7 +225,6 @@ private:
     QPushButton *installDependenciesButton;
     QPushButton *refreshButton;
     QPushButton *openProfileFolderButton;
-    QLineEdit *libraryRootEdit;
     QLabel *profileSource;
     QLabel *profileGuidance;
     QLabel *profileEmptyState;

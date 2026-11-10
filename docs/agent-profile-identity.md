@@ -1,5 +1,10 @@
 # Stable Agent Profile identity
 
+> Retired design, retained as history (status reconciled 2026-11-07).
+> Do not use this document as current implementation guidance. Saved devices,
+> device-profile transfer, Discovery and Graphs are outside the current product.
+> [Redesign Plan](redesign-plan.md) and [outstanding tasks](outstanding-tasks.md) govern.
+
 Each `AgentProfileRecord` has an opaque UUID-form `profileId`. The ID is
 independent of the display name, endpoint, and all SNMP settings. Rename and
 folder movement preserve it; Duplicate creates a new one.

@@ -16,7 +16,7 @@
 ConnectionBar::ConnectionBar(CommunityCredentialService *communityService,
                              UsmCredentialService *usmService, QComboBox *mibProfileCombo,
                              QWidget *parent)
-    : QWidget(parent), community(communityService), usm(usmService)
+    : QWidget(parent), community(communityService), usm(usmService), profileCombo(mibProfileCombo)
 {
     setObjectName(QStringLiteral("ConnectionBar"));
     auto *layout = new QHBoxLayout(this);
@@ -146,6 +146,9 @@ int ConnectionBar::credentialProtocol() const
         if (choice.key == key) return choice.protocol;
     return -1;
 }
+
+QString ConnectionBar::mibProfileId() const { return profileCombo->currentData().toString(); }
+QString ConnectionBar::mibProfileLabel() const { return profileCombo->currentText(); }
 
 void ConnectionBar::reloadHistory()
 {

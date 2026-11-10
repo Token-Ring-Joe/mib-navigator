@@ -1,5 +1,10 @@
 # Agent Profile Management v2
 
+> Retired design, retained as history (status reconciled 2026-11-07).
+> Do not use this document as current implementation guidance. Saved devices,
+> device-profile transfer, Discovery and Graphs are outside the current product.
+> [Redesign Plan](redesign-plan.md) and [outstanding tasks](outstanding-tasks.md) govern.
+
 ## Ownership audit
 
 Before this milestone, `AgentProfileManager` combined five responsibilities:

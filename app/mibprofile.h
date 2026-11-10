@@ -146,6 +146,9 @@ public:
     // nothing; removing one also forgets its exclusions.
     bool followFolders(const QString &id, const QStringList &folders, QString *error = nullptr);
     bool unfollowFolders(const QString &id, const QStringList &folders, QString *error = nullptr);
+    // Choose which copy of a module a Custom profile uses when several exist. Saved with the profile.
+    bool pinProvider(const QString &id, const QString &module, const MibProviderPin &pin, QString *error = nullptr);
+    bool unpinProvider(const QString &id, const QString &module, QString *error = nullptr);
     // Leaves files inside followed folders out of the profile, or takes them back in.
     bool setFilesExcluded(const QString &id, const QStringList &files, bool excluded,
                           QString *error = nullptr);

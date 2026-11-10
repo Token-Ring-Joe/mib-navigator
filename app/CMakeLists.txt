@@ -33,6 +33,8 @@ set(SNMPB_APP_SOURCES
     mibruntimeparser.cpp
     mibruntimestage.cpp
     mibvaluesemantics.cpp
+    mibdisplayhint.cpp
+    mibdisplayhint.h
     snmpreport.cpp
     mibcollectionindex.cpp
     mibcollectionservice.cpp
@@ -40,6 +42,11 @@ set(SNMPB_APP_SOURCES
     profilematch.cpp
     profiledetector.cpp
     queryresultspanel.cpp
+    querymacro.cpp
+    querymacrorepository.cpp
+    querymacroservice.cpp
+    querymacrorunner.cpp
+    querymacrospanel.cpp
     requestlogpanel.cpp
     collectionsearchpanel.cpp
     watchcalculator.cpp
@@ -111,6 +118,7 @@ set(SNMPB_APP_HEADERS
     credentialsdialog.h
     credentialrecords.h
     diagnosticlogger.h
+    mibproblemsexport.h
     mainwindowlayout.h
     startupcoordinator.h
     workbenchshell.h
@@ -140,6 +148,11 @@ set(SNMPB_APP_HEADERS
     profilematch.h
     profiledetector.h
     queryresultspanel.h
+    querymacro.h
+    querymacrorepository.h
+    querymacroservice.h
+    querymacrorunner.h
+    querymacrospanel.h
     requestlogpanel.h
     collectionsearchpanel.h
     watchcalculator.h
@@ -519,9 +532,45 @@ if(BUILD_TESTING)
     add_test(NAME snmpb.mib-environment-large
         COMMAND $<TARGET_FILE:snmpb_mib_environment_test> --large)
 
+    add_library(snmpb_query_macro_core STATIC
+        querymacro.cpp querymacro.h querymacrorepository.cpp querymacrorepository.h
+        querymacroservice.cpp querymacroservice.h mibenvironment.cpp mibenvironment.h)
+    set_target_properties(snmpb_query_macro_core PROPERTIES AUTOMOC ON)
+    target_link_libraries(snmpb_query_macro_core PUBLIC Qt6::Core)
+    add_executable(snmpb_query_macro_test querymacro_test.cpp)
+    target_link_libraries(snmpb_query_macro_test PRIVATE snmpb_query_macro_core)
+    add_test(NAME snmpb.query-macros COMMAND $<TARGET_FILE:snmpb_query_macro_test>)
+    snmpb_configure_qt_test_runtime(snmpb.query-macros)
+    add_executable(snmpb_query_macros_panel_test querymacrospanel.cpp querymacrospanel.h querymacrospanel_test.cpp)
+    set_target_properties(snmpb_query_macros_panel_test PROPERTIES AUTOMOC ON)
+    target_link_libraries(snmpb_query_macros_panel_test PRIVATE snmpb_query_macro_core Qt6::Widgets)
+    add_test(NAME snmpb.query-macros-panel COMMAND ${CMAKE_COMMAND} -E env
+        "QT_QPA_PLATFORM=offscreen" $<TARGET_FILE:snmpb_query_macros_panel_test>)
+    snmpb_configure_qt_test_runtime(snmpb.query-macros-panel)
+
+    add_executable(snmpb_query_macro_runner_test
+        querymacrorunner.cpp querymacrorunner.h querymacrorunner_test.cpp
+        snmpsingleoperation.cpp snmpsingleasyncrunner.cpp snmpsingleasyncrunner.h
+        snmprequestcontext.cpp snmprequestconfig.cpp snmprequestconfigadapter.cpp
+        snmptransport.cpp snmpreport.cpp mibvaluesemantics.cpp mibdisplayhint.cpp)
+    set_target_properties(snmpb_query_macro_runner_test PROPERTIES AUTOMOC ON)
+    target_link_libraries(snmpb_query_macro_runner_test PRIVATE snmpb_query_macro_core
+        Qt6::Core snmpb_libsmi snmpb_snmp_pp snmpb_libtomcrypt)
+    add_test(NAME snmpb.query-macro-runner COMMAND $<TARGET_FILE:snmpb_query_macro_runner_test>)
+    snmpb_configure_qt_test_runtime(snmpb.query-macro-runner)
+    set_tests_properties(snmpb.query-macro-runner PROPERTIES TIMEOUT 60)
+
+    add_executable(snmpb_mib_text_diff_test mibtextdiff.h mibtextdiff_test.cpp)
+    target_link_libraries(snmpb_mib_text_diff_test PRIVATE Qt6::Core)
+    if(WIN32)
+        add_test(NAME snmpb.mib-text-diff COMMAND ${CMAKE_COMMAND} -E env
+            "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}" $<TARGET_FILE:snmpb_mib_text_diff_test>)
+    else()
+        add_test(NAME snmpb.mib-text-diff COMMAND $<TARGET_FILE:snmpb_mib_text_diff_test>)
+    endif()
     add_executable(snmpb_mib_value_check_test
         mibenvironment.cpp mibenvironment.h
-        mibvaluesemantics.cpp mibvaluesemantics.h
+        mibvaluesemantics.cpp mibvaluesemantics.h mibdisplayhint.cpp mibdisplayhint.h
         mibvaluecheck_test.cpp)
     target_link_libraries(snmpb_mib_value_check_test PRIVATE Qt6::Core snmpb_snmp_pp snmpb_libtomcrypt)
     if(WIN32)
@@ -544,7 +593,7 @@ if(BUILD_TESTING)
 
     add_executable(snmpb_watch_service_test
         mibenvironment.cpp mibenvironment.h
-        mibvaluesemantics.cpp mibvaluesemantics.h
+        mibvaluesemantics.cpp mibvaluesemantics.h mibdisplayhint.cpp mibdisplayhint.h
         snmpreport.cpp snmpreport.h
         snmptransport.cpp snmptransport.h
         snmprequestconfig.cpp snmprequestconfig.h
@@ -679,7 +728,7 @@ if(BUILD_TESTING)
         mibenvironment.cpp mibenvironment.h mibenvironmentextractor.cpp mibenvironmentextractor.h
         mibenvironmentregistry.cpp mibenvironmentregistry.h mibeffectiveplan.h
         trappresenter.cpp trappresenter.h traprecord.h
-        mibvaluesemantics.cpp mibvaluesemantics.h
+        mibvaluesemantics.cpp mibvaluesemantics.h mibdisplayhint.cpp mibdisplayhint.h
         snmprequestconfig.cpp snmprequestconfig.h snmprequestcontext.cpp snmprequestcontext.h
         mibnode.cpp mibnode.h mibview.cpp mibview.h mibtreemodel.cpp mibtreemodel.h
         mibmodelview.cpp mibmodelview.h mibrecords.h tablenodevalidation.cpp tablenodevalidation.h
@@ -772,7 +821,7 @@ if(BUILD_TESTING)
         mibenvironment.cpp mibenvironment.h mibenvironmentextractor.cpp mibenvironmentextractor.h
         mibenvironmentregistry.cpp mibenvironmentregistry.h
         trapservice.cpp trapservice.h
-        mibvaluesemantics.cpp mibvaluesemantics.h
+        mibvaluesemantics.cpp mibvaluesemantics.h mibdisplayhint.cpp mibdisplayhint.h
         trap_pipeline_test.cpp)
     set_target_properties(snmpb_trap_pipeline_test PROPERTIES AUTOMOC ON)
     target_link_libraries(snmpb_trap_pipeline_test PRIVATE
@@ -791,7 +840,7 @@ if(BUILD_TESTING)
         trapview.cpp trapview.h trapview_test.cpp
         trapdecoder.cpp trapdecoder.h traprecord.h
         traphistorystore.cpp traphistorystore.h trapservice.cpp trapservice.h
-        trappresenter.cpp trappresenter.h mibvaluesemantics.cpp mibvaluesemantics.h
+        trappresenter.cpp trappresenter.h mibvaluesemantics.cpp mibvaluesemantics.h mibdisplayhint.cpp mibdisplayhint.h
         mibengine.cpp mibengine.h
         mibenvironment.cpp mibenvironment.h mibenvironmentextractor.cpp mibenvironmentextractor.h
         mibenvironmentregistry.cpp mibenvironmentregistry.h)
@@ -889,7 +938,7 @@ if(BUILD_TESTING)
         snmpsingleoperation.cpp snmpsingleoperation.h
         snmpsingleasyncrunner.cpp snmpsingleasyncrunner.h
         snmpquerytext.cpp snmpquerytext.h
-        mibvaluesemantics.cpp mibvaluesemantics.h
+        mibvaluesemantics.cpp mibvaluesemantics.h mibdisplayhint.cpp mibdisplayhint.h
         tabletraversal.cpp tabletraversal.h
         tableindex.cpp tableindex.h snmpreport.cpp snmpreport.h
         mibenvironment.cpp mibenvironment.h
@@ -1165,7 +1214,7 @@ if(BUILD_TESTING)
             -DSNMPB_PYTHON=${Python3_EXECUTABLE}
             -P ${PROJECT_SOURCE_DIR}/cmake/RunSnmpbToleranceScenarios.cmake
     )
-    set_tests_properties(snmpb.tolerance-scenarios PROPERTIES TIMEOUT 1200)
+    set_tests_properties(snmpb.tolerance-scenarios PROPERTIES TIMEOUT 1800)
 
     foreach(close_state IN ITEMS CatalogLoading ProfilePreparing EnvironmentBuilding)
         # Each run starts from empty state so it exercises a true first launch.

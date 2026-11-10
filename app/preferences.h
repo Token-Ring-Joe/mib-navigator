@@ -64,6 +64,8 @@ private:
     QDialog *pw = nullptr;
 
     void LoadControls();
+    void ApplyLibraryRoot();
+    class QLineEdit *libraryRoot = nullptr;
     PreferencesSettings ReadControls() const;
     void UpdateValidation();
     PreferencesSettings applied;

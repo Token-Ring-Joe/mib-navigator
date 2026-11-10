@@ -4293,6 +4293,14 @@ int smiInitData()
 	addType(smiStrdup("Pointer"),
 		SMI_BASETYPE_POINTER, 0, &parser);
 
+    /* Initialization uses no forward references. Release only its empty
+     * sentinel; real parser pending trees retain the compatibility policy
+     * in loadModule(). Never retain this stack parser after initialization. */
+    if (!parser.pendingNodePtr->firstChildPtr) {
+        smiFree(parser.pendingNodePtr);
+    }
+    smiHandle->parserPtr = NULL;
+
     return (0);
 }
 

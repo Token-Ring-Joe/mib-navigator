@@ -17,6 +17,8 @@ public:
     void setTreeModel(MibTreeModel *model);
     void Populate();
     void SelectFromOid(const QString &oid);
+    // Like SelectFromOid, but says whether the active tree has that object.
+    bool LocateOid(const QString &oid);
     void SetCurrentAgentIsV1(bool value) { agentIsV1 = value; }
     QString selectedOid() const { return currentOid(); }
     void setVisibleModules(const QStringList &modules);
@@ -38,6 +40,7 @@ signals:
     void TableRowSelectFromOid(const QString &oid);
     void GetTableInstancesFromOid(const QString &oid);
     void VarbindsFromOid(const QString &oid);
+    void MacroFromOid(const QString &oid);
     void QueryTableAvailabilityChanged(bool available);
     void CurrentObjectChanged(const QString &oid);
 

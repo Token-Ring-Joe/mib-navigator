@@ -19,6 +19,10 @@ set(required_files
     "release-candidate-validation.md"
     "release-notes-1.0.0-rc1.md"
     "security.md"
+    "settings-schema.md"
+    "maintenance-five-validation.md"
+    "query-macros-milestone-1.md"
+    "query-macros-milestone-2.md"
     "manual-real-device-acceptance.md"
     "third-party-dependencies.md"
     "NOTICE.md"
@@ -64,13 +68,17 @@ endforeach()
 file(GLOB_RECURSE packaged_entries RELATIVE "${root}" "${root}/*")
 set(private_names
     agents.conf device-tree.conf profile-metadata.conf graphs.conf
-    credential-identities.conf community-credentials.conf
+    credential-identities.conf credential-identities.conf.v2.json community-credentials.conf
     credential-bindings.conf usm_users.conf log.conf SnmpB.ini
-    boot_counter.conf smi.conf
+    boot_counter.conf smi.conf watches-v1.json watches-v1.json.lock
+    query-macros-v1.json query-macros-v1.json.lock
+    profiles-v1.json profile-folders-v1.json dependency-index-v1.json
 )
+list(TRANSFORM private_names TOLOWER)
 foreach(relative_path IN LISTS packaged_entries)
     get_filename_component(name "${relative_path}" NAME)
-    if(name IN_LIST private_names)
+    string(TOLOWER "${name}" lower_name)
+    if(lower_name IN_LIST private_names OR lower_name MATCHES "^mib-navigator-.*\\.log$")
         message(FATAL_ERROR "Private runtime configuration was packaged: ${relative_path}")
     endif()
     if(relative_path MATCHES "(^|/)(CMakeFiles|_CPack_Packages)(/|$)" OR

@@ -1,8 +1,9 @@
 # MIB Navigator 1.0.0-rc1 validation
 
-Current redesign guidance: 2026-11-07. The authoritative development direction
+Current redesign guidance: 2026-11-08. The authoritative development direction
 is `docs/redesign-plan.md`; current Linux evidence and exact validation artifacts
-are recorded in `docs/finish-review-validation.md` in the working tree.
+are recorded in `docs/query-macros-milestone-2.md` in the working tree;
+`docs/maintenance-five-validation.md` records the earlier maintenance batch.
 A historical passing build or an old temporary install is not evidence that a
 current package exists or has passed platform acceptance.
 
@@ -45,6 +46,12 @@ prefer a local persistent location when it must survive a VM reboot. Do not reus
 a stale artifact or modify generated repository `manual-validation/` output
 without authorization.
 
+The Linux TGZ uses compatible system Qt and other shared libraries; it is not
+a self-contained Linux runtime. Record actual `ldd`/package inventories for each
+artifact, verify extracted bytes against the install, and run installed headless
+startup/restart and scripted loopback SNMP from the extracted directory. Use a
+fresh task-owned package/extraction location; never copy personal runtime state.
+
 CPack produces platform archives from the explicit install rules. The CI matrix
 builds, tests, stages, verifies, packages, extracts and verifies those archives.
 Successful native archive validation requires the corresponding CI run; a local
@@ -81,11 +88,16 @@ the historical expected diagnostics.
 Desktop UX review is the final local step: inspect the tested build's controls,
 keyboard behavior and resized dialogs; do not ask the owner to debug internals.
 Use `manual-real-device-acceptance.md` only for separately authorized lab tests.
-The optional implementation-check feature remains deferred, as do Query Macros
-implementation and Watch-all/table expansion. Current SNMPv3 connection-bar
-requests use the default empty context; its planned preference remains absent.
+The optional implementation-check feature and Watch-all/table expansion remain
+deferred. Query Macros milestone 2 adds explicit captured scalar/exact-instance
+runs, grouped Results, Stop and batch logging to the offline editor. Table
+retrieval and legacy-dialog retirement remain later milestones. See
+[the current macro milestone record](query-macros-milestone-2.md). SNMPv3 requests capture the global
+context preference. Saved watches restore paused and require explicit Resume;
+verify their private definition/lock files never appear in release packages.
 
-Existing full-application/libsmi leaks require disabling leak detection for broad
+Diagnostic/UI lifetime leaks have been reduced; remaining scanner/pending-node
+leaks still require disabling leak detection for broad
 ASAN invalid-access workflows. Strict isolated widget checks should retain leak
 detection; do not describe a broad run as leak-free. Existing compiler warnings
 must remain visible. Parser shutdown may wait for a running uninterruptible parse.

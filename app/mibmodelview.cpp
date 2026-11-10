@@ -145,13 +145,19 @@ QModelIndex MibModelView::proxyIndexForOid(const QString &oid) const
 
 void MibModelView::SelectFromOid(const QString &oid)
 {
+    LocateOid(oid);
+}
+
+bool MibModelView::LocateOid(const QString &oid)
+{
     retainedOid = oid;
     const QModelIndex index = proxyIndexForOid(oid);
-    if (!index.isValid()) return;
+    if (!index.isValid()) return false;
     setCurrentIndex(index);
     scrollTo(index);
     expand(index.parent());
     retainedOid = index.data(MibTreeModel::OidRole).toString();
+    return true;
 }
 
 void MibModelView::restoreSelection()
@@ -298,6 +304,9 @@ void MibModelView::contextMenuEvent(QContextMenuEvent *event)
     QAction *tableAction = tableMenu->addAction(tr("All Instances"));
     QAction *tableRowAction = tableMenu->addAction(tr("Select Instance..."));
     tableRowAction->setObjectName("QueryTableSelectInstance");
+    QAction *macroAction = menu.addAction(tr("Add to Selected Macro"));
+    macroAction->setObjectName("QueryTreeAddMacro");
+    macroAction->setEnabled(kind == NodeScalar || kind == NodeColumn || kind == NodeTable || kind == NodeRow);
     QAction *varbindAction = menu.addAction(tr("Multiple Varbinds..."));
     menu.addSeparator();
     QAction *findAction = menu.addAction(tr("Find..."));
@@ -329,6 +338,7 @@ void MibModelView::contextMenuEvent(QContextMenuEvent *event)
     else if (chosen == setAction) emit SetFromOid(oid);
     else if (chosen == tableAction) emit TableViewFromOid(oid);
     else if (chosen == tableRowAction) emit TableRowSelectFromOid(oid);
+    else if (chosen == macroAction) emit MacroFromOid(oid);
     else if (chosen == varbindAction) emit VarbindsFromOid(oid);
     else if (chosen == findAction) {
         FindFromNode();

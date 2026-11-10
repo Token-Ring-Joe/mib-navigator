@@ -28,6 +28,7 @@ struct WatchSpec
     QString credentialKey;   // ConnectionModel credential key
     QString oid;             // numeric OID including the instance
     int intervalSeconds = 5;
+    QString contextName;     // captured SNMPv3 context; no credential secrets
 };
 
 struct WatchRow
@@ -76,10 +77,14 @@ public:
                  QObject *parent = nullptr);
     ~WatchService() override;
 
-    quint64 add(const WatchSpec &spec);
+    quint64 add(const WatchSpec &spec, bool paused = false);
+    // Restores definitions paused; malformed/unsupported stores are preserved and never overwritten.
+    bool restoreDefinitions(const QString &fileName);
+    QString persistenceError() const { return storeError; }
     void remove(quint64 id);
     void clear();
     void setPaused(quint64 id, bool paused);
+    bool setInterval(quint64 id, int seconds);
     void pollNow(quint64 id);
     const WatchRow *row(quint64 id) const;
     QList<quint64> ids() const;
@@ -92,11 +97,14 @@ signals:
     void rowAdded(quint64 id);
     void rowChanged(quint64 id);
     void rowRemoved(quint64 id);
+    void persistenceErrorChanged(const QString &error);
 
 private slots:
     void applyResultQueued(quint64 id, const WatchService::PollResult &result) { applyResult(id, result); }
 
 private:
+    void persistDefinitions();
+    void setStoreError(const QString &error);
     void tick();
     void startPoll(WatchRow &row);
     void applyResult(quint64 id, const PollResult &result);
@@ -111,6 +119,12 @@ private:
     QTimer timer;
     int outstanding = 0;
     QElapsedTimer clock;
+    QString definitionsFile;
+    QString storeError;
+    bool storeBlocked = false;
+    bool restoring = false;
+    bool storeExisted = false;
+    QByteArray storedBytes;
 };
 
 #endif

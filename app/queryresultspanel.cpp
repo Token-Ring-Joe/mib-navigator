@@ -11,6 +11,8 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QScrollBar>
+#include <QSignalBlocker>
 #include <QStyle>
 #include <QTableWidget>
 #include <QTimer>
@@ -66,7 +68,19 @@ QueryResultsPanel::QueryResultsPanel(QWidget *parent) : QWidget(parent)
     auto *layout = new QVBoxLayout(this); layout->setContentsMargins(10, 10, 10, 10);
     auto *tools = new QHBoxLayout; controls = tools;
     summary = new QLabel(tr("Right-click a MIB object to start a query."), this); summary->setObjectName("ResultsSummary");
-    summary->setTextFormat(Qt::PlainText); summary->setWordWrap(true); layout->addWidget(summary);
+    summary->setTextFormat(Qt::PlainText); summary->setWordWrap(true);
+    summary->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred); layout->addWidget(summary);
+    groupContext = new QLabel(this); groupContext->setObjectName("MacroRunContext");
+    groupContext->setTextFormat(Qt::PlainText); groupContext->setWordWrap(true);
+    groupContext->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred); groupContext->hide(); layout->addWidget(groupContext);
+    groupSelector = new QComboBox(this); groupSelector->setObjectName("ResultsGroup");
+    groupSelector->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    groupSelector->setMinimumContentsLength(16);
+    groupSelector->setAccessibleName(tr("Result group")); groupSelector->hide(); layout->addWidget(groupSelector);
+    groupStatus = new QLabel(this); groupStatus->setObjectName("ResultsGroupStatus");
+    groupStatus->setTextFormat(Qt::PlainText); groupStatus->setWordWrap(true);
+    groupStatus->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred); groupStatus->hide(); layout->addWidget(groupStatus);
+    connect(groupSelector, &QComboBox::currentIndexChanged, this, [this] { showGroup(); });
     filter = new QLineEdit(this); filter->setObjectName("ResultsFilter");
     filter->setPlaceholderText(tr("Filter results…")); filter->setClearButtonEnabled(true); filter->setMinimumWidth(180);
     filter->setAccessibleName(tr("Filter results")); tools->addWidget(filter, 1);
@@ -125,6 +139,7 @@ void QueryResultsPanel::configure(bool table, const QStringList &columns)
 
 void QueryResultsPanel::beginQuery(const QString &object, const QString &oid)
 {
+    groups.clear(); groupSelector->hide(); groupContext->hide(); groupStatus->hide();
     queryObject = object; queryOid = oid; finishedMs = -1; elapsed.start();
     configure(false); filter->clear(); warnings = 0; emit warningsChanged(0);
     if (auto *status = findChild<QLabel *>("StructuredQueryStatus")) { status->clear(); status->hide(); }
@@ -135,14 +150,20 @@ void QueryResultsPanel::beginQuery(const QString &object, const QString &oid)
 QTableWidgetItem *QueryResultsPanel::valueItem(const QueryResultValue &value, const QString &text, bool warn)
 {
     auto *item = new ResultItem(text);
-    item->setData(OidRole, value.oid); item->setData(InterpretedRole, value.interpreted);
+    item->setData(OidRole, value.problem.isEmpty() ? value.oid : QString());
+    item->setData(IdentityRole, value.id); item->setData(ProblemRole, value.problem);
+    item->setData(InterpretedRole, value.interpreted);
     item->setData(RawRole, value.raw); item->setData(WarningRole, value.warnings);
     item->setData(SearchRole, QStringList{value.object, value.instance, value.oid, value.syntax, value.type,
-                                         value.interpreted, value.raw, value.received, value.warnings}.join(' '));
+                                         value.interpreted, value.raw, value.received, value.warnings, value.problem}.join(' '));
     item->setToolTip(tr("OID: %1\nSyntax: %2\nReceived type: %3\nRaw value: %4")
         .arg(value.oid, value.syntax, value.type, value.raw) +
-        (value.warnings.isEmpty() ? QString() : QStringLiteral("\n") + value.warnings));
-    if (!value.warnings.isEmpty()) {
+        (value.warnings.isEmpty() ? QString() : QStringLiteral("\n") + value.warnings) +
+        (value.problem.isEmpty() ? QString() : QStringLiteral("\n") + value.problem));
+    if (!value.problem.isEmpty()) {
+        item->setData(AppearanceColors::ToneRole, AppearanceColors::Error);
+        if (warn) item->setIcon(style()->standardIcon(QStyle::SP_MessageBoxCritical));
+    } else if (!value.warnings.isEmpty()) {
         item->setData(AppearanceColors::ToneRole, AppearanceColors::Warning);
         if (warn) item->setIcon(style()->standardIcon(QStyle::SP_MessageBoxWarning));
     }
@@ -156,7 +177,8 @@ void QueryResultsPanel::appendValue(const QueryResultValue &value)
     const int row = results->rowCount(); results->insertRow(row);
     const QString object = value.object + (value.instance.isEmpty() ? QString() : QStringLiteral(".") + value.instance);
     const QStringList cells{object, value.instance, value.oid, value.syntax,
-        display->currentIndex() == 0 ? value.interpreted : value.raw, value.received, value.warnings, value.time, value.type};
+        !value.problem.isEmpty() ? value.problem : display->currentIndex() == 0 ? value.interpreted : value.raw,
+        value.received, value.warnings, value.time, value.type};
     for (int column = 0; column < cells.size(); ++column) {
         auto *item = valueItem(value, cells[column], column == 0);
         if (column == 1 || column == 2 || column == 4 || column == 5)
@@ -205,12 +227,68 @@ void QueryResultsPanel::finishQuery()
     filterRows();
 }
 
+void QueryResultsPanel::beginGroups(const QString &name, const QString &captured)
+{
+    beginQuery(name, {});
+    { const QSignalBlocker blocker(groupSelector); groupSelector->clear(); }
+    groupContext->setText(captured); groupContext->setToolTip(captured); groupContext->show();
+}
+void QueryResultsPanel::updateGroups(const QList<QueryResultGroup> &incoming, const QString &status, bool failed)
+{
+    const QString selected = groupSelector->currentData().toString();
+    groups = incoming;
+    bool same = groupSelector->count() == groups.size();
+    for (int i = 0; same && i < groups.size(); ++i)
+        same = groupSelector->itemData(i).toString() == groups[i].id && groupSelector->itemText(i) == groups[i].name;
+    if (!same) {
+        const QSignalBlocker blocker(groupSelector);
+        groupSelector->clear();
+        for (const auto &group : groups) {
+            groupSelector->addItem(group.name, group.id);
+            groupSelector->setItemData(groupSelector->count() - 1, group.name, Qt::ToolTipRole);
+        }
+        const int index = groupSelector->findData(selected);
+        groupSelector->setCurrentIndex(index >= 0 ? index : 0);
+    }
+    groupSelector->setVisible(!groups.isEmpty());
+    if (auto *label = findChild<QLabel *>("StructuredQueryStatus")) {
+        label->setProperty("failed", failed); label->setText(status); label->show();
+    }
+    showGroup();
+}
+void QueryResultsPanel::showGroup()
+{
+    const int group = groupSelector->currentIndex();
+    if (group < 0 || group >= groups.size()) return;
+    const QString rowId = results->currentItem() ? results->currentItem()->data(IdentityRole).toString() : QString();
+    const int column = results->currentColumn();
+    const int scroll = results->verticalScrollBar()->value();
+    const int sort = results->horizontalHeader()->sortIndicatorSection();
+    const auto direction = results->horizontalHeader()->sortIndicatorOrder();
+    const bool sorting = results->isSortingEnabled();
+    {
+        const QSignalBlocker blocker(this);
+        ++layoutGeneration; results->setSortingEnabled(false); results->setRowCount(0); warnings = 0;
+        for (const auto &value : groups[group].values) appendValue(value);
+        results->setSortingEnabled(sorting);
+        if (sort >= 0) results->sortItems(sort, direction);
+        for (int row = 0; row < results->rowCount(); ++row)
+            if (!rowId.isEmpty() && results->item(row, 0)->data(IdentityRole).toString() == rowId)
+                results->setCurrentCell(row, qMax(0, column));
+        results->verticalScrollBar()->setValue(scroll);
+        warnings = 0;
+        for (const auto &item : groups) for (const auto &value : item.values) warnings += !value.warnings.isEmpty();
+    }
+    groupStatus->setText(groups[group].status); groupStatus->setVisible(!groups[group].status.isEmpty());
+    filterRows(); emit warningsChanged(warnings);
+}
+
 void QueryResultsPanel::updateDisplay()
 {
     const bool sorting = results->isSortingEnabled(); results->setSortingEnabled(false);
     for (int row = 0; row < results->rowCount(); ++row)
         for (int column = tableMode ? 1 : 4; column < (tableMode ? results->columnCount()-1 : 5); ++column)
-            if (auto *item = results->item(row, column); item && !item->data(MissingRole).toBool())
+            if (auto *item = results->item(row, column); item && !item->data(MissingRole).toBool() && item->data(ProblemRole).toString().isEmpty())
                 item->setText(item->data(display->currentIndex() == 0 ? InterpretedRole : RawRole).toString());
     results->setSortingEnabled(sorting); filterRows();
 }

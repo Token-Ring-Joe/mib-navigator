@@ -1,3 +1,4 @@
+#include <QTimeZone>
 #include "mibservice.h"
 
 #include "mibdiagnosticcollector.h"
@@ -151,7 +152,7 @@ MibModuleRecord SnapshotMibModule(SmiModule *module)
     for (SmiRevision *revision = smiGetFirstRevision(module); revision;
          revision = smiGetNextRevision(revision)) {
         MibRevisionRecord item;
-        item.date = QDateTime::fromSecsSinceEpoch(revision->date, Qt::UTC);
+        item.date = QDateTime::fromSecsSinceEpoch(revision->date, QTimeZone::UTC);
         item.description = safe(revision->description);
         record.revisions.append(item);
         if (!record.lastRevision.isValid() || item.date > record.lastRevision)

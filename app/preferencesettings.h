@@ -22,6 +22,7 @@ struct PreferencesSettings
     int requestRetries = 1;
     int bulkNonRepeaters = 0;
     int bulkMaxRepetitions = 10;
+    QString contextName; // SNMPv3; empty selects the default context
     QStringList mibPaths;
     QStringList mibPreloads;
     QSize windowSize;

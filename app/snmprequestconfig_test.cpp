@@ -103,6 +103,11 @@ int main(int argc, char **argv)
     check(octets(v3Pdu.get_context_name()) == "test-context" &&
           octets(v3Pdu.get_context_engine_id()) == "engine-id",
           "SNMPv3 context configured");
+    v3.contextName = QString::fromUtf8("Lab réseau");
+    ApplySnmpV3PduConfig(v3, v3Pdu);
+    const auto context = v3Pdu.get_context_name();
+    check(QByteArray(reinterpret_cast<const char *>(context.data()), int(context.len())) == v3.contextName.toUtf8(),
+          "SNMPv3 context reaches the actual PDU as UTF-8 without loss");
     v3.securityLevel = 0;
     ApplySnmpV3PduConfig(v3, v3Pdu);
     check(v3Pdu.get_security_level() == SNMP_SECURITY_LEVEL_NOAUTH_NOPRIV,

@@ -1,9 +1,13 @@
 #include "queryresultspanel.h"
 #include "csvformat.h"
+#include "mibproblemsexport.h"
+#include <QTemporaryDir>
+#include <QFile>
 #include <QApplication>
 #include <QClipboard>
 #include <QComboBox>
 #include <QEventLoop>
+#include <QElapsedTimer>
 #include <QHeaderView>
 #include <QKeyEvent>
 #include <QLabel>
@@ -137,5 +141,71 @@ int main(int argc, char **argv)
     filter->clear(); settle();
     check(!table->isRowHidden(0) && !summary->text().contains("No rows match"),
           "clearing the filter restores results and removes empty guidance");
+    starts = 0;
+    auto capturedValue = value("1.3.6.1.2.1.1.1.0", "42"); capturedValue.id = "captured-value";
+    auto unavailable = value("1.3.6.1.2.1.1.2.0", ""); unavailable.id = "unavailable";
+    unavailable.problem = "No such exact instance";
+    QueryResultGroup reads{"values", "Objects and values", {}, {capturedValue, unavailable}};
+    QueryResultGroup deferred{"table-id", "Interface table", "Table retrieval is not available yet.", {}};
+    panel.beginGroups("Macro: Essentials", "Target: captured-target | Credential: Lab | Profile: captured-profile");
+    panel.updateGroups({reads, deferred}, "Running: first batch");
+    auto *macroStatus = panel.findChild<QLabel *>("StructuredQueryStatus");
+    macroStatus->setProperty("failed", true);
+    panel.updateGroups({reads, deferred}, "Running: next batch");
+    check(!macroStatus->property("failed").toBool(), "a new grouped update cannot inherit an earlier request's error styling");
+    auto *selector = panel.findChild<QComboBox *>("ResultsGroup");
+    check(selector && selector->count() == 2 && table->rowCount() == 2 && starts == 1 &&
+        panel.findChild<QLabel *>("MacroRunContext")->text().contains("captured-target"), "grouped run captures its header and navigates only at explicit start");
+    check(panel.oidAt(1, 4).isEmpty() && table->item(1, 4)->text() == unavailable.problem,
+        "unavailable read explains its failure and has no Watch action");
+    display->setCurrentIndex(1);
+    check(table->item(1, 4)->text() == unavailable.problem, "Raw mode cannot erase an unavailable-read explanation");
+    selector->setCurrentIndex(1);
+    panel.updateGroups({reads, deferred}, "Partial: table deferred");
+    check(selector->currentData().toString() == "table-id" && table->rowCount() == 0 && starts == 1 &&
+        panel.findChild<QLabel *>("ResultsGroupStatus")->text().contains("not available"), "background delivery preserves the chosen independent group and explains unsupported tables");
+    selector->setCurrentIndex(0); table->setCurrentCell(0, 4); filter->setText("42"); settle();
+    panel.updateGroups({reads, deferred}, "Finished");
+    check(table->currentItem() && table->currentItem()->data(QueryResultsPanel::IdentityRole).toString() == "captured-value" &&
+        filter->text() == "42" && table->isRowHidden(1) && starts == 1,
+        "group updates reacquire selection by stable ID and retain filter/navigation");
+    check(panel.csvRecords().size() == 2, "CSV contains only selected-group visible rows");
+    filter->clear(); QueryResultGroup large{"large", "Large scalar group", {}, {}};
+    qint64 longestUpdate = 0;
+    for (int i = 0; i < 1024; ++i) {
+        auto item = capturedValue; item.id = QString::number(i); item.oid = QString("1.3.6.1.4.1.64994.%1.0").arg(i);
+        large.values.append(item);
+        if ((i + 1) % 128 == 0) {
+            QElapsedTimer elapsed; elapsed.start(); panel.updateGroups({large}, "Running large macro");
+            longestUpdate = qMax(longestUpdate, elapsed.elapsed());
+        }
+    }
+    std::fprintf(stderr, "INFO: largest grouped update through 1024 values: %lld ms\n", static_cast<long long>(longestUpdate));
+    check(table->rowCount() == 1024 && longestUpdate < 1500, "large grouped deliveries remain bounded and responsive");
+    panel.beginGroups(QString(256, 'X'), QString(512, 'Y'));
+    auto longGroup = reads; longGroup.name = QString(1024, 'Z');
+    panel.updateGroups({longGroup}, "Finished"); panel.resize(1024, 720); QApplication::processEvents();
+    check(panel.minimumSizeHint().width() <= 1024 && selector->minimumSizeHint().width() < 400,
+        "long saved captions and captured names cannot force a wide main window");
+    panel.beginQuery("Get after macro", "1.3.6.1");
+    check(selector->isHidden() && panel.findChild<QLabel *>("MacroRunContext")->isHidden() && table->rowCount() == 0,
+        "ordinary queries retire grouped presentation without retaining old macro state");
+    MibProblem problem; problem.module = "Vendor-MIB"; problem.file = QString::fromUtf8("/mibs/réseau.mib");
+    problem.line = 17; problem.why = "missing \"quoted\" import, with comma\nsecond line";
+    problem.suggestion = "Keep the original"; problem.requestedBy = {"ROOT-A", "ROOT-B"};
+    problem.parserTag = "import-not-found";
+    const QString problemCsv = MibProblemsAsCsv({problem}, {0, -1, 9});
+    check(problemCsv.contains("\"missing \"\"quoted\"\" import, with comma\nsecond line\"") &&
+          problemCsv.contains(problem.file) && problemCsv.contains("ROOT-A; ROOT-B") && problemCsv.contains("17"),
+          "Problems CSV keeps quoted/multiline diagnostics, full paths, dependencies and line numbers");
+    QTemporaryDir exportDir; QString exportError;
+    const auto exportPath = exportDir.filePath("problems.csv");
+    check(exportDir.isValid() && SaveMibProblemsCsv(exportPath, problemCsv, &exportError) && exportError.isEmpty(),
+          "Problems CSV saves atomically");
+    QFile exported(exportPath);
+    check(exported.open(QIODevice::ReadOnly) && exported.readAll() == problemCsv.toUtf8(),
+          "exported Problems bytes match the UTF-8 CSV snapshot");
+    check(!SaveMibProblemsCsv(exportDir.path(), problemCsv, &exportError) && !exportError.isEmpty(),
+          "Problems export reports a deterministic destination failure");
     return failures ? 1 : 0;
 }

@@ -1,5 +1,12 @@
 # Reusable community credentials v1
 
+> Historical design stage; reconciled 2026-11-07. Agent Profiles, Discovery,
+> inline/reusable device bindings and portable device-profile transfer described
+> below are retired. The current connection bar uses reusable credentials directly;
+> saved Watch definitions retain credential references. See [Settings schema](settings-schema.md),
+> [current security notes](security.md), [USM management](usm-credential-management-v2.md)
+> and [Redesign Plan](redesign-plan.md). The original design is retained as history.
+
 Reusable SNMPv1/v2c communities are an optional layer over the existing Agent
 Profile fields. Existing profiles remain in inline mode unless a user binds a
 profile explicitly. No automatic migration occurs, and `agents.conf` retains

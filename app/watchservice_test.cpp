@@ -1,6 +1,13 @@
 #include "watchservice.h"
 
 #include <QCoreApplication>
+#include <QDir>
+#include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QTemporaryDir>
+#include <atomic>
 #include <QMutex>
 #include <QMutexLocker>
 #include <iostream>
@@ -27,6 +34,7 @@ struct Script
     QMutex lock;
     QList<SnmpTransportResult> answers;
     QList<QString> targetsSeen;
+    QList<QString> contextsSeen;
     void push(const SnmpTransportResult &r) { QMutexLocker l(&lock); answers.append(r); }
 };
 
@@ -38,6 +46,7 @@ public:
     {
         QMutexLocker l(&script->lock);
         script->targetsSeen.append(requestConfig.address);
+        script->contextsSeen.append(requestConfig.contextName);
         return script->answers.isEmpty() ? SnmpTransportResult{} : script->answers.takeFirst();
     }
     const SnmpRequestConfig &config() const override { return requestConfig; }
@@ -174,6 +183,14 @@ int main(int argc, char **argv)
     service.setPaused(id, false);
     ok &= check(!service.row(id)->paused, "resume");
 
+    const auto oldBaseline = service.row(id)->baseline.counter;
+    ok &= check(service.setInterval(id, 17) && service.row(id)->spec.intervalSeconds == 17 &&
+                service.row(id)->baseline.counter == oldBaseline && !service.row(id)->paused,
+                "interval editing keeps the endpoint, paused state and last-good baseline");
+    ok &= check(!service.setInterval(id, 0) && !service.setInterval(id, 3601) &&
+                !service.setInterval(0, 5) && service.row(id)->spec.intervalSeconds == 17,
+                "invalid intervals and removed IDs cannot mutate a watch");
+
     // ---- removing a watch while its poll is running ---------------------------------------------------------------
     script.push(counterAnswer(1, 1));
     service.pollNow(id);
@@ -183,5 +200,101 @@ int main(int argc, char **argv)
     service.add(spec); service.add(spec);
     service.clear();
     ok &= check(service.ids().isEmpty(), "clear removes every watch");
+    // Persistent definitions contain references/settings only; every restart is paused.
+    QTemporaryDir saved;
+    ok &= check(saved.isValid(), "isolated watch storage");
+    const QString store = saved.filePath("private/watches-v1.json");
+    std::atomic<int> sessions{0};
+    const auto makeService = [&]() {
+        return std::make_unique<WatchService>(
+            [](const QString &target, const QString &, SnmpRequestConfig *config, QString *) {
+                config->address = target; config->port = "161";
+                config->readCommunity = "SECRET-MUST-NOT-BE-STORED";
+                config->contextName = "later-global-context"; return true;
+            },
+            [&](const SnmpRequestConfig &config) {
+                ++sessions; return std::make_unique<ScriptedForPoll>(&script, config);
+            }, [] { return MibEnvironmentPtr{}; });
+    };
+    const auto bytes = [](const QString &path) {
+        QFile file(path); return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+    };
+    const auto write = [](const QString &path, const QByteArray &data) {
+        QFile file(path); return file.open(QIODevice::WriteOnly) && file.write(data) == data.size();
+    };
+    auto first = makeService();
+    ok &= check(first->restoreDefinitions(store), "a missing store starts empty without creating data");
+    WatchSpec savedSpec = spec; savedSpec.target = "127.0.0.1:4161";
+    savedSpec.contextName = QString::fromUtf8("captured réseau");
+    for (int n = 1; n <= 150; ++n) {
+        savedSpec.oid = QString("1.3.6.1.2.1.2.2.1.10.%1").arg(n);
+        savedSpec.intervalSeconds = n;
+        ok &= check(first->add(savedSpec, true) != 0, "save a representative set of Watch definitions");
+    }
+    const QByteArray original = bytes(store);
+    ok &= check(!original.contains("SECRET-MUST-NOT-BE-STORED") &&
+                QJsonDocument::fromJson(original).object().value("watches").toArray().size() == 150 &&
+                first->persistenceError().isEmpty(), "private definitions preserve 150 rows with no secrets/results");
+    first.reset();
+    auto restored = makeService();
+    ok &= check(restored->restoreDefinitions(store) && restored->ids().size() == 150,
+                "all saved definitions restore in order");
+    restored->startTimer(1);
+    QEventLoop idle; QTimer::singleShot(30, &idle, &QEventLoop::quit); idle.exec();
+    bool paused = true;
+    for (auto id : restored->ids()) paused &= restored->row(id)->paused && !restored->row(id)->baseline.ok &&
+                                             restored->row(id)->polls == 0 && !restored->row(id)->updated.isValid();
+    ok &= check(paused && sessions == 0 && bytes(store) == original,
+                "restart does not send requests, restore old rates, or rewrite saved data");
+    const auto restoredId = restored->ids().first();
+    script.push(counterAnswer(10, 100)); restored->pollNow(restoredId);
+    ok &= check(restored->waitForPolls(5000) && sessions == 1 &&
+                script.contextsSeen.last() == savedSpec.contextName &&
+                script.targetsSeen.last() == savedSpec.target,
+                "explicit polling uses the saved endpoint and context despite changed global preferences");
+    ok &= check(restored->setInterval(restoredId, 321) && restored->row(restoredId)->paused &&
+                restored->row(restoredId)->spec.contextName == savedSpec.contextName,
+                "editing an interval does not resume or retarget a restored watch");
+    auto afterEdit = makeService();
+    ok &= check(afterEdit->restoreDefinitions(store) &&
+                afterEdit->row(afterEdit->ids().first())->spec.intervalSeconds == 321,
+                "the edited interval survives another restart");
+    restored->clear();
+    ok &= check(restored->ids().isEmpty() && restored->persistenceError().isEmpty(), "remove all saves an empty collection");
+    auto emptyStore = makeService();
+    ok &= check(emptyStore->restoreDefinitions(store) && emptyStore->ids().isEmpty(), "removed watches stay removed on restart");
+    const QList<QByteArray> invalidStores{
+        "not json", "{\"schemaVersion\":2,\"watches\":[]}",
+        "{\"schemaVersion\":1,\"watches\":[{}]}",
+        "{\"schemaVersion\":1,\"watches\":[{\"target\":\"host\",\"credential\":\"ref\",\"oid\":\"1.3.6.1\",\"context\":\"\",\"intervalSeconds\":1.5}]}"
+    };
+    int malformed = 0;
+    for (const auto &data : invalidStores) {
+        const auto path = saved.filePath(QString("bad-%1.json").arg(++malformed));
+        ok &= check(write(path, data), "write malformed fixture");
+        auto bad = makeService();
+        ok &= check(!bad->restoreDefinitions(path) && bad->ids().isEmpty() && !bad->persistenceError().isEmpty(),
+                    "corrupt/newer stores fail without partial restoration");
+        bad->add(savedSpec, true);
+        ok &= check(bytes(path) == data && !bad->persistenceError().isEmpty(),
+                    "session edits cannot overwrite a corrupt/newer original");
+    }
+    const QString changedStore = saved.filePath("changed.json");
+    auto changed = makeService(); changed->restoreDefinitions(changedStore); changed->add(savedSpec, true);
+    const QByteArray external = "externally edited; keep these bytes";
+    ok &= check(write(changedStore, external), "write external-edit fixture");
+    changed->add(savedSpec, true);
+    ok &= check(bytes(changedStore) == external && !changed->persistenceError().isEmpty(),
+                "an external modification is detected instead of overwritten");
+    const QString blocked = saved.filePath("blocked");
+    ok &= check(write(blocked, "file, not a folder"), "write deterministic save-failure fixture");
+    auto failed = makeService(); failed->restoreDefinitions(blocked + "/watches.json");
+    const auto failedId = failed->add(savedSpec, true);
+    ok &= check(failedId && failed->row(failedId) && !failed->persistenceError().isEmpty() &&
+                bytes(blocked) == "file, not a folder", "failed saving keeps session rows and original data with an error");
+    ok &= check(QFile::remove(blocked) && QDir().mkpath(blocked), "repair task-owned save fixture");
+    failed->add(savedSpec, true);
+    ok &= check(failed->persistenceError().isEmpty() && !bytes(blocked + "/watches.json").isEmpty(),
+                "a later edit retries a failed save and clears the error after success");
     return ok ? 0 : 1;
 }

@@ -5,7 +5,7 @@
 #include "trapview.h"
 
 Trap::Trap(Snmpb *snmpb)
-    : s(snmpb), trapService(snmpb->PreferencesObj()->GetTrapHistoryLimit(), this)
+    : QObject(snmpb), s(snmpb), trapService(snmpb->PreferencesObj()->GetTrapHistoryLimit(), this)
 {
     connect(s->PreferencesObj(), &Preferences::trapHistoryLimitChanged,
         &trapService, &TrapService::setMaximumRecords);

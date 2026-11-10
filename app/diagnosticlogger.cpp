@@ -114,19 +114,33 @@ void DiagnosticLogger::shutdown()
 void DiagnosticLogger::log(const QString &category, const QString &message,
                            bool mirrorToUi)
 {
-    const QString safe = redact(message);
-    const QString line = QStringLiteral("%1 [%2] [tid=%3] [%4] %5\n")
-        .arg(structuredTimestamp(), sessionId)
-        .arg(reinterpret_cast<quintptr>(QThread::currentThreadId()), 0, 16)
-        .arg(category, safe);
+    QString safe = redact(message);
+    safe.replace(QStringLiteral("\r\n"), QStringLiteral("\n"));
+    safe.replace(QLatin1Char('\r'), QLatin1Char('\n'));
+    QStringList parts = safe.split(QLatin1Char('\n'));
+    if (parts.size() > 1 && parts.last().isEmpty()) parts.removeLast();
+    const QString timestamp = structuredTimestamp();
+    const auto thread = reinterpret_cast<quintptr>(QThread::currentThreadId());
+    QString block, generation;
+    QPointer<QTextEdit> target;
+    DiagnosticLogger *delivery = nullptr;
     {
         QMutexLocker lock(&mutex);
-        if (file) { file->write(line.toUtf8()); file->flush(); }
+        generation = sessionId;
+        for (const QString &part : parts)
+            block += QStringLiteral("%1 [%2] [tid=%3] [%4] %5\n")
+                .arg(timestamp, generation).arg(thread, 0, 16).arg(category, part);
+        if (file) { file->write(block.toUtf8()); file->flush(); }
+        if (mirrorToUi) { target = logWidget; delivery = instance; }
     }
-    if (mirrorToUi && logWidget) {
-        const QString display = line.trimmed();
-        QMetaObject::invokeMethod(logWidget.data(), [display]() {
-            if (logWidget) logWidget->append(display.toHtmlEscaped());
+    if (delivery && target) {
+        if (block.endsWith('\n')) block.chop(1);
+        // Delivery belongs to the logger's GUI thread. A queued old-session message
+        // cannot target a newly attached widget, or a widget that has been destroyed.
+        QMetaObject::invokeMethod(delivery, [target, block, generation]() {
+            { QMutexLocker lock(&mutex); if (generation != sessionId) return; }
+            if (target) target->append(QStringLiteral("<span>%1</span>")
+                .arg(block.toHtmlEscaped().replace(QStringLiteral("\n"), QStringLiteral("<br>"))));
         }, Qt::QueuedConnection);
     }
 }
@@ -134,8 +148,12 @@ void DiagnosticLogger::log(const QString &category, const QString &message,
 QString DiagnosticLogger::redact(const QString &message)
 {
     QString result = message;
+    // SNMP++ wraps argument values in parentheses, including space-separated key bytes.
+    static const QRegularExpression libraryKey(
+        QStringLiteral(R"re((?i)((?:new|old|localized|auth|privacy)\s+key)\s*[:=]\s*\([^\r\n]*\))re"));
+    result.replace(libraryKey, QStringLiteral("\\1=[REDACTED]"));
     static const QRegularExpression assignment(
-        QStringLiteral("(?i)(community|password|passphrase|authsecret|privacysecret|localizedkey)\\s*[:=]\\s*([^\\s,;]+)"));
+        QStringLiteral(R"re((?i)(community|password|passphrase|authsecret|privacysecret|localizedkey)\s*[:=]\s*(\([^\r\n]*\)|"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;]+))re"));
     result.replace(assignment, QStringLiteral("\\1=[REDACTED]"));
     static const QRegularExpression option(
         QStringLiteral("(?i)(--(?:community|password|passphrase|auth-secret|privacy-secret))\\s+([^\\s]+)"));
@@ -143,14 +161,29 @@ QString DiagnosticLogger::redact(const QString &message)
     return result;
 }
 
+QString DiagnosticLogger::redactLibraryMessage(const QString &message)
+{
+    // Native library values may contain spaces, punctuation and line breaks without
+    // quoting. Once such a value starts, keep its label and discard the payload.
+    static const QRegularExpression secretStart(QStringLiteral(
+        R"((?i)\b(password|passphrase|(?:read|write)?community|authsecret|privacysecret|localizedkey|(?:new|old)\s+key)\s*[:=])"));
+    const auto match = secretStart.match(message);
+    return match.hasMatch() ? message.left(match.capturedEnd()) + QStringLiteral(" [REDACTED]") : redact(message);
+}
+
 QString DiagnosticLogger::logFilePath() { QMutexLocker lock(&mutex); return path; }
 QString DiagnosticLogger::logDirectory() { return QFileInfo(logFilePath()).absolutePath(); }
-void DiagnosticLogger::attachLogWidget(QTextEdit *widget) { logWidget = widget; }
+void DiagnosticLogger::attachLogWidget(QTextEdit *widget) { QMutexLocker lock(&mutex); logWidget = widget; }
 void DiagnosticLogger::clearDisplayedLog()
 {
-    if (!logWidget) return;
-    QMetaObject::invokeMethod(logWidget.data(), [] {
-        if (logWidget) logWidget->clear();
+    QPointer<QTextEdit> target;
+    DiagnosticLogger *delivery = nullptr;
+    QString generation;
+    { QMutexLocker lock(&mutex); target = logWidget; delivery = instance; generation = sessionId; }
+    if (!target || !delivery) return;
+    QMetaObject::invokeMethod(delivery, [target, generation]() {
+        { QMutexLocker lock(&mutex); if (generation != sessionId) return; }
+        if (target) target->clear();
     }, Qt::QueuedConnection);
 }
 

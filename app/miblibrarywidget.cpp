@@ -13,7 +13,18 @@
 #include <QFileDialog>
 #include <QFormLayout>
 #include <QGroupBox>
+#include <QAction>
+#include <QCryptographicHash>
+#include <QFontDatabase>
+#include <QPlainTextEdit>
+#include <QTextBlock>
+#include <QTextCursor>
+#include <QTextFormat>
+#include "mibtextdiff.h"
+#include <QClipboard>
+#include <QGuiApplication>
 #include <QHeaderView>
+#include <QMenu>
 #include <QElapsedTimer>
 #include <QInputDialog>
 #include <QLabel>
@@ -203,31 +214,47 @@ MibLibraryWidget::MibLibraryWidget(const QStringList &paths,
     auto *inventoryPage = new QWidget(workspaceTabs);
     auto *layout = new QVBoxLayout(inventoryPage);
     workspaceTabs->addTab(inventoryPage, tr("Library"));
+    scopeCombo = new QComboBox(this); scopeCombo->setObjectName("MibLibraryScope");
+    scopeCombo->setAccessibleName(tr("Library view: profile or entire collection"));
+    scopeCombo->setToolTip(tr("Show the Library as one MIB Profile sees it, or the entire collection. "
+        "Conflicts and missing MIBs are judged for the chosen profile."));
+    scopeCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    scopeCombo->setMinimumContentsLength(12);
+    scopeCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    scopeCombo->addItem(tr("Active profile"), QStringLiteral("@active"));
+    scopeCombo->addItem(tr("Entire collection"), QStringLiteral("@all"));
+    scopeCombo->insertSeparator(2);
     auto *location = new QHBoxLayout;
-    location->addWidget(new QLabel(tr("MIB Library Location:"), inventoryPage));
-    libraryRootEdit = new QLineEdit(library.rootPath(), inventoryPage);
-    libraryRootEdit->setObjectName("MibLibraryRoot"); libraryRootEdit->setReadOnly(true);
-    auto *browseRoot = new QPushButton(tr("Browse..."), inventoryPage);
-    browseRoot->setObjectName("MibLibraryBrowseRoot");
     auto *openRoot = new QPushButton(tr("Open MIB Folder"), inventoryPage);
     openRoot->setObjectName("MibLibraryOpenRoot");
-    location->addWidget(libraryRootEdit, 1); location->addWidget(browseRoot); location->addWidget(openRoot);
-    layout->addLayout(location);
+    openRoot->setToolTip(tr("Open the MIB Library folder (%1). Change its location in Settings > Preferences.")
+        .arg(QDir::toNativeSeparators(library.rootPath())));
     auto *organizationHint = new QLabel(
         tr("Organize product MIBs in Vendor / Product folders. Standards and Unassigned do not create automatic profiles."),
         inventoryPage);
     organizationHint->setWordWrap(true);
     layout->addWidget(organizationHint);
     auto *filters = new QHBoxLayout;
+    auto *viewLabel = new QLabel(tr("View:"), inventoryPage);
+    filters->addWidget(viewLabel); filters->addWidget(scopeCombo, 1);
+    filters->addSpacing(8);
     search = new QLineEdit(this); search->setObjectName("MibLibrarySearch");
     search->setPlaceholderText(tr("Search modules"));
+    search->setClearButtonEnabled(true);
+    {
+        const int digit = search->fontMetrics().horizontalAdvance(QLatin1Char('0'));
+        search->setMinimumWidth(digit * 12 + 36);
+        search->setMaximumWidth(digit * 20 + 36);
+    }
     search->setAccessibleName(tr("Search Library modules"));
     inventoryPage->setProperty("workbenchFocusTarget", QStringLiteral("MibLibrarySearch"));
     sourceFilter = new QComboBox(this); sourceFilter->addItem(tr("All sources"));
+    sourceFilter->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    sourceFilter->setMinimumContentsLength(9);
     statusFilter = new QComboBox(this); statusFilter->setObjectName("MibLibraryStatusFilter");
     statusFilter->addItem(tr("All states"));
     for (const QString &state : {tr("Ready"), tr("Available"), tr("Missing dependency"),
-                                 tr("Conflict"), tr("Invalid"), tr("Failed")})
+                                 tr("Conflict"), tr("Resolved conflict"), tr("Invalid"), tr("Failed")})
         statusFilter->addItem(state);
     auto *localRefresh = new QPushButton(tr("Refresh"), this);
     localRefresh->setObjectName("MibLibraryRefresh");
@@ -240,23 +267,46 @@ MibLibraryWidget::MibLibraryWidget(const QStringList &paths,
     cancelButton->setObjectName("MibLibraryCancel"); cancelButton->hide();
     // Every filter control must be in the layout: an unplaced child is drawn at the widget's
     // top-left corner, over the Library / Profiles tab names.
-    filters->addWidget(search, 1); filters->addWidget(sourceFilter); filters->addWidget(statusFilter);
-    filters->addWidget(localRefresh);
-    filters->addWidget(checkDependencies);
+    filters->addWidget(search); filters->addWidget(sourceFilter); filters->addWidget(statusFilter);
     auto *getIana = new QPushButton(tr("Get MIBs from IANA…"), inventoryPage);
     getIana->setObjectName("MibLibraryGetIana");
-    filters->addWidget(getIana);
     layout->addLayout(filters);
+    // Actions share one row with the folder button so the search row stays short.
+    location->addWidget(localRefresh); location->addWidget(checkDependencies); location->addWidget(getIana);
+    location->addStretch(1); location->addWidget(openRoot);
+    layout->addLayout(location);
     table = new QTableWidget(this); table->setObjectName("MibLibraryTable");
-    table->setColumnCount(6); table->setHorizontalHeaderLabels(
-        {QString(), tr("Module"), tr("Status"), tr("Active Profile"), tr("Revision"), tr("Origin")});
+    table->setColumnCount(7); table->setHorizontalHeaderLabels(
+        {QString(), tr("Module"), tr("Status"), tr("In Profiles"), tr("Revision"), tr("Source file"), tr("Filename")});
     auto *checkHeader = new CheckableHeaderView(table);
     checkHeader->setObjectName("MibLibraryCheckableHeader");
     checkHeader->setProperty("indicatorAlignment", QStringLiteral("left"));
     checkHeader->setToolTip(tr("Select all filtered modules"));
     table->setHorizontalHeader(checkHeader);
-    table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
-    table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    // Every column except the checkbox can be dragged to any width; widths are remembered. The last
+    // column takes the leftover space. Filename sits next to Module on screen (same data columns).
+    {
+        auto *header = table->horizontalHeader();
+        header->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+        for (int column = 1; column < 7; ++column) header->setSectionResizeMode(column, QHeaderView::Interactive);
+        header->setStretchLastSection(true);
+        header->setMinimumSectionSize(60);
+        header->setCascadingSectionResizes(false);
+        header->moveSection(6, 2);
+        const QList<int> defaults{0, 230, 130, 190, 100, 420, 200};
+        const QString widthKey = QStringLiteral("mib-library/table-widths-v2");
+        const QVariantList saved = QSettings().value(widthKey).toList();
+        for (int column = 1; column < 7; ++column) {
+            const int width = column < saved.size() ? saved[column].toInt() : 0;
+            header->resizeSection(column, width >= 60 ? width : defaults[column]);
+        }
+        connect(header, &QHeaderView::sectionResized, this, [this, widthKey](int, int, int) {
+            if (restoringColumns) return;
+            QVariantList widths;
+            for (int column = 0; column < 7; ++column) widths << table->columnWidth(column);
+            QSettings().setValue(widthKey, widths);
+        });
+    }
     table->setSelectionBehavior(QAbstractItemView::SelectRows);
     table->setSelectionMode(QAbstractItemView::ExtendedSelection);
     table->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -365,7 +415,7 @@ MibLibraryWidget::MibLibraryWidget(const QStringList &paths,
     auto *fileGroup = new QGroupBox(tr("File Information"), infoPage);
     fileGroup->setObjectName("MibLibraryFileInformation");
     auto *fileForm = new QFormLayout(fileGroup);
-    addFields(fileForm, {{"origin", tr("Origin")}, {"revision", tr("Catalog revision")},
+    addFields(fileForm, {{"origin", tr("Folder")}, {"revision", tr("Catalog revision")},
         {"filename", tr("Filename")}, {"path", tr("Local path")},
         {"provider", tr("Source / provider")}, {"url", tr("Source URL")},
         {"timestamp", tr("Installed / downloaded")}, {"sha", tr("SHA-256")},
@@ -414,7 +464,73 @@ MibLibraryWidget::MibLibraryWidget(const QStringList &paths,
             [dependencyHeaderKey](int logicalIndex, int, int newSize) {
         if (logicalIndex == 1) QSettings().setValue(dependencyHeaderKey, newSize);
     });
+    auto *providersPage = new QWidget(detailsTabs);
+    auto *providersLayout = new QVBoxLayout(providersPage);
+    providersSummary = new QLabel(providersPage); providersSummary->setObjectName("MibLibraryProvidersSummary");
+    providersSummary->setWordWrap(true); providersSummary->setTextFormat(Qt::PlainText);
+    providersLayout->addWidget(providersSummary);
+    providersTable = new QTableWidget(providersPage); providersTable->setObjectName("MibLibraryProviders");
+    providersTable->setColumnCount(5);
+    providersTable->setHorizontalHeaderLabels({tr("Used"), tr("Source file"), tr("Revision"), tr("Content ID"), tr("Folder origin")});
+    providersTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    providersTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    providersTable->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    providersTable->setItemDelegate(new AppearanceColors::ItemDelegate(providersTable));
+    providersTable->verticalHeader()->hide();
+    {
+        auto *header = providersTable->horizontalHeader();
+        for (int column = 0; column < 5; ++column) header->setSectionResizeMode(column, QHeaderView::Interactive);
+        header->setStretchLastSection(true);
+        header->setMinimumSectionSize(50);
+        const QList<int> defaults{110, 420, 100, 120, 140};
+        const QString key = QStringLiteral("mib-library/providers-widths-v1");
+        const QVariantList saved = QSettings().value(key).toList();
+        for (int column = 0; column < 5; ++column)
+            header->resizeSection(column, column < saved.size() && saved[column].toInt() >= 50 ? saved[column].toInt() : defaults[column]);
+        connect(header, &QHeaderView::sectionResized, this, [this, key](int, int, int) {
+            QVariantList widths;
+            for (int column = 0; column < 5; ++column) widths << providersTable->columnWidth(column);
+            QSettings().setValue(key, widths);
+        });
+    }
+    providersLayout->addWidget(providersTable, 1);
+    auto *providersButtons = new QHBoxLayout;
+    auto *providersOpen = new QPushButton(tr("Open in Editor"), providersPage);
+    providersOpen->setObjectName("MibLibraryProvidersOpen"); providersOpen->setEnabled(false);
+    providersCompare = new QPushButton(tr("Compare Selected Copies…"), providersPage);
+    providersCompare->setObjectName("MibLibraryProvidersCompare"); providersCompare->setEnabled(false);
+    providersCompare->setToolTip(tr("Select two copies (Ctrl+click) to see them side by side with the differences marked. "
+                                    "With one copy selected it is compared with the copy this view uses."));
+    providersUse = new QPushButton(tr("Use This Copy"), providersPage);
+    providersUse->setObjectName("MibLibraryProvidersUse"); providersUse->setEnabled(false);
+    providersUse->setToolTip(tr("Make the selected copy the one the viewed profile uses for this module. "
+                                "Automatic profiles follow their folders, so this offers to make an editable Custom copy of the profile first."));
+    providersShowOutside = new QCheckBox(tr("Show copies outside this profile"), providersPage);
+    providersShowOutside->setObjectName("MibLibraryProvidersShowOutside");
+    providersButtons->addWidget(providersUse); providersButtons->addWidget(providersOpen);
+    providersButtons->addWidget(providersCompare); providersButtons->addStretch(1);
+    providersButtons->addWidget(providersShowOutside);
+    connect(providersShowOutside, &QCheckBox::toggled, this, [this]() { updateProviders(); });
+    connect(providersUse, &QPushButton::clicked, this, &MibLibraryWidget::useSelectedProvider);
+    providersLayout->addLayout(providersButtons);
+    connect(providersTable, &QTableWidget::itemSelectionChanged, this, [this, providersOpen]() {
+        const int rows = int(providersTable->selectionModel()->selectedRows().size());
+        providersOpen->setEnabled(rows == 1);
+        providersCompare->setEnabled(rows == 2 || (rows == 1 && providersTable->rowCount() > 1));
+        bool usable = false;
+        if (rows == 1 && !viewProfileId.isEmpty()) {
+            const QString state = providersTable->item(rows ? providersTable->selectionModel()->selectedRows().first().row() : 0, 0)->text();
+            usable = state == tr("Candidate") || state == tr("Older copy") || state == tr("Used");
+        }
+        providersUse->setEnabled(usable);
+    });
+    connect(providersOpen, &QPushButton::clicked, this, [this]() {
+        const auto rows = providersTable->selectionModel()->selectedRows();
+        if (!rows.isEmpty()) emit openModuleRequested(providersTable->item(rows.first().row(), 1)->data(Qt::UserRole).toString());
+    });
+    connect(providersCompare, &QPushButton::clicked, this, &MibLibraryWidget::compareSelectedProviders);
     detailsTabs->addTab(infoPage, tr("Info")); detailsTabs->addTab(dependencies, tr("Dependencies"));
+    detailsTabs->addTab(providersPage, tr("Providers"));
     const auto applyDependencyWidth = [this, dependencyHeader, restoredDependencyWidth]() {
         if (dependencyHeader->property("statusWidthApplied").toBool()) return;
         const int width = dependencies->viewport()->width();
@@ -521,24 +637,55 @@ MibLibraryWidget::MibLibraryWidget(const QStringList &paths,
     memberTree->header()->setSectionResizeMode(1, QHeaderView::Interactive);
     memberTree->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
     memberTree->header()->resizeSection(1, 160);
-    memberLayout->addWidget(memberSearch); memberLayout->addWidget(memberTree, 2); memberLayout->addWidget(includeStandards);
-    profileEmptyState = new QLabel(memberPane);
+    // The profile's members and its required dependencies share the pane; a splitter lets the
+    // owner give either list the room it needs.
+    auto *memberSplit = new QSplitter(Qt::Vertical, memberPane);
+    memberSplit->setObjectName("MibProfileMemberDependencySplitter");
+    memberSplit->setChildrenCollapsible(false);
+    auto *membersTop = new QWidget(memberSplit); auto *membersTopLayout = new QVBoxLayout(membersTop);
+    membersTopLayout->setContentsMargins(0, 0, 0, 0);
+    membersTopLayout->addWidget(memberSearch); membersTopLayout->addWidget(memberTree, 1); membersTopLayout->addWidget(includeStandards);
+    profileEmptyState = new QLabel(membersTop);
     profileEmptyState->setObjectName("MibProfileEmptyState");
     profileEmptyState->setWordWrap(true); profileEmptyState->hide();
-    memberLayout->addWidget(profileEmptyState);
-    auto *requiredLabel = new QLabel(tr("Required Dependencies"), memberPane);
-    memberLayout->addWidget(requiredLabel);
-    requiredList = new QListWidget(memberPane); requiredList->setObjectName("MibProfileRequiredDependencies");
-    requiredList->setSelectionMode(QAbstractItemView::NoSelection);
-    memberLayout->addWidget(requiredList);
-    dependencyCheckSummary = new QLabel(memberPane);
+    membersTopLayout->addWidget(profileEmptyState);
+    auto *membersBottom = new QWidget(memberSplit); auto *membersBottomLayout = new QVBoxLayout(membersBottom);
+    membersBottomLayout->setContentsMargins(0, 0, 0, 0);
+    auto *requiredLabel = new QLabel(tr("Required Dependencies"), membersBottom);
+    membersBottomLayout->addWidget(requiredLabel);
+    requiredList = new QListWidget(membersBottom); requiredList->setObjectName("MibProfileRequiredDependencies");
+    requiredList->setSelectionMode(QAbstractItemView::SingleSelection);
+    requiredList->setContextMenuPolicy(Qt::CustomContextMenu);
+    requiredList->setToolTip(tr("Right-click a conflicting module to choose which copy this profile uses."));
+    connect(requiredList, &QListWidget::customContextMenuRequested, this, &MibLibraryWidget::requiredDependencyMenu);
+    membersBottomLayout->addWidget(requiredList, 1);
+    dependencyCheckSummary = new QLabel(membersBottom);
     dependencyCheckSummary->setObjectName("MibProfileDependencySummary");
-    dependencyCheckSummary->setWordWrap(true); memberLayout->addWidget(dependencyCheckSummary);
+    dependencyCheckSummary->setWordWrap(true); membersBottomLayout->addWidget(dependencyCheckSummary);
+    memberSplit->addWidget(membersTop); memberSplit->addWidget(membersBottom);
+    memberSplit->setStretchFactor(0, 3); memberSplit->setStretchFactor(1, 2);
+    {
+        const QString key = QStringLiteral("mib-library/profile-member-splitter");
+        const QByteArray saved = QSettings().value(key).toByteArray();
+        if (!saved.isEmpty()) memberSplit->restoreState(saved);
+        connect(memberSplit, &QSplitter::splitterMoved, this, [memberSplit, key]() { QSettings().setValue(key, memberSplit->saveState()); });
+    }
+    memberLayout->addWidget(memberSplit, 1);
     profileSplitter->addWidget(availablePane); profileSplitter->addWidget(movePane); profileSplitter->addWidget(memberPane);
     profileSplitter->setStretchFactor(0, 1); profileSplitter->setStretchFactor(2, 1);
     profileLayout->addWidget(profileSplitter, 1);   // the folder lists get the page's spare height
     workspaceTabs->addTab(profilePage, tr("Profiles"));
     connect(search, &QLineEdit::textChanged, this, &MibLibraryWidget::applyFilter);
+    connect(scopeCombo, &QComboBox::currentIndexChanged, this, [this]() { applyScope(); applyFilter(); });
+    connect(this, &MibLibraryWidget::profilesChanged, this, [this]() { applyScope(); applyFilter(); });
+    // Coming back to the application after MIB files were added or removed outside it (for example
+    // extracting a new download into the Library folder) refreshes the Library by itself.
+    connect(qApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState state) {
+        if (state != Qt::ApplicationActive || lastFingerprint.isEmpty() || operationRunning() || refreshRunning) return;
+        if (collectionFingerprint() == lastFingerprint) return;
+        setStatusText(tr("MIB files changed in the Library folder. Refreshing…"));
+        rescanCollection();
+    });
     connect(sourceFilter, &QComboBox::currentTextChanged, this, &MibLibraryWidget::applyFilter);
     connect(statusFilter, &QComboBox::currentTextChanged, this, &MibLibraryWidget::applyFilter);
     checkHeader->clicked = [this, checkHeader]() {
@@ -547,21 +694,19 @@ MibLibraryWidget::MibLibraryWidget(const QStringList &paths,
     connect(refreshButton, &QPushButton::clicked, this, &MibLibraryWidget::refreshCatalog);
     connect(statusFilter, &QComboBox::currentIndexChanged, this, &MibLibraryWidget::applyFilter);
     connect(localRefresh, &QPushButton::clicked, this, [this]() {
-        if (callbacks.collectionChanged) callbacks.collectionChanged();
+        rescanCollection();
         QString migrationError;
         if (callbacks.retryLegacyProfiles &&
             !callbacks.retryLegacyProfiles(profiles, &migrationError) &&
             !migrationError.isEmpty()) setStatusText(migrationError);
-        refresh();
     });
-    connect(checkDependencies, &QPushButton::clicked, this, [this, checkDependencies, localRefresh, browseRoot, importButton]() {
+    connect(checkDependencies, &QPushButton::clicked, this, [this, checkDependencies, localRefresh, importButton]() {
         if (!callbacks.checkDependencies || dependencyCheckRunning ||
             catalogRefreshInProgress || !downloadQueue.isEmpty()) return;
         dependencyCheckRunning = true;
         emit activityChanged();
         checkDependencies->setEnabled(false);
         localRefresh->setEnabled(false);
-        browseRoot->setEnabled(false);
         importButton->setEnabled(false);
         refreshButton->setEnabled(false);
         updateSelectionUi();
@@ -575,14 +720,13 @@ MibLibraryWidget::MibLibraryWidget(const QStringList &paths,
         callbacks.checkDependencies(
             [prepared, librarySnapshot, pathsSnapshot, catalogSnapshot](const QList<MibModuleRecord> &localRecords) {
                 *prepared = librarySnapshot.inventory(pathsSnapshot, catalogSnapshot, localRecords);
-            }, [guard, prepared, checkDependencies, localRefresh, browseRoot, importButton](const QString &error) {
+            }, [guard, prepared, checkDependencies, localRefresh, importButton](const QString &error) {
             if (!guard) return;
             guard->dependencyCheckRunning = false;
             emit guard->activityChanged();
             checkDependencies->setEnabled(true);
             checkDependencies->setText(tr("Check Dependencies"));
             localRefresh->setEnabled(true);
-            browseRoot->setEnabled(true);
             importButton->setEnabled(true);
             guard->refreshButton->setEnabled(true);
             guard->updateSelectionUi();
@@ -590,7 +734,6 @@ MibLibraryWidget::MibLibraryWidget(const QStringList &paths,
             guard->setStatusText(error.isEmpty() ? tr("Library dependency check complete") : error);
         });
     });
-    connect(browseRoot, &QPushButton::clicked, this, &MibLibraryWidget::browseLibraryRoot);
     connect(openRoot, &QPushButton::clicked, this, &MibLibraryWidget::openLibraryRoot);
     connect(importButton, &QPushButton::clicked, this, &MibLibraryWidget::importFiles);
     connect(openProfileFolderButton, &QPushButton::clicked, this, &MibLibraryWidget::openProfileFolder);
@@ -732,7 +875,6 @@ void MibLibraryWidget::beginInitialRefresh(quint64 generation)
             context->initialPublicationTimer.start();
             context->initialPublishing = true;
             context->table->setUpdatesEnabled(false);
-            context->table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Fixed);
             context->table->setRowCount(context->pendingInitialRecords.size());
             context->publishInitialChunk(generation);
         }, Qt::QueuedConnection);
@@ -786,17 +928,18 @@ void MibLibraryWidget::publishInitialChunk(quint64 generation)
         QTimer::singleShot(0, this, [this, generation]() { publishInitialChunk(generation); });
         return;
     }
-    table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
     table->setUpdatesEnabled(true);
     initialPublishing = false;
     sourceFilter->clear();
     sourceFilter->addItems(pendingInitialSources);
+    applyScope();
     applyFilter();
     setStatusText(tr("%n modules in library", nullptr, records.size()));
     setOperationActive(false);
     pendingInitialRecords.clear();
     pendingInitialSources.clear();
     initialReady = true;
+    lastFingerprint = collectionFingerprint();
     ++counters.inventoryBuilds;
     ++counters.profilePopulations;
     showCurrentInfo();
@@ -838,6 +981,65 @@ void MibLibraryWidget::refreshCatalog()
     setIanaStatusText(tr("Refreshing authoritative IANA catalog…"));
     DiagnosticLogger::log("MIB", status->text());
     transport->get(IanaMibSourceProvider::indexUrl());
+}
+
+// A cheap summary of the Library folder (names, sizes and times of its files) to notice changes
+// made outside the application without reading any file.
+QString MibLibraryWidget::collectionFingerprint() const
+{
+    QCryptographicHash hash(QCryptographicHash::Sha1);
+    QDirIterator files(library.rootPath(), QDir::Files | QDir::Readable, QDirIterator::Subdirectories);
+    QStringList lines;
+    while (files.hasNext()) {
+        const QFileInfo info(files.next());
+        lines << QStringLiteral("%1|%2|%3").arg(info.filePath()).arg(info.size()).arg(info.lastModified().toMSecsSinceEpoch());
+    }
+    lines.sort();
+    for (const QString &line : lines) hash.addData(line.toUtf8());
+    return QString::fromLatin1(hash.result().toHex());
+}
+
+// Scanning every MIB file takes seconds on a large Library, so the scan runs on a worker thread
+// and only the finished result is published here. Requests that arrive meanwhile are coalesced.
+void MibLibraryWidget::refreshInBackground()
+{
+    if (dependencyCheckRunning) return;
+    if (refreshRunning) { refreshQueued = true; return; }
+    refreshRunning = true;
+    setStatusText(tr("Refreshing the Library…"));
+    const QList<MibModuleRecord> localRecords = callbacks.localInventory
+        ? callbacks.localInventory() : QList<MibModuleRecord>{};
+    const MibLibraryService snapshot = library;
+    const QStringList paths = bundledPaths;
+    const MibCatalog catalogSnapshot = catalog;
+    const QPointer<MibLibraryWidget> context(this);
+    QThreadPool::globalInstance()->start([context, snapshot, paths, catalogSnapshot, localRecords]() mutable {
+        QList<MibLibraryRecord> prepared = snapshot.inventory(paths, catalogSnapshot, localRecords);
+        QMetaObject::invokeMethod(context, [context, prepared = std::move(prepared)]() mutable {
+            if (!context) return;
+            context->refreshRunning = false;
+            if (!context->dependencyCheckRunning) context->refreshImpl(true, &prepared);
+            if (context->refreshQueued) { context->refreshQueued = false; context->refreshInBackground(); }
+        }, Qt::QueuedConnection);
+    });
+}
+
+// Re-reads the Library folder. The index change this causes would otherwise refresh the window
+// on the spot (and scan every file on the UI thread), so that is held back and the scan runs on a
+// worker thread instead.
+void MibLibraryWidget::rescanCollection()
+{
+    deferIndexRefresh = true;
+    if (callbacks.collectionChanged) callbacks.collectionChanged();
+    deferIndexRefresh = false;
+    refreshInBackground();
+}
+
+// The Library index changed. Profiles are re-planned straight away so a profile never lags the files.
+void MibLibraryWidget::refreshOnIndexChange()
+{
+    if (deferIndexRefresh) return;
+    refresh();
 }
 
 void MibLibraryWidget::refresh()
@@ -918,7 +1120,7 @@ void MibLibraryWidget::refreshImpl(bool prepareProfile, const QList<MibLibraryRe
     const qint64 tableBuildMs = phaseTimer.restart();
     const QString oldSource = sourceFilter->currentText();
     sourceFilter->clear(); sourceFilter->addItems(sources);
-    sourceFilter->setCurrentText(oldSource); applyFilter();
+    sourceFilter->setCurrentText(oldSource); applyScope(); applyFilter();
     const qint64 filterMs = phaseTimer.restart();
     if (!currentModule.isEmpty()) {
         for (int row = 0; row < table->rowCount(); ++row)
@@ -951,6 +1153,7 @@ void MibLibraryWidget::refreshImpl(bool prepareProfile, const QList<MibLibraryRe
     updateSelectionUi();
     refreshIanaCatalog();
     const qint64 detailsMs = phaseTimer.elapsed();
+    lastFingerprint = collectionFingerprint();
     DiagnosticLogger::log("MIB", tr("Library refresh total-ms=%1 automatic-profiles-ms=%2 local-projection-ms=%3 inventory-ms=%4 table-model-ms=%5 filter-sort-ms=%6 profiles-ms=%7 details-layout-ms=%8 records=%9")
         .arg(totalTimer.elapsed()).arg(automaticProfilesMs).arg(localProjectionMs)
         .arg(inventoryMs).arg(tableBuildMs).arg(filterMs).arg(profilesMs)
@@ -1008,11 +1211,7 @@ void MibLibraryWidget::publishPreparedProfile(const QString &id,
         profileGuidance->setText(profileGuidanceText(*profile));
         refreshProfileLists(&plan);
     }
-    for (int row = 0; row < table->rowCount(); ++row) {
-        const QString module = table->item(row, 1)->text();
-        table->item(row, 3)->setText(plan.effectiveModules.contains(module)
-            ? tr("Included") : tr("Not included"));
-    }
+    applyScope(); applyFilter();
     updateSelectionUi();
     emit profileSelectionChanged(id, plan);
 }
@@ -1028,18 +1227,397 @@ void MibLibraryWidget::activate()
         .arg(timer.elapsed()).arg(records.size()));
 }
 
+QString MibLibraryWidget::sourceDisplay(const QString &path) const
+{
+    if (path.isEmpty()) return QStringLiteral("—");
+    const QString root = QDir::cleanPath(library.rootPath());
+    const QString clean = QDir::cleanPath(path);
+    if (!root.isEmpty() && clean.startsWith(root + QLatin1Char('/'), Qt::CaseSensitive))
+        return QDir::toNativeSeparators(clean.mid(root.size() + 1));
+    return QDir::toNativeSeparators(clean);
+}
+
+// The Library is shown from one profile's point of view (default: the active profile) or as the
+// whole collection. Conflict and membership are judged for that view, because a module that has
+// two copies in the collection is only a problem for a profile that cannot choose between them.
+void MibLibraryWidget::applyScope()
+{
+    if (!scopeCombo || !table) return;
+    // Keep the chooser in step with the profile list; remember what was selected.
+    {
+        const QString keep = scopeCombo->currentData().toString();
+        const QSignalBlocker block(scopeCombo);
+        while (scopeCombo->count() > 3) scopeCombo->removeItem(3);
+        for (const MibProfileRecord &profile : profiles.profiles())
+            scopeCombo->addItem(profile.name, profile.id);
+        const int at = scopeCombo->findData(keep);
+        scopeCombo->setCurrentIndex(at >= 0 ? at : 0);
+    }
+    const QString scope = scopeCombo->currentData().toString();
+    const MibProfileRecord *profile = nullptr;
+    MibEffectivePlan plan;
+    QSet<QString> inProfile;
+    viewPlan = {}; viewProfileName.clear(); viewProfileId.clear();
+    if (scope != QLatin1String("@all")) {
+        profile = profiles.find(scope == QLatin1String("@active") ? currentProfile().id : scope);
+        if (profile) {
+            plan = planFor(*profile);
+            viewPlan = plan; viewProfileName = profile->name; viewProfileId = profile->id;
+            const QStringList effective = callbacks.effectivePlan ? plan.effectiveModules : profile->explicitModules;
+            inProfile = QSet<QString>(effective.cbegin(), effective.cend());
+            for (const QString &name : plan.ambiguousModules) inProfile.insert(name);
+        }
+    }
+    QHash<QString, const MibLibraryRecord *> byName;
+    for (const MibLibraryRecord &record : records) byName.insert(record.moduleName, &record);
+    const QSignalBlocker blocker(table);
+    for (int row = 0; row < table->rowCount(); ++row) {
+        const QString module = table->item(row, 1)->text();
+        const MibLibraryRecord *record = byName.value(module, nullptr);
+        if (!record) continue;
+        QTableWidgetItem *statusItem = table->item(row, 2), *profilesItem = table->item(row, 3),
+                         *sourceItem = table->item(row, 5);
+        if (!table->item(row, 6)) {
+            auto *fileItem = new QTableWidgetItem;
+            fileItem->setFlags(fileItem->flags() & ~Qt::ItemIsEditable);
+            table->setItem(row, 6, fileItem);
+        }
+        const MibLibraryStatus shown = sessionState.status(module, record->status);
+        QString statusText = inventoryStatusText(shown), statusTip, profilesText, profilesTip;
+        QString path = record->localPath;
+        bool inScope = true;
+        if (scope == QLatin1String("@all") || !profile) {
+            const QStringList names = profilesContaining ? profilesContaining(module) : QStringList{};
+            profilesText = names.isEmpty() ? tr("None") : names.size() <= 2 ? names.join(QStringLiteral(", "))
+                : tr("%1, %2 and %n more", nullptr, int(names.size()) - 2).arg(names[0], names[1]);
+            profilesTip = names.join(QLatin1Char('\n'));
+            if (shown == MibLibraryStatus::Conflict)
+                statusTip = tr("Several different copies of this module exist in the collection. Choose a profile to see whether it matters there.");
+        } else {
+            inScope = inProfile.contains(module);
+            const auto *member = plan.member(module);
+            if (member && !member->provider.canonicalPath.isEmpty()) path = member->provider.canonicalPath;
+            if (inScope) {
+                profilesText = profile->name + (member && member->membershipReason == MibPlanMembershipReason::Dependency
+                    ? tr(" (dependency)") : QString());
+                if (plan.ambiguousModules.contains(module)) {
+                    statusText = inventoryStatusText(MibLibraryStatus::Conflict);
+                    QStringList copies;
+                    if (member) for (const auto &alt : member->alternatives) copies << sourceDisplay(alt.canonicalPath);
+                    statusTip = tr("%1 cannot choose between these copies:\n%2").arg(profile->name, copies.join(QLatin1Char('\n')));
+                } else if (plan.resolvedByRevision(module)) {
+                    statusText = tr("Resolved conflict");
+                    statusTip = tr("Several different copies of this module are reachable from %1. It uses %2 because that copy has the newest revision. Nothing to fix.")
+                        .arg(profile->name, sourceDisplay(path));
+                } else if (shown == MibLibraryStatus::Conflict) {
+                    statusText = inventoryStatusText(MibLibraryStatus::Installed);
+                    statusTip = tr("Other copies exist in the collection; %1 uses %2.").arg(profile->name, sourceDisplay(path));
+                }
+            }
+        }
+        statusItem->setText(statusText); statusItem->setToolTip(statusTip);
+        const bool problem = statusText == inventoryStatusText(MibLibraryStatus::Conflict) ||
+            statusText == inventoryStatusText(MibLibraryStatus::Unresolved) ||
+            statusText == inventoryStatusText(MibLibraryStatus::Invalid) ||
+            statusText == inventoryStatusText(MibLibraryStatus::Failed);
+        statusItem->setIcon(problem ? style()->standardIcon(QStyle::SP_MessageBoxWarning)
+                            : statusText == tr("Resolved conflict") ? style()->standardIcon(QStyle::SP_MessageBoxInformation)
+                                                                    : QIcon());
+        profilesItem->setText(profilesText); profilesItem->setToolTip(profilesTip);
+        sourceItem->setText(sourceDisplay(path)); sourceItem->setToolTip(QDir::toNativeSeparators(path));
+        table->item(row, 6)->setText(QFileInfo(path).fileName());
+        table->item(row, 6)->setToolTip(QDir::toNativeSeparators(path));
+        sourceItem->setData(Qt::UserRole + 1, originText(*record));
+        sourceItem->setData(Qt::UserRole + 2, path);
+        table->item(row, 1)->setData(Qt::UserRole + 10, inScope);
+    }
+    updateProviders();
+}
+
+void MibLibraryWidget::updateProviders()
+{
+    if (!providersTable) return;
+    providersTable->setRowCount(0);
+    const int row = table->currentRow();
+    if (row < 0 || row >= records.size()) { providersSummary->setText(tr("Select a module to see the files that provide it.")); return; }
+    const QString module = records[row].moduleName;
+    const QList<MibIndexedProvider> found = callbacks.providersFor ? callbacks.providersFor(module) : QList<MibIndexedProvider>{};
+    const auto *member = viewProfileName.isEmpty() ? nullptr : viewPlan.member(module);
+    const QString used = member ? member->provider.canonicalPath : QString();
+    // In a profile's view only the copies that profile can reach count toward a conflict. Copies
+    // elsewhere in the Library are listed after them, greyed, so nothing is hidden.
+    QSet<QString> reachable;
+    if (member) {
+        reachable.insert(member->provider.canonicalPath);
+        for (const MibIndexedProvider &alternative : member->alternatives) reachable.insert(alternative.canonicalPath);
+    }
+    // Files the profile lists itself that define the same module are reported as a conflict
+    // rather than as alternatives of one chosen provider; they are reachable too.
+    if (member)
+        for (const auto &diagnostic : viewPlan.resolutionDiagnostics)
+            if (diagnostic.identity == module)
+                for (const MibIndexedProvider &candidate : diagnostic.candidates) reachable.insert(candidate.canonicalPath);
+    const bool profileView = !viewProfileName.isEmpty() && member;
+    QList<MibIndexedProvider> inView, outside;
+    for (const MibIndexedProvider &provider : found)
+        (!profileView || reachable.contains(provider.canonicalPath) ? inView : outside).append(provider);
+    QSet<QString> contents;
+    for (const MibIndexedProvider &provider : inView) contents.insert(provider.sha256);
+    const auto addRow = [&](const MibIndexedProvider &provider, const QString &usedText, bool muted) {
+        const int at = providersTable->rowCount(); providersTable->insertRow(at);
+        const MibModuleRecord info = callbacks.metadata ? callbacks.metadata(module, provider.canonicalPath) : MibModuleRecord{};
+        auto *usedItem = new QTableWidgetItem(usedText);
+        auto *pathItem = new QTableWidgetItem(sourceDisplay(provider.canonicalPath));
+        pathItem->setData(Qt::UserRole, provider.canonicalPath);
+        pathItem->setToolTip(QDir::toNativeSeparators(provider.canonicalPath));
+        auto *revisionItem = new QTableWidgetItem(info.lastRevision.isValid()
+            ? info.lastRevision.toUTC().toString(QStringLiteral("yyyy-MM-dd")) : QStringLiteral("—"));
+        auto *idItem = new QTableWidgetItem(provider.sha256.left(12));
+        idItem->setToolTip(provider.sha256);
+        auto *originItem = new QTableWidgetItem(provider.origin);
+        const QList<QTableWidgetItem *> items{usedItem, pathItem, revisionItem, idItem, originItem};
+        for (int column = 0; column < items.size(); ++column) {
+            if (muted) items[column]->setData(AppearanceColors::MutedRole, true);
+            providersTable->setItem(at, column, items[column]);
+        }
+        if (muted) for (auto *item : items) item->setToolTip(tr("%1\nNot reachable from %2.").arg(item->toolTip(), viewProfileName));
+    };
+    for (const MibIndexedProvider &provider : inView)
+        addRow(provider, !used.isEmpty() && provider.canonicalPath == used ? tr("Used")
+                         : profileView ? (viewPlan.resolvedByRevision(module) ? tr("Older copy") : tr("Candidate")) : QString(), false);
+    if (providersShowOutside && providersShowOutside->isChecked())
+        for (const MibIndexedProvider &provider : outside) addRow(provider, tr("Outside profile"), true);
+    QString text;
+    if (found.isEmpty()) text = tr("%1 has no file in the Library.").arg(module);
+    else if (inView.size() == 1)
+        text = outside.isEmpty() ? tr("%1 is provided by one file.").arg(module)
+            : tr("%1 has one copy that %2 can use. %n other copy(ies) elsewhere in the Library are not part of this profile and do not matter here (tick \"Show copies outside this profile\" to list them).", nullptr, int(outside.size())).arg(module, viewProfileName);
+    else if (contents.size() == 1)
+        text = tr("%1 has %n copies with identical content; any of them gives the same result.", nullptr, int(inView.size())).arg(module);
+    else if (!viewProfileName.isEmpty() && member && viewPlan.resolvedByRevision(module))
+        text = tr("%1 has %n copies with different content inside %2. Resolved: %2 uses %3 because it has the newest revision, "
+                  "and the older copies are ignored. Nothing needs fixing. Use This Copy only if you need an older one; "
+                  "Compare shows how they differ.", nullptr, int(inView.size())).arg(module, viewProfileName, sourceDisplay(used));
+    else if (viewProfileName.isEmpty())
+        text = tr("%1 has %n copies with different content. Choose a profile in View to see which one it uses. "
+                  "Select two copies and press Compare to see the differences.", nullptr, int(inView.size())).arg(module);
+    else if (!member)
+        text = tr("%1 has %n copies with different content. %2 does not include this module.", nullptr, int(found.size())).arg(module, viewProfileName);
+    else {
+        QString why;
+        switch (member->providerReason) {
+        case MibPlanProviderReason::ExplicitPin: why = tr("it was pinned for this profile"); break;
+        case MibPlanProviderReason::AutomaticProfileFolder: why = tr("it is in the profile's own folder"); break;
+        case MibPlanProviderReason::GlobalPrecedence: why = tr("it comes first in the search order (Standards is searched last)"); break;
+        case MibPlanProviderReason::ExactProfileMember: why = tr("the profile lists this exact file"); break;
+        case MibPlanProviderReason::Ambiguous: why = tr("no rule picks one of them"); break;
+        case MibPlanProviderReason::InvalidPin: why = tr("its pin no longer matches a file"); break;
+        default: why = tr("it is the only candidate in scope"); break;
+        }
+        text = viewPlan.ambiguousModules.contains(module)
+            ? tr("%1 has %n copies with different content inside %2, and %2 cannot choose between them (no copy has a newer revision). "
+                 "Unresolved. To fix it: select the copy you want and press Use This Copy (Automatic profiles first offer to make an editable Custom copy). "
+                 "Press Compare to see how the copies differ.",
+                 nullptr, int(inView.size())).arg(module, viewProfileName)
+            : tr("%1 has %n copies with different content inside %2. %2 uses %3 because %4. Select two copies and press Compare to see the differences.",
+                 nullptr, int(inView.size())).arg(module, viewProfileName, sourceDisplay(used), why);
+    }
+    providersSummary->setText(text);
+}
+
+// Make the selected copy the one the viewed profile uses. Automatic profiles follow their folders
+// and are never edited member by member, so a Custom copy is offered instead.
+void MibLibraryWidget::useSelectedProvider()
+{
+    const auto rows = providersTable->selectionModel()->selectedRows();
+    const int libraryRow = table->currentRow();
+    if (rows.size() != 1 || viewProfileId.isEmpty() || libraryRow < 0 || libraryRow >= records.size()) return;
+    const QString module = records[libraryRow].moduleName;
+    const QString path = providersTable->item(rows.first().row(), 1)->data(Qt::UserRole).toString();
+    QString sha;
+    if (callbacks.providersFor)
+        for (const MibIndexedProvider &provider : callbacks.providersFor(module))
+            if (provider.canonicalPath == path) sha = provider.sha256;
+    const MibProfileRecord *profile = profiles.find(viewProfileId);
+    if (path.isEmpty() || sha.isEmpty() || !profile) return;
+    QString profileId = profile->id, error;
+    if (profile->type != MibProfileType::Custom) {
+        const QString suggested = tr("%1 (custom)").arg(profile->name);
+        if (QMessageBox::question(this, tr("Use this copy"),
+                tr("%1 is an Automatic profile and follows its folders, so it cannot choose between copies.\n\n"
+                   "Make an editable Custom copy named \"%2\" that uses\n%3\nfor %4? Other copies of %4 in the profile's folders are left out of the copy. %1 stays as it is.")
+                    .arg(profile->name, suggested, sourceDisplay(path), module)) != QMessageBox::Yes) return;
+        profileId = profiles.duplicate(profile->id, suggested, &error);
+        if (profileId.isEmpty()) { setStatusText(error); return; }
+    }
+    // The other copies this profile can reach (taken before anything changes).
+    QStringList others;
+    for (int r = 0; r < providersTable->rowCount(); ++r) {
+        const QString state = providersTable->item(r, 0)->text();
+        const QString other = providersTable->item(r, 1)->data(Qt::UserRole).toString();
+        if ((state == tr("Used") || state == tr("Candidate") || state == tr("Older copy")) && other != path) others << other;
+    }
+    MibProviderPin pin; pin.canonicalPath = path; pin.sha256 = sha; pin.reason = tr("Chosen in MIB Navigator");
+    if (!profiles.pinProvider(profileId, module, pin, &error)) { setStatusText(error); return; }
+    // A pin settles copies that are only dependencies. Copies the profile lists itself (single files
+    // or files inside followed folders) stay in conflict until the others are left out, so do that too.
+    int leftOut = 0;
+    if (const MibProfileRecord *updated = profiles.find(profileId); updated && planFor(*updated).ambiguousModules.contains(module)) {
+        MibProfileRecord changed = *updated;
+        QStringList excluded;
+        for (const QString &other : std::as_const(others)) {
+            const auto before = changed.roots.size();
+            changed.roots.erase(std::remove_if(changed.roots.begin(), changed.roots.end(), [&other](const auto &member) {
+                return MibPathIsInsideFolder(member.canonicalPath, other) && MibPathIsInsideFolder(other, member.canonicalPath);
+            }), changed.roots.end());
+            if (changed.roots.size() != before) ++leftOut; else excluded << other;
+        }
+        changed.explicitModules = MibProfileMemberIdentities(changed.roots);
+        if (!profiles.update(changed, &error)) { setStatusText(error); return; }
+        if (!excluded.isEmpty() && profiles.setFilesExcluded(profileId, excluded, true, &error)) leftOut += int(excluded.size());
+    }
+    const bool newProfile = profileId != viewProfileId;
+    if (newProfile) refreshProfiles(profileId);
+    afterProfileChoice(profileId);
+    if (newProfile) {
+        const int at = scopeCombo->findData(profileId);
+        if (at >= 0) scopeCombo->setCurrentIndex(at);
+    }
+    const MibProfileRecord *after = profiles.find(profileId);
+    setStatusText(leftOut
+        ? tr("%1 now uses %2 for %3; %n other copy(ies) were left out of the profile (use Profiles to take them back).", nullptr, leftOut)
+              .arg(after ? after->name : QString(), sourceDisplay(path), module)
+        : tr("%1 now uses %2 for %3.").arg(after ? after->name : QString(), sourceDisplay(path), module));
+}
+
+// Side-by-side comparison of two copies of a module (read-only; nothing is opened for editing).
+void MibLibraryWidget::compareSelectedProviders()
+{
+    const auto rows = providersTable->selectionModel()->selectedRows();
+    QString leftPath, rightPath;
+    if (rows.size() == 2) {
+        leftPath = providersTable->item(rows[0].row(), 1)->data(Qt::UserRole).toString();
+        rightPath = providersTable->item(rows[1].row(), 1)->data(Qt::UserRole).toString();
+    } else if (rows.size() == 1) {
+        rightPath = providersTable->item(rows[0].row(), 1)->data(Qt::UserRole).toString();
+        for (int r = 0; r < providersTable->rowCount(); ++r)
+            if (providersTable->item(r, 0)->text() == tr("Used")) leftPath = providersTable->item(r, 1)->data(Qt::UserRole).toString();
+        if (leftPath.isEmpty() || leftPath == rightPath) {
+            for (int r = 0; r < providersTable->rowCount(); ++r) {
+                const QString other = providersTable->item(r, 1)->data(Qt::UserRole).toString();
+                if (other != rightPath) { leftPath = other; break; }
+            }
+        }
+    }
+    if (leftPath.isEmpty() || rightPath.isEmpty() || leftPath == rightPath) return;
+    const auto load = [](const QString &path, QByteArray *bytes) {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) return false;
+        *bytes = file.readAll(); return true;
+    };
+    QByteArray leftBytes, rightBytes;
+    if (!load(leftPath, &leftBytes) || !load(rightPath, &rightBytes)) {
+        QMessageBox::warning(this, tr("Compare copies"), tr("One of the files could not be read."));
+        return;
+    }
+    const MibTextDiff diff = MibCompareLines(MibDiffSplitLines(leftBytes), MibDiffSplitLines(rightBytes));
+    auto *dialog = new QDialog(this);
+    dialog->setObjectName("MibCompareDialog");
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowTitle(tr("Compare copies of %1").arg(records.value(table->currentRow()).moduleName));
+    dialog->resize(1200, 700);
+    auto *layout = new QVBoxLayout(dialog);
+    const auto hash = [](const QByteArray &bytes) { return QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex().left(12)); };
+    QString summary = diff.identical()
+        ? tr("The two files have the same lines. They may still differ in line endings or trailing spaces, which is why the Library treats them as different copies.")
+        : tr("%n line(s) differ.", nullptr, diff.differingRows);
+    if (!diff.aligned) summary += tr(" The files are too different to line up; they are shown row by row.");
+    auto *header = new QLabel(summary, dialog); header->setWordWrap(true); layout->addWidget(header);
+    auto *panes = new QHBoxLayout;
+    QPlainTextEdit *edits[2];
+    const QString paths[2] = {leftPath, rightPath};
+    const QByteArray *bytes[2] = {&leftBytes, &rightBytes};
+    const QStringList *columns[2] = {&diff.left, &diff.right};
+    QFont mono = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+    for (int side = 0; side < 2; ++side) {
+        auto *column = new QVBoxLayout;
+        auto *label = new QLabel(tr("%1\n%2 bytes · content ID %3").arg(sourceDisplay(paths[side])).arg(bytes[side]->size()).arg(hash(*bytes[side])), dialog);
+        label->setToolTip(QDir::toNativeSeparators(paths[side])); label->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        edits[side] = new QPlainTextEdit(dialog);
+        edits[side]->setReadOnly(true); edits[side]->setLineWrapMode(QPlainTextEdit::NoWrap); edits[side]->setFont(mono);
+        QStringList numbered;
+        const QList<int> &numbers = side == 0 ? diff.leftNumbers : diff.rightNumbers;
+        for (int row = 0; row < columns[side]->size(); ++row)
+            numbered << QStringLiteral("%1  %2").arg(numbers[row] ? QString::number(numbers[row]) : QString(), 5).arg(columns[side]->at(row));
+        edits[side]->setPlainText(numbered.join('\n'));
+        column->addWidget(label); column->addWidget(edits[side], 1);
+        panes->addLayout(column, 1);
+    }
+    layout->addLayout(panes, 1);
+    // Mark the differing rows on both sides.
+    for (int side = 0; side < 2; ++side) {
+        QList<QTextEdit::ExtraSelection> marks;
+        for (int row = 0; row < diff.kinds.size(); ++row) {
+            if (diff.kinds[row] == MibTextDiff::Kind::Same) continue;
+            QTextEdit::ExtraSelection mark;
+            const bool blank = (side == 0 && diff.kinds[row] == MibTextDiff::Kind::RightOnly) ||
+                               (side == 1 && diff.kinds[row] == MibTextDiff::Kind::LeftOnly);
+            mark.format.setBackground(blank ? QColor(128, 128, 128, 40)
+                : diff.kinds[row] == MibTextDiff::Kind::Changed ? QColor(255, 193, 7, 80)
+                : side == 0 ? QColor(244, 67, 54, 70) : QColor(76, 175, 80, 70));
+            mark.format.setProperty(QTextFormat::FullWidthSelection, true);
+            mark.cursor = QTextCursor(edits[side]->document()->findBlockByNumber(row));
+            marks << mark;
+        }
+        edits[side]->setExtraSelections(marks);
+    }
+    connect(edits[0]->verticalScrollBar(), &QScrollBar::valueChanged, edits[1]->verticalScrollBar(), &QScrollBar::setValue);
+    connect(edits[1]->verticalScrollBar(), &QScrollBar::valueChanged, edits[0]->verticalScrollBar(), &QScrollBar::setValue);
+    connect(edits[0]->horizontalScrollBar(), &QScrollBar::valueChanged, edits[1]->horizontalScrollBar(), &QScrollBar::setValue);
+    connect(edits[1]->horizontalScrollBar(), &QScrollBar::valueChanged, edits[0]->horizontalScrollBar(), &QScrollBar::setValue);
+    auto *buttons = new QHBoxLayout;
+    auto *next = new QPushButton(tr("Next Difference"), dialog); next->setObjectName("MibCompareNext");
+    auto *close = new QPushButton(tr("Close"), dialog);
+    next->setEnabled(!diff.identical());
+    buttons->addWidget(next); buttons->addStretch(1); buttons->addWidget(close);
+    layout->addLayout(buttons);
+    auto position = std::make_shared<int>(-1);
+    connect(next, &QPushButton::clicked, dialog, [diff, edits, position]() {
+        const int count = int(diff.kinds.size());
+        int row = *position;
+        // Step past the current block, then to the start of the next one.
+        while (row >= 0 && row < count && diff.kinds[row] != MibTextDiff::Kind::Same) ++row;
+        for (int step = 0; step < count; ++step, ++row) {
+            const int at = (row % count + count) % count;
+            if (diff.kinds[at] != MibTextDiff::Kind::Same) { row = at; break; }
+        }
+        *position = row;
+        for (int side = 0; side < 2; ++side) {
+            QTextCursor cursor(edits[side]->document()->findBlockByNumber(row));
+            edits[side]->setTextCursor(cursor); edits[side]->centerCursor();
+        }
+    });
+    connect(close, &QPushButton::clicked, dialog, &QDialog::close);
+    if (!diff.identical()) next->click();
+    dialog->show();
+}
+
 void MibLibraryWidget::applyFilter()
 {
     int visible = 0;
     for (int row = 0; row < table->rowCount(); ++row) {
         const bool matchSearch = table->item(row, 1)->text().contains(search->text(), Qt::CaseInsensitive) ||
             table->item(row, 4)->text().contains(search->text(), Qt::CaseInsensitive) ||
-            table->item(row, 5)->text().contains(search->text(), Qt::CaseInsensitive);
+            table->item(row, 5)->text().contains(search->text(), Qt::CaseInsensitive) ||
+            (table->item(row, 6) && table->item(row, 6)->text().contains(search->text(), Qt::CaseInsensitive));
+        const QString origin = table->item(row, 5)->data(Qt::UserRole + 1).toString();
         const bool matchSource = sourceFilter->currentIndex() <= 0 ||
-            table->item(row, 5)->text() == sourceFilter->currentText();
+            (origin.isEmpty() ? table->item(row, 5)->text() : origin) == sourceFilter->currentText();
+        const bool inScope = table->item(row, 1)->data(Qt::UserRole + 10).isValid()
+            ? table->item(row, 1)->data(Qt::UserRole + 10).toBool() : true;
         const bool matchStatus = statusFilter->currentIndex() <= 0 ||
             table->item(row, 2)->text() == statusFilter->currentText();
-        const bool match = matchSearch && matchSource && matchStatus;
+        const bool match = inScope && matchSearch && matchSource && matchStatus;
         table->setRowHidden(row, !match);
         visible += match;
     }
@@ -1146,7 +1724,7 @@ void MibLibraryWidget::setOperationActive(bool active)
     emit activityChanged();
     if (active) { downloadButton->setEnabled(false); installDependenciesButton->setEnabled(false); }
     else updateSelectionUi();
-    for (const auto &name : {"MibLibraryBrowseRoot", "MibLibraryRefresh", "MibLibraryImportFiles"})
+    for (const auto &name : {"MibLibraryRefresh", "MibLibraryImportFiles"})
         if (auto *button = findChild<QPushButton *>(name)) button->setEnabled(!active && !dependencyCheckRunning);
 }
 
@@ -1260,8 +1838,24 @@ void MibLibraryWidget::showCurrentInfo()
     const int row = table->currentRow();
     const bool valid = row >= 0 && row < records.size();
     openEditorButton->setEnabled(valid && !records[row].localPath.isEmpty());
-    if (!valid) { for (QLabel *label : infoValues) label->clear(); return; }
-    const MibLibraryRecord &record = records[row];
+    if (!valid) { for (QLabel *label : infoValues) label->clear(); updateProviders(); return; }
+    // Show the file this view actually uses for the module, which in a profile's view can differ
+    // from the Library's single global record (for example a vendor copy of INET-ADDRESS-MIB
+    // rather than the one under Standards).
+    MibLibraryRecord record = records[row];
+    const QTableWidgetItem *sourceItem = table->item(row, 5);
+    const QString shownPath = sourceItem ? sourceItem->data(Qt::UserRole + 2).toString() : QString();
+    if (!shownPath.isEmpty() && shownPath != record.localPath) {
+        record.localPath = shownPath;
+        record.sourceFilename.clear(); record.sourceUrl.clear(); record.sourceName.clear();
+        record.sourceId.clear(); record.downloadedAt = QDateTime(); record.revision.clear();
+        record.sha256.clear();
+        if (callbacks.providersFor)
+            for (const MibIndexedProvider &provider : callbacks.providersFor(record.moduleName))
+                if (provider.canonicalPath == shownPath) record.sha256 = provider.sha256;
+        if (record.status == MibLibraryStatus::Standards) record.status = MibLibraryStatus::Installed;
+    }
+    updateProviders();
     const MibModuleRecord metadata = callbacks.metadata
         ? callbacks.metadata(record.moduleName, record.localPath) : MibModuleRecord{};
     const QString unavailable = QStringLiteral("—");
@@ -1292,7 +1886,12 @@ void MibLibraryWidget::showCurrentInfo()
         infoValues[key]->setVisible(visible);
         infoLabels[key]->setVisible(visible);
     };
-    setFileField("origin", fileInfo.origin);
+    // Where the file lives, not a generic "Imported": the folder relative to the MIB collection.
+    const bool catalogOrigin = record.status == MibLibraryStatus::Standards ||
+        fileInfo.origin == QLatin1String("IANA");
+    const QString folderText = record.localPath.isEmpty() ? fileInfo.origin
+        : sourceDisplay(QFileInfo(record.localPath).absolutePath());
+    setFileField("origin", catalogOrigin ? fileInfo.origin : folderText);
     setFileField("revision", fileInfo.revision);
     setFileField("filename", fileInfo.filename);
     setFileField("path", fileInfo.localPath);
@@ -1382,37 +1981,70 @@ void MibLibraryWidget::profileChanged()
 
 MibEffectivePlan MibLibraryWidget::planFor(const MibProfileRecord &profile) const
 {
-    return callbacks.effectivePlan ? callbacks.effectivePlan(profile) : MibEffectivePlan{};
+    if (!callbacks.effectivePlan) return {};
+    // Without a way to tell when the indexed files change, a cached plan could be stale.
+    if (!callbacks.libraryGeneration) return callbacks.effectivePlan(profile);
+    // Planning a large profile takes seconds, and one screen update asks for the same plan many
+    // times. A plan only changes when the profile, the indexed files, or the Library folder change,
+    // so those three make up the key.
+    QStringList key{library.rootPath(),
+        QString::number(callbacks.libraryGeneration ? callbacks.libraryGeneration() : 0),
+        profile.id, profile.name, QString::number(int(profile.type)), profile.explicitModules.join('|'),
+        profile.includeStandardBase ? "1" : "0", profile.unresolvedLegacyModules.join('|'),
+        QString::number(profile.manifestVersion)};
+    for (auto pin = profile.providerPins.cbegin(); pin != profile.providerPins.cend(); ++pin)
+        key << pin.key() << pin->canonicalPath << pin->sha256;
+    for (const auto &member : profile.members) key << member.canonicalPath << member.sha256 << member.identities.join(',');
+    for (const auto &member : profile.roots) key << "r" << member.canonicalPath << member.sha256 << member.identities.join(',');
+    for (const auto &scope : profile.orderedScopes) key << "s" << scope.id << scope.canonicalPath;
+    for (const auto &folder : profile.folders) key << "f" << folder.canonicalPath << folder.excludedFiles.join('|');
+    const QString cacheKey = key.join(QChar(0x1f));
+    if (const auto found = planCache.constFind(cacheKey); found != planCache.cend()) return *found;
+    QElapsedTimer timer; timer.start();
+    MibEffectivePlan plan = callbacks.effectivePlan(profile);
+    DiagnosticLogger::log("MIB", QStringLiteral("plan profile=%1 modules=%2 ms=%3")
+        .arg(profile.id).arg(plan.effectiveModules.size()).arg(timer.elapsed()));
+    if (planCache.size() >= 24) planCache.clear();
+    planCache.insert(cacheKey, plan);
+    return plan;
 }
 
-void MibLibraryWidget::browseLibraryRoot()
+bool MibLibraryWidget::changeLibraryRoot(const QString &chosen, QString *error, int *conflicts)
 {
-    const QString chosen = QFileDialog::getExistingDirectory(
-        this, tr("Choose MIB Library Location"), library.rootPath());
-    if (chosen.isEmpty()) return;
+    if (operationRunning()) {
+        if (error) *error = tr("Wait for the current Library operation to finish, then change the location.");
+        return false;
+    }
+    if (QDir::cleanPath(chosen) == QDir::cleanPath(library.rootPath())) return true;
     QSettings settings;
     MibCollectionResult result;
     if (!MibCollection::setConfiguredRoot(settings, chosen, bundledPaths, &result)) {
-        QMessageBox::warning(this, tr("MIB Library Location"), result.error);
-        return;
+        if (error) *error = result.error;
+        return false;
     }
     library = MibLibraryService(chosen);
-    libraryRootEdit->setText(library.rootPath());
+    if (auto *open = findChild<QPushButton *>("MibLibraryOpenRoot"))
+        open->setToolTip(tr("Open the MIB Library folder (%1). Change its location in Settings > Preferences.")
+            .arg(QDir::toNativeSeparators(library.rootPath())));
     profiles.migrateLegacyFolderProfiles();
     if (callbacks.collectionChanged) callbacks.collectionChanged();
     QString migrationError;
     if (callbacks.retryLegacyProfiles)
         callbacks.retryLegacyProfiles(profiles, &migrationError);
     refresh(); refreshProfiles();
-    if (!result.conflicts.isEmpty())
-        QMessageBox::warning(this, tr("MIB Library conflicts"),
-            tr("%n existing different-content file(s) were preserved and not overwritten.",
-               nullptr, result.conflicts.size()));
+    if (conflicts) *conflicts = int(result.conflicts.size());
+    return true;
 }
 
 void MibLibraryWidget::openLibraryRoot()
 {
-    QDesktopServices::openUrl(QUrl::fromLocalFile(library.rootPath()));
+    const QString root = QDir::toNativeSeparators(library.rootPath());
+    if (QDesktopServices::openUrl(QUrl::fromLocalFile(library.rootPath())))
+        setStatusText(tr("Asked your file manager to open %1. If no window appears, look behind this one or open that folder yourself.").arg(root));
+    else {
+        QGuiApplication::clipboard()->setText(root);
+        setStatusText(tr("Could not open a file manager for %1. Open that folder yourself; the path is on the clipboard.").arg(root));
+    }
 }
 
 void MibLibraryWidget::importFiles()
@@ -1510,6 +2142,59 @@ void MibLibraryWidget::refreshProfileLists(const MibEffectivePlan *providedPlan)
         profileSummary += tr(" · provider planning did not converge");
     if (librarySummary.stale) profileSummary += tr("\nMIB Library needs checking");
     dependencyCheckSummary->setText(profileSummary);
+}
+
+void MibLibraryWidget::requiredDependencyMenu(const QPoint &position)
+{
+    auto *item = requiredList->itemAt(position);
+    const MibProfileRecord *profile = profiles.find(profileCombo->currentData().toString());
+    if (!item || !profile) return;
+    const QString module = item->data(Qt::UserRole).toString();
+    const MibEffectivePlan plan = planFor(*profile);
+    const MibEffectivePlanMember *member = plan.member(module);
+    QMenu menu(this);
+    if (profile->type != MibProfileType::Custom) {
+        auto *info = menu.addAction(tr("Automatic profiles follow their folder. Remove the extra copy from the folder, "
+                                       "or make a Custom profile to choose a copy."));
+        info->setEnabled(false);
+    } else {
+        QList<MibIndexedProvider> copies = member ? member->alternatives : QList<MibIndexedProvider>{};
+        if (member && copies.isEmpty() && !member->provider.canonicalPath.isEmpty()) copies << member->provider;
+        if (callbacks.providersFor && copies.size() < 2) copies = callbacks.providersFor(module);
+        const QString pinned = profile->providerPins.value(module).canonicalPath;
+        if (copies.size() > 1) {
+            auto *choose = menu.addMenu(tr("Use this copy of %1").arg(module));
+            for (const MibIndexedProvider &copy : copies) {
+                auto *action = choose->addAction(tr("%1  [%2]").arg(sourceDisplay(copy.canonicalPath), copy.sha256.left(12)));
+                action->setCheckable(true); action->setChecked(copy.canonicalPath == pinned);
+                connect(action, &QAction::triggered, this, [this, profileId = profile->id, module, copy]() {
+                    MibProviderPin pin; pin.canonicalPath = copy.canonicalPath; pin.sha256 = copy.sha256;
+                    pin.reason = tr("Chosen in MIB Navigator");
+                    QString error;
+                    if (!profiles.pinProvider(profileId, module, pin, &error)) { setStatusText(error); return; }
+                    afterProfileChoice(profileId);
+                });
+            }
+        }
+        if (!pinned.isEmpty()) {
+            auto *release = menu.addAction(tr("Stop choosing a copy of %1").arg(module));
+            connect(release, &QAction::triggered, this, [this, profileId = profile->id, module]() {
+                QString error;
+                if (!profiles.unpinProvider(profileId, module, &error) && !error.isEmpty()) { setStatusText(error); return; }
+                afterProfileChoice(profileId);
+            });
+        }
+        if (menu.isEmpty()) menu.addAction(tr("%1 has only one copy; nothing to choose.").arg(module))->setEnabled(false);
+    }
+    menu.exec(requiredList->viewport()->mapToGlobal(position));
+}
+
+void MibLibraryWidget::afterProfileChoice(const QString &profileId)
+{
+    emit profilesChanged();
+    profileChanged();
+    if (profileId == currentProfile().id) refreshActiveProfile();
+    applyScope(); applyFilter();
 }
 
 void MibLibraryWidget::createProfile()
@@ -1771,20 +2456,26 @@ void MibLibraryWidget::fillMemberTree(const MibProfileRecord &profile,
                                   : tr("Followed · %1 MIB file(s)").arg(included));
     }
     for (const MibProfileMember &member : profile.roots) {
-        MibProfileMemberState memberState = QFileInfo::exists(member.canonicalPath)
-            ? MibProfileMemberState::Changed : MibProfileMemberState::Missing;
-        for (const QString &identity : member.identities) {
-            const MibEffectivePlanMember *resolved = effective.member(identity);
-            if (resolved && resolved->provider.sha256 == member.sha256 &&
-                QFileInfo(resolved->provider.canonicalPath).absoluteFilePath().compare(
-                    QFileInfo(member.canonicalPath).absoluteFilePath(), Qt::CaseInsensitive) == 0) {
-                memberState = MibProfileMemberState::Current;
+        // "Changed" means this file's own content differs from when it was added. A file that is
+        // unchanged but not the copy the profile ends up using is a different situation.
+        MibProfileMemberState memberState = MibProfileMemberCurrentState(member);
+        QString usedElsewhere;
+        if (memberState == MibProfileMemberState::Current) {
+            for (const QString &identity : member.identities) {
+                const MibEffectivePlanMember *resolved = effective.member(identity);
+                if (!resolved || resolved->provider.sha256 == member.sha256) continue;
+                usedElsewhere = effective.ambiguousModules.contains(identity) || resolved->provider.canonicalPath.isEmpty()
+                    ? tr("Conflict: %1 has several different copies").arg(identity)
+                    : effective.resolvedByRevision(identity)
+                        ? tr("Older copy: %1 uses the newer revision in %2").arg(identity, sourceDisplay(resolved->provider.canonicalPath))
+                        : tr("Not used: %1 comes from %2").arg(identity, sourceDisplay(resolved->provider.canonicalPath));
                 break;
             }
         }
-        const QString stateText = memberState == MibProfileMemberState::Current ? tr("OK")
+        const QString stateText = !usedElsewhere.isEmpty() ? usedElsewhere
+            : memberState == MibProfileMemberState::Current ? tr("OK")
             : memberState == MibProfileMemberState::Missing ? tr("Missing")
-            : memberState == MibProfileMemberState::Changed ? tr("Changed") : tr("Catalog stale");
+            : memberState == MibProfileMemberState::Changed ? tr("Changed since added") : tr("Catalog stale");
         auto *item = new QTreeWidgetItem(memberTree);
         item->setText(0, shownPath(member.canonicalPath));
         item->setIcon(0, style()->standardIcon(QStyle::SP_FileIcon));
@@ -1793,7 +2484,12 @@ void MibLibraryWidget::fillMemberTree(const MibProfileRecord &profile,
             ? tr("%1 · added as a dependency").arg(stateText) : stateText);
         item->setToolTip(0, QDir::toNativeSeparators(member.canonicalPath) +
             (memberState == MibProfileMemberState::Missing ? tr("\nProfile file is missing")
-             : memberState == MibProfileMemberState::Current ? QString() : tr("\nProfile file content changed")));
+             : !usedElsewhere.isEmpty() ? tr("\nThis file is unchanged, but the profile uses a different copy of the module. "
+                  "Open the Library, choose this profile in View, and look at the module's Providers tab.")
+             : memberState == MibProfileMemberState::Current ? QString()
+             : tr("\nThis file's content is different from when it was added to the profile (for example a newer "
+                  "download was extracted over it). The current file is used. Remove it and add it again to "
+                  "accept the change.")));
         item->setToolTip(1, providerTip(member.identities));
         item->setData(0, PathRole, member.canonicalPath);
         item->setData(0, KindRole, kindRoot);

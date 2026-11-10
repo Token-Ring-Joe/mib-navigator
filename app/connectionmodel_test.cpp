@@ -106,6 +106,7 @@ int main(int argc, char **argv)
     PreferencesSettings prefs;
     prefs.requestTimeout = 7; prefs.requestRetries = 4; prefs.bulkMaxRepetitions = 25; prefs.bulkNonRepeaters = 1;
 
+    prefs.contextName = QString::fromUtf8("Lab / réseau");
     AgentRequestSelection selection;
     ok &= check(ConnectionModel::build("10.1.1.20:1161", ConnectionModel::communityKey(lab, 1),
                     &communityService, &usmService, prefs, &selection) == ConnectionError::None,
@@ -115,6 +116,7 @@ int main(int argc, char **argv)
                 config.address == "10.1.1.20" && config.port == "1161" && config.readCommunity == "labro" &&
                 config.timeout == 7 && config.retries == 4 && config.maxRepetitions == 25 && config.nonRepeaters == 1,
                 "v2c request carries target, community and the GLOBAL timeout/retries/bulk settings");
+    ok &= check(config.contextName.isEmpty(), "SNMPv3 context does not leak into v1/v2c requests");
     prefs.requestPort = 1161;
     ok &= check(ConnectionModel::build("sw1", ConnectionModel::communityKey(lab, 0),
                     &communityService, &usmService, prefs, &selection) == ConnectionError::None &&
@@ -126,6 +128,11 @@ int main(int argc, char **argv)
                 selection.requestConfig(&config) && config.version == SnmpRequestVersion::V3 &&
                 config.securityName == "operator" && config.securityLevel == 2,
                 "v3 request carries the security name and level");
+    ok &= check(config.contextName == prefs.contextName, "global context reaches the resolved SNMPv3 request");
+    const SnmpRequestConfig capturedContext = config;
+    prefs.contextName = "Another context";
+    ok &= check(capturedContext.contextName == QString::fromUtf8("Lab / réseau"),
+                "a running request keeps its captured context after preferences change");
     ok &= check(ConnectionModel::build("sw1", ConnectionModel::usmKey(incompleteId),
                     &communityService, &usmService, prefs, &selection) == ConnectionError::None &&
                 selection.requestConfig(&config) && config.securityLevel == 1,

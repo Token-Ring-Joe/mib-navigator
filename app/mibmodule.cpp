@@ -147,8 +147,9 @@ MibModule::MibModule(Snmpb *snmpb)
         .arg(phase.elapsed()).arg(dependencyIndex.files().size()));
     Q_UNUSED(dependencyIndexLoaded);
     // Must be connected before call to InitLib ...
-    connect(this, SIGNAL ( LogError(QString) ),
-            s->MainUI()->LogOutput, SLOT ( append (QString) ));
+    connect(this, &MibModule::LogError, this, [](const QString &text) {
+        DiagnosticLogger::log(QStringLiteral("libsmi"), text);
+    }, Qt::DirectConnection);
 
     CurrentModuleObject = this;
     phase.restart();
@@ -699,7 +700,6 @@ QStringList MibModule::LoadEffectivePlan(const MibEffectivePlan &plan,
     for (const auto &root : loaded.roots) {
         if (!root.success) {
             emit LogError(root.diagnostic);
-            DiagnosticLogger::log("MIB", root.diagnostic);
         } else {
             DiagnosticLogger::log("MIB", tr(
                 "Explicit Profile root materialized identity=%1 method=%2%3")

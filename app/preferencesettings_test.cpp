@@ -41,6 +41,7 @@ int main(int argc, char **argv)
               defaults.bulkNonRepeaters == 0 &&
               defaults.bulkMaxRepetitions == 10,
               "SNMP request defaults preserved");
+        check(defaults.contextName.isEmpty(), "legacy/default SNMPv3 context stays empty");
         check(defaults.mibPaths.isEmpty() && defaults.mibPreloads.isEmpty(),
               "MIB arrays are empty before application default initialization");
     }
@@ -60,6 +61,7 @@ int main(int argc, char **argv)
     expected.requestRetries = 5;
     expected.bulkNonRepeaters = 2;
     expected.bulkMaxRepetitions = 45;
+    expected.contextName = QString::fromUtf8("Lab / réseau");
     expected.mibPaths = {"C:/MIBs/vendor", "D:/MIBs/ietf"};
     expected.mibPreloads = {"SNMPv2-MIB", "IF-MIB"};
     expected.windowSize = QSize(1280, 800);
@@ -103,6 +105,7 @@ int main(int argc, char **argv)
               actual.bulkNonRepeaters == expected.bulkNonRepeaters &&
               actual.bulkMaxRepetitions == expected.bulkMaxRepetitions,
               "SNMP request defaults round-trip");
+        check(actual.contextName == expected.contextName, "SNMPv3 context round-trips without trimming or encoding loss");
         check(actual.expandTrapBinding == expected.expandTrapBinding &&
               actual.showAgentName == expected.showAgentName &&
               actual.trapHistoryLimit == expected.trapHistoryLimit,

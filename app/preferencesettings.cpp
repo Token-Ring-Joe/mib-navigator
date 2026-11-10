@@ -44,6 +44,7 @@ PreferencesSettings PreferencesSettings::load(QSettings &settings)
     result.requestRetries = settings.value("request/retries", 1).toInt();
     result.bulkNonRepeaters = settings.value("request/nonrepeaters", 0).toInt();
     result.bulkMaxRepetitions = settings.value("request/maxrepetitions", 10).toInt();
+    result.contextName = settings.value("request/contextname").toString();
     result.mibPaths = readArray(settings, "mibpaths", "dir");
     result.mibPreloads = readArray(settings, "mibpreloads", "mib");
     result.windowSize = settings.value("mainwindow/size").toSize();
@@ -68,6 +69,7 @@ void PreferencesSettings::save(QSettings &settings, bool preserveLegacyMibPreloa
     settings.setValue("request/retries", requestRetries);
     settings.setValue("request/nonrepeaters", bulkNonRepeaters);
     settings.setValue("request/maxrepetitions", bulkMaxRepetitions);
+    settings.setValue("request/contextname", contextName);
     if (!preserveLegacyMibPaths)
         writeArray(settings, "mibpaths", "dir", mibPaths);
     if (!preserveLegacyMibPreloads)

@@ -1,3 +1,4 @@
+#include <QTimeZone>
 #include "mibdownloadtransport.h"
 #include "mibcollection.h"
 #include "miblibrarywidget.h"
@@ -87,7 +88,7 @@ int main(int argc, char **argv)
     IdleTransport transport;
     MibModuleRecord sourceMetadata;
     sourceMetadata.name = "A-MIB"; sourceMetadata.rootOid = "1.3.6.1.2.1.60";
-    sourceMetadata.lastRevision = QDateTime(QDate(1998, 9, 28), QTime(10, 0), Qt::UTC);
+    sourceMetadata.lastRevision = QDateTime(QDate(1998, 9, 28), QTime(10, 0), QTimeZone::UTC);
     sourceMetadata.organization = "  Org\r\nGroup  ";
     sourceMetadata.contactInfo =
         "Name  \r\nCo\r\n\r\n\r\nAddr\nPhone\nMail  \r\nLine 7\nLine 8\nLine 9\n"
@@ -253,7 +254,7 @@ int main(int argc, char **argv)
     ok &= check(applicationSourceText.contains("CurrentEnvironmentStatus") &&
                 applicationSourceText.contains("ConnectionBar") &&
                 applicationSourceText.contains("QueryToolBar") &&
-                applicationSourceText.contains("QueryObjectAddress") &&
+                applicationSourceText.contains("CollectionSearch") &&
                 applicationSourceText.contains("MibTreeFilter"),
                 "the main window exposes persistent context, query actions, target, and the MIB tree filter");
     // Results is checked through the real application in launch-smoke and through
@@ -323,17 +324,35 @@ int main(int argc, char **argv)
                 moduleSourceText.contains("MibRuntimeStage::prepare(plan)"),
                 "one pure Effective Plan resolver owns membership while runtime loads explicit roots alias-first and leaves imports native");
     auto *table = widget.findChild<QTableWidget *>("MibLibraryTable");
-    ok &= check(table && table->columnCount() == 6,
-                "Inventory has checkbox, module, status, Active Profile, revision, and origin columns");
+    ok &= check(table && table->columnCount() == 7,
+                "Inventory has checkbox, module, status, In Profiles, revision, and source file columns");
     if (!table || table->rowCount() < 4) {
         std::cerr << "Inventory fixture rows unavailable: "
                   << (table ? table->rowCount() : -1) << '\n';
         return 1;
     }
     ok &= check(table && table->horizontalHeaderItem(2)->text() == "Status" &&
-                table->horizontalHeaderItem(3)->text() == "Active Profile" &&
-                table->horizontalHeaderItem(5)->text() == "Origin",
+                table->horizontalHeaderItem(3)->text() == "In Profiles" &&
+                table->horizontalHeaderItem(5)->text() == "Source file",
                 "Inventory exposes Status, Active Profile, and Origin");
+    {
+        auto *scope = widget.findChild<QComboBox *>("MibLibraryScope");
+        ok &= check(scope && scope->itemData(0).toString() == "@active" && scope->itemData(1).toString() == "@all" &&
+                    scope->currentIndex() == 0, "Library opens on the active profile's view, with the whole collection one choice away");
+        int visibleActive = 0;
+        for (int row = 0; row < table->rowCount(); ++row) visibleActive += !table->isRowHidden(row);
+        if (scope) scope->setCurrentIndex(1);
+        application.processEvents();
+        int visibleAll = 0;
+        for (int row = 0; row < table->rowCount(); ++row) visibleAll += !table->isRowHidden(row);
+        ok &= check(visibleAll == table->rowCount() && visibleActive <= visibleAll,
+                    "the profile view shows only that profile's modules and the collection view shows every module");
+        ok &= check(!table->item(0, 3)->text().isEmpty(), "every module says which profiles contain it, or None");
+        const QString shownPath = table->item(0, 5)->text();
+        ok &= check(!shownPath.isEmpty() && !QDir::isAbsolutePath(shownPath) &&
+                    QDir::isAbsolutePath(QDir::fromNativeSeparators(table->item(0, 5)->toolTip())),
+                    "Source file shows the path inside the Library, with the full path in the tooltip");
+    }
     ok &= check(table && table->editTriggers() == QAbstractItemView::NoEditTriggers,
                 "Inventory table disables editing");
     for (int row=0; table && row<table->rowCount(); ++row)
@@ -584,7 +603,7 @@ int main(int argc, char **argv)
     auto *publicationAvailable = widget.findChild<QTreeWidget *>("MibProfileAvailableTree");
     ok &= check(publicationTable && publicationTable->updatesEnabled() &&
                 publicationTable->horizontalHeader()->sectionResizeMode(0) == QHeaderView::ResizeToContents &&
-                publicationTable->horizontalHeader()->sectionResizeMode(1) == QHeaderView::Stretch,
+                publicationTable->horizontalHeader()->sectionResizeMode(1) == QHeaderView::Interactive,
                 "dependency publication restores painting and Library column sizing");
     ok &= check(publicationAvailable && publicationAvailable->updatesEnabled() &&
                 publicationAvailable->header()->sectionResizeMode(0) == QHeaderView::Stretch &&

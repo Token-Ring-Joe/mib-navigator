@@ -42,6 +42,8 @@ void ApplySnmpV3PduConfig(const SnmpRequestConfig &config, Pdu &pdu)
     else
         pdu.set_security_level(SNMP_SECURITY_LEVEL_AUTH_PRIV);
 
-    pdu.set_context_name(config.contextName.toLatin1().data());
+    const QByteArray context = config.contextName.toUtf8();
+    pdu.set_context_name(OctetStr(reinterpret_cast<const unsigned char *>(context.constData()),
+                                static_cast<unsigned long>(context.size())));
     pdu.set_context_engine_id(config.contextEngineId.toLatin1().data());
 }

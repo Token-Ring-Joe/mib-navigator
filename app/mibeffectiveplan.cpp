@@ -4,6 +4,7 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFileInfo>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -501,12 +502,20 @@ MibEffectivePlan MibEffectiveRuntimePlanResolver::resolve(
         MibPlanResolutionTier tier = MibPlanResolutionTier::Root;
         QString rationale;
     };
-    const auto key = [](const QString &path) {
+    // The path key asks the filesystem for the canonical path. It is compared for every pair when
+    // sorting and for every record on every lookup, so it is remembered for the length of one
+    // resolve: the same path always gives the same key, only far fewer filesystem calls.
+    QHash<QString, QString> keyCache;
+    const auto key = [&keyCache](const QString &path) -> QString {
+        const auto found = keyCache.constFind(path);
+        if (found != keyCache.cend()) return *found;
 #ifdef Q_OS_WIN
-        return QDir::fromNativeSeparators(canonicalPath(path)).toLower();
+        const QString value = QDir::fromNativeSeparators(canonicalPath(path)).toLower();
 #else
-        return QDir::fromNativeSeparators(canonicalPath(path));
+        const QString value = QDir::fromNativeSeparators(canonicalPath(path));
 #endif
+        keyCache.insert(path, value);
+        return value;
     };
     const auto fileHash = [](const QString &path) {
         QFile file(path);
@@ -609,6 +618,20 @@ MibEffectivePlan MibEffectiveRuntimePlanResolver::resolve(
                 ? QObject::tr("newest LAST-UPDATED revision")
                 : QObject::tr("first by path (revisions equal or missing)"));
     };
+    // The copies differ, but one is strictly newer than every copy with different content: that
+    // copy is the answer, so this is a resolved conflict rather than an unresolved one. Any copy
+    // without a readable revision date, or a tie for newest, leaves it unresolved.
+    const auto decidedByRevision = [&revisionFor](const QString &identity,
+        const QList<MibIndexedProvider> &candidates, const MibIndexedProvider &chosen) {
+        const QDateTime best = revisionFor(chosen.canonicalPath, identity);
+        if (!best.isValid()) return false;
+        for (const auto &candidate : candidates) {
+            const QDateTime date = revisionFor(candidate.canonicalPath, identity);
+            if (!date.isValid()) return false;
+            if (candidate.sha256 != chosen.sha256 && date >= best) return false;
+        }
+        return true;
+    };
     QMap<QString, Selection> selected;
     QList<MibPlanResolutionDiagnostic> diagnostics;
     for (MibProfileMember root : input.roots) {
@@ -665,8 +688,9 @@ MibEffectivePlan MibEffectiveRuntimePlanResolver::resolve(
         for (const auto &candidate : group.value()) hashes.insert(candidate.sha256);
         if (hashes.size() > 1)
             diagnostics.append({group.key(), {}, QStringLiteral("ROOT"), group.value(),
-                MibPlanResolutionTier::Ambiguous, chosen.canonicalPath,
-                conflictReason(group.key(), group.value(), chosen)});
+                decidedByRevision(group.key(), group.value(), chosen)
+                    ? MibPlanResolutionTier::NewestRevision : MibPlanResolutionTier::Ambiguous,
+                chosen.canonicalPath, conflictReason(group.key(), group.value(), chosen)});
         for (const auto &candidate : group.value()) {
             if (samePath(candidate.canonicalPath, chosen.canonicalPath)) continue;
             auto loser = selected.find(key(candidate.canonicalPath));
@@ -791,8 +815,9 @@ MibEffectivePlan MibEffectiveRuntimePlanResolver::resolve(
                 }
                 chosen = chooseProvider(identity, readable);
                 diagnostics.append({identity, requesters, QStringLiteral("IMPORTS"), winning,
-                    MibPlanResolutionTier::Ambiguous, winningScope,
-                    conflictReason(identity, winning, chosen)});
+                    decidedByRevision(identity, winning, chosen)
+                        ? MibPlanResolutionTier::NewestRevision : MibPlanResolutionTier::Ambiguous,
+                    winningScope, conflictReason(identity, winning, chosen)});
             }
             const auto *record = recordFor(chosen.canonicalPath, chosen.sha256);
             if (!record) continue;
@@ -853,6 +878,7 @@ MibEffectivePlan MibEffectiveRuntimePlanResolver::resolve(
                 continue;
         }
         const bool reportEvenWhenProvided = diagnostic.tier == MibPlanResolutionTier::Ambiguous ||
+            diagnostic.tier == MibPlanResolutionTier::NewestRevision ||
             diagnostic.tier == MibPlanResolutionTier::StalePin;
         if (diagnostic.dependencyKind != QStringLiteral("ROOT") && provided.contains(diagnostic.identity) &&
             !reportEvenWhenProvided)
@@ -866,7 +892,8 @@ MibEffectivePlan MibEffectiveRuntimePlanResolver::resolve(
     plan.resolutionDiagnostics = finalDiagnostics;
     plan.missingModules.clear(); plan.ambiguousModules.clear(); plan.pinFailureModules.clear();
     for (const auto &diagnostic : std::as_const(finalDiagnostics)) {
-        if (diagnostic.tier == MibPlanResolutionTier::ModifiedRoot) continue;  // informational only
+        if (diagnostic.tier == MibPlanResolutionTier::ModifiedRoot ||
+            diagnostic.tier == MibPlanResolutionTier::NewestRevision) continue;  // informational only
         if (diagnostic.tier == MibPlanResolutionTier::Ambiguous ||
             diagnostic.tier == MibPlanResolutionTier::ProviderConflict)
             plan.ambiguousModules.append(diagnostic.identity);

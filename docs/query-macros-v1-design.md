@@ -1,8 +1,9 @@
 # Query Macros v1 — agreed design
 
-Prepared and agreed by the owner 2026-11-07. Status: **agreed design; implementation remains deferred**.
+Prepared and agreed by the owner 2026-11-07. Status: **milestone 2 authorized on 2026-11-08; implementation/validation in progress**.
 This document makes the 2026-11-04 direction concrete. The owner agreed the v1
-scope and estimate during the finishing review; implementing it is a later task. The current temporary Multiple Varbinds dialog
+scope and estimate during the finishing review; milestone 1 was authorized after
+the maintenance status review on 2026-11-07. See [current working notes](query-macros-milestone-1.md). The current temporary Multiple Varbinds dialog
 remains until its tested replacement is accepted.
 
 ## User workflow
@@ -130,8 +131,8 @@ independent table groups without disturbing existing Query/Stop workflows.
 | 4 | End-to-end regressions, lifetime/performance review, old dialog retirement and release validation | 2–3 days |
 
 Each milestone remains a working build, stays below the 50-file task limit, and
-receives focused/full deterministic checks and a validated manual install. No
-implementation starts as part of this finishing pass. Re-estimate if scheduled
+receives focused/full deterministic checks and a validated manual install. The original finishing pass did not
+authorize implementation; milestone 1 was authorized on 2026-11-07 and milestone 2 on 2026-11-08. Tables and legacy-dialog retirement remain later work. Re-estimate if scheduled
 runs, Watch integration, saved targets/credentials, macro import/export, SET,
 expressions, cross-table joins or saved result sessions are added.
 

@@ -1,3 +1,4 @@
+#include <QTimeZone>
 #include "miblibrary.h"
 #include "mibcollection.h"
 #include "mibdownloadtransport.h"
@@ -15,6 +16,12 @@
 #include <iostream>
 
 namespace {
+void openFixture(QFile &file, QIODevice::OpenMode mode)
+{
+    if (!file.open(mode))
+        qFatal("Cannot open test fixture %s: %s", qPrintable(file.fileName()), qPrintable(file.errorString()));
+}
+
 class ScriptedTransport : public MibDownloadTransport
 {
 public:
@@ -78,12 +85,17 @@ int main(int argc, char **argv)
     ianaInfoRecord.localPath = "downloaded/fixture.mib";
     ianaInfoRecord.sourceFilename = "fixture.mib";
     ianaInfoRecord.sha256 = "abc123";
-    ianaInfoRecord.downloadedAt = QDateTime::fromSecsSinceEpoch(1, Qt::UTC);
+    ianaInfoRecord.downloadedAt = QDateTime::fromSecsSinceEpoch(1, QTimeZone::UTC);
     const MibLibraryFileInfo ianaInfo = MibLibraryFileInformation(ianaInfoRecord);
     ok &= check(ianaInfo.origin == "IANA" && ianaInfo.provider == "IANA" &&
                 ianaInfo.showProvider && ianaInfo.showSourceUrl &&
                 ianaInfo.showTimestamp && ianaInfo.showSha256 && !ianaInfo.showState,
                 "IANA file info retains useful provenance without repetitive state");
+    MibLibraryRecord renamedFile;
+    renamedFile.moduleName = "INET-ADDRESS-MIB"; renamedFile.sourceFilename = "INET-ADDRESS-MIB";
+    renamedFile.localPath = "5520/inet_address_tc.mib"; renamedFile.status = MibLibraryStatus::Installed;
+    ok &= check(MibLibraryFileInformation(renamedFile).filename == "inet_address_tc.mib",
+                "File Information names the file on disk, not the module or catalog name");
     const QByteArray formatted = R"(-- FROM IGNORED-MIB
 A-MIB DEFINITIONS ::= BEGIN
 IMPORTS
@@ -498,33 +510,33 @@ END
     const QString targetRoot = migration.filePath("visible-root");
     QDir().mkpath(baseline); QDir().mkpath(QDir(legacy).filePath("downloaded"));
     QFile standard(QDir(baseline).filePath("STANDARD-MIB"));
-    standard.open(QIODevice::WriteOnly); standard.write(mib("STANDARD-MIB")); standard.close();
+    openFixture(standard, QIODevice::WriteOnly); standard.write(mib("STANDARD-MIB")); standard.close();
     QFile imported(QDir(legacy).filePath("downloaded/vendor-file.mib"));
-    imported.open(QIODevice::WriteOnly); imported.write(mib("DECLARED-VENDOR-MIB")); imported.close();
-    const QByteArray legacyBefore = [&] { QFile f(imported.fileName()); f.open(QIODevice::ReadOnly); return f.readAll(); }();
+    openFixture(imported, QIODevice::WriteOnly); imported.write(mib("DECLARED-VENDOR-MIB")); imported.close();
+    const QByteArray legacyBefore = [&] { QFile f(imported.fileName()); openFixture(f, QIODevice::ReadOnly); return f.readAll(); }();
     MibCollection collection(targetRoot);
     const MibCollectionResult migrated = collection.initialize({baseline}, legacy);
     const MibCollectionResult migratedAgain = collection.initialize({baseline}, legacy);
     ok &= check(migrated.success && migrated.standardsCopied == 1 && migrated.importedCopied == 1 &&
                 QFileInfo::exists(QDir(collection.importedPath()).filePath("vendor-file.mib")),
                 "legacy imported file copies into visible Imported library");
-    QFile legacyAfter(imported.fileName()); legacyAfter.open(QIODevice::ReadOnly);
+    QFile legacyAfter(imported.fileName()); openFixture(legacyAfter, QIODevice::ReadOnly);
     ok &= check(legacyAfter.readAll() == legacyBefore && migratedAgain.success &&
                 migratedAgain.standardsCopied == 0 && migratedAgain.importedCopied == 0,
                 "migration is idempotent and leaves legacy originals untouched");
     QFile conflict(QDir(collection.importedPath()).filePath("vendor-file.mib"));
-    conflict.open(QIODevice::WriteOnly | QIODevice::Truncate); conflict.write("different"); conflict.close();
+    openFixture(conflict, QIODevice::WriteOnly | QIODevice::Truncate); conflict.write("different"); conflict.close();
     const MibCollectionResult conflicted = collection.initialize({baseline}, legacy);
-    QFile preserved(conflict.fileName()); preserved.open(QIODevice::ReadOnly);
+    QFile preserved(conflict.fileName()); openFixture(preserved, QIODevice::ReadOnly);
     ok &= check(conflicted.success && conflicted.conflicts.contains(conflict.fileName()) &&
                 preserved.readAll() == QByteArray("different"),
                 "different-content migration collision is reported and not overwritten");
     QDir().mkpath(QDir(targetRoot).filePath("Library/Standards/IETF"));
     QDir().mkpath(QDir(targetRoot).filePath("Library/Imported/Vendor"));
     QFile prototypeStandard(QDir(targetRoot).filePath("Library/Standards/IETF/OLD-STANDARD.mib"));
-    prototypeStandard.open(QIODevice::WriteOnly); prototypeStandard.write(mib("OLD-STANDARD")); prototypeStandard.close();
+    openFixture(prototypeStandard, QIODevice::WriteOnly); prototypeStandard.write(mib("OLD-STANDARD")); prototypeStandard.close();
     QFile prototypeImported(QDir(targetRoot).filePath("Library/Imported/Vendor/OLD-VENDOR.mib"));
-    prototypeImported.open(QIODevice::WriteOnly); prototypeImported.write(mib("OLD-VENDOR")); prototypeImported.close();
+    openFixture(prototypeImported, QIODevice::WriteOnly); prototypeImported.write(mib("OLD-VENDOR")); prototypeImported.close();
     const MibCollectionResult transitioned = collection.initialize({baseline}, QString());
     ok &= check(transitioned.success &&
                 QFileInfo::exists(QDir(collection.standardsPath()).filePath("IETF/OLD-STANDARD.mib")) &&
@@ -543,7 +555,7 @@ END
                 MibCollection::configuredRoot(rootSettings) == QDir::cleanPath(validRoot),
                 "valid user root persists across settings reload");
     const QString invalidRoot = migration.filePath("not-a-directory");
-    QFile invalidRootFile(invalidRoot); invalidRootFile.open(QIODevice::WriteOnly); invalidRootFile.write("x"); invalidRootFile.close();
+    QFile invalidRootFile(invalidRoot); openFixture(invalidRootFile, QIODevice::WriteOnly); invalidRootFile.write("x"); invalidRootFile.close();
     MibCollectionResult rejected;
     ok &= check(!MibCollection::setConfiguredRoot(rootSettings, invalidRoot, {baseline}, &rejected) &&
                 MibCollection::configuredRoot(rootSettings) == QDir::cleanPath(validRoot),

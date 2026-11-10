@@ -56,6 +56,7 @@ execute_process(
         "PATH=${SNMPB_QT_BIN_DIR};$ENV{PATH}"
         "${SNMPB_EXECUTABLE}"
         --launch-smoke-test "${SNMPB_SMOKE_DIR}"
+        --smoke-macros
         --smoke-mib "${editor_fixture}"
     WORKING_DIRECTORY "${SNMPB_SMOKE_DIR}"
     RESULT_VARIABLE smoke_result
@@ -84,6 +85,7 @@ execute_process(
         "PATH=${SNMPB_QT_BIN_DIR};$ENV{PATH}"
         "${SNMPB_EXECUTABLE}"
         --launch-smoke-test "${SNMPB_SMOKE_DIR}"
+        --smoke-macros
         --smoke-mib "${editor_fixture}"
     WORKING_DIRECTORY "${SNMPB_SMOKE_DIR}"
     RESULT_VARIABLE reload_result
@@ -133,3 +135,34 @@ string(FIND "${parser_configuration}" "${legacy_root}" active_legacy_path)
 if(NOT active_legacy_path EQUAL -1)
     message(FATAL_ERROR "Retired legacy path still controls the startup parser")
 endif()
+
+# A stale configuration with both transports disabled must report failure without
+# dereferencing a null SNMP session or deleting user configuration to retry.
+set(failed_root "${SNMPB_SMOKE_DIR}/disabled-transports")
+file(MAKE_DIRECTORY "${failed_root}/snmpb.sourceforge.net")
+set(failed_settings "${failed_root}/snmpb.sourceforge.net/SnmpB.ini")
+set(failed_smi "${failed_root}/snmpb.sourceforge.net/smi.conf")
+set(settings_bytes "[network]\nenableipv4=false\nenableipv6=false\n[owner-data]\nmarker=preserve-this\n")
+set(smi_bytes "# user parser configuration: preserve this exactly\n")
+file(WRITE "${failed_settings}" "${settings_bytes}")
+file(WRITE "${failed_smi}" "${smi_bytes}")
+execute_process(COMMAND "${CMAKE_COMMAND}" -E env --unset=SMIPATH
+    "QT_QPA_PLATFORM=offscreen" "PATH=${SNMPB_QT_BIN_DIR};$ENV{PATH}"
+    "${SNMPB_EXECUTABLE}" --launch-smoke-test "${failed_root}" --smoke-network
+    RESULT_VARIABLE failed_result OUTPUT_VARIABLE failed_stdout ERROR_VARIABLE failed_stderr TIMEOUT 15)
+file(GLOB failed_logs "${failed_root}/state/logs/MIB-Navigator-*.log")
+set(failed_diagnostics "")
+foreach(path IN LISTS failed_logs)
+    file(READ "${path}" diagnostic)
+    string(APPEND failed_diagnostics "${diagnostic}")
+endforeach()
+if(NOT failed_result MATCHES "^-?[0-9]+$" OR failed_result EQUAL 0 OR
+   NOT failed_diagnostics MATCHES "Startup failed; settings and parser configuration are preserved: No transport protocol enabled")
+    message(FATAL_ERROR "Disabled transports did not report controlled startup failure: ${failed_result} ${failed_stdout}${failed_stderr}${failed_diagnostics}")
+endif()
+file(READ "${failed_settings}" preserved_settings)
+file(READ "${failed_smi}" preserved_smi)
+if(NOT preserved_settings STREQUAL settings_bytes OR NOT preserved_smi STREQUAL smi_bytes)
+    message(FATAL_ERROR "Startup failure changed user settings/parser configuration")
+endif()
+message(STATUS "Disabled-transport startup fails safely and preserves settings/parser bytes")

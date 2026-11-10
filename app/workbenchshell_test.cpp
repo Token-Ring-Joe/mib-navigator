@@ -98,6 +98,7 @@ int main(int argc, char **argv)
     pages.editor = new QWidget(documents); documents->addTab(pages.editor, "Editor");
     pages.traps = new QWidget(documents); documents->addTab(pages.traps, "Traps");
     pages.watch = new QWidget;
+    pages.macros = new QWidget;
     auto *editorContent = new QLineEdit(pages.editor);
     auto *mibTabs = new QTabWidget(pages.library);
     (new QVBoxLayout(pages.library))->addWidget(mibTabs);
@@ -142,8 +143,8 @@ int main(int argc, char **argv)
     check(documents->count() == 3 && documents->tabText(0) == "Query" &&
           documents->tabText(1) == "MIBs" && documents->tabText(2) == "Traps" && !documents->tabsClosable() &&
           !documents->tabBar()->isHidden(), "permanent top-level workspace tabs");
-    check(query && query->count() == 2 && query->widget(0) == pages.results &&
-          query->widget(1) == pages.watch && !query->tabBar()->isHidden(), "Query contains Results and Watch");
+    check(query && query->count() == 3 && query->widget(0) == pages.results &&
+          query->widget(1) == pages.watch && query->widget(2) == pages.macros && !query->tabBar()->isHidden(), "Query contains Results, Watch and Macros");
     check(shell.treeSplitter()->count() == 2 && shell.treeSplitter()->widget(0) == treePane &&
           shell.treeSplitter()->widget(1) == query, "tree and Results belong to Query");
     check(bottomTabs && bottomTabs->count() == 3 && bottomTabs->widget(0) == bottom.output &&
@@ -157,9 +158,8 @@ int main(int argc, char **argv)
           "fixed header and full-width bottom panel");
     QPointer<QWidget> keptEditor(pages.editor), keptWatch(pages.watch), keptTraps(pages.traps);
     auto *queryRow = new QWidget(header);
-    auto *oid = new QLineEdit(queryRow); oid->setObjectName("QueryObjectAddress");
     auto *search = new QLineEdit(queryRow); search->setObjectName("CollectionSearch");
-    (new QHBoxLayout(queryRow))->addWidget(oid); queryRow->layout()->addWidget(search);
+    (new QHBoxLayout(queryRow))->addWidget(search);
     shell.setQueryControls(queryRow);
     shell.inspectorDock()->show();
     for (int repeat = 0; repeat < 10; ++repeat) {
@@ -184,15 +184,18 @@ int main(int argc, char **argv)
     check(shell.inspectorDock()->isHidden(), "explicit Inspector preference survives navigation");
     shell.openDocument(pages.search);
     check(documents->currentIndex() == 0 && query->currentWidget() == pages.search &&
-          query->count() == 3 && !query->tabBar()->isHidden(), "Search opens locally in Query");
+          query->count() == 4 && !query->tabBar()->isHidden(), "Search opens locally in Query");
     QPointer<QWidget> keptSearch(pages.search);
     emit query->tabCloseRequested(query->indexOf(pages.search));
-    check(keptSearch && query->count() == 2 && !query->tabBar()->isHidden(),
+    check(keptSearch && query->count() == 3 && !query->tabBar()->isHidden(),
           "closing Search preserves Results and Watch");
     shell.closeDocument(pages.results);
     shell.closeDocument(pages.library);
     shell.closeDocument(pages.watch);
-    check(query->count() == 2 && documents->count() == 3, "permanent pages cannot close");
+    shell.closeDocument(pages.macros);
+    check(query->count() == 3 && documents->count() == 3, "permanent pages cannot close");
+    if (auto *macrosAction = window.findChild<QAction *>("ViewMacros")) macrosAction->trigger();
+    check(query->currentWidget() == pages.macros && documents->currentIndex() == 0, "View opens the existing Query-local Macros page");
     shell.openDocument(pages.search);
     check(query->currentWidget() == pages.search, "Search reopens");
     shell.showMibLibrary(1);
@@ -352,7 +355,7 @@ int main(int argc, char **argv)
     check(query->tabText(0) == "Results", "clearing warnings restores Results title");
     window.activateWindow(); QCoreApplication::processEvents();
     auto *navigation = window.findChild<QMenu *>("WorkbenchKeyboardNavigation");
-    check(navigation && navigation->actions().size() == 7,
+    check(navigation && navigation->actions().size() == 6,
           "View exposes every focus shortcut in Keyboard Navigation");
     const auto focus = [&](const char *name, QWidget *expected) {
         auto *action = window.findChild<QAction *>(name);
@@ -372,7 +375,6 @@ int main(int argc, char **argv)
     focus("WorkbenchFocusInspector", inspectorContent);
     shell.showBottomPage(bottom.output); focus("WorkbenchFocusBottom", outputContent);
     focus("WorkbenchFocusTree", tree);
-    focus("WorkbenchFocusOid", oid);
     focus("WorkbenchGlobalSearch", search);
     focus("WorkbenchFocusTarget", target);
     // Exercise Qt shortcut dispatch as well as action wiring, from another workspace.

@@ -63,12 +63,12 @@ const RequestLogEntry *RequestLog::entry(quint64 id) const
     return nullptr;
 }
 
-void RequestLog::finish(quint64 id, const QString &resultHtml, int objects)
+void RequestLog::finish(quint64 id, const QString &resultHtml, int objects, RequestOutcome outcome)
 {
     for (RequestLogEntry &e : list) {
         if (e.id != id) continue;
         if (e.outcome != RequestOutcome::Running) return;   // finished already
-        e.outcome = ClassifyRequestOutcome(resultHtml);
+        e.outcome = outcome == RequestOutcome::Running ? ClassifyRequestOutcome(resultHtml) : outcome;
         e.detail = QTextDocumentFragment::fromHtml(resultHtml).toPlainText().simplified();
         e.detail.remove(QStringLiteral("-----"));
         e.detail = e.detail.simplified();

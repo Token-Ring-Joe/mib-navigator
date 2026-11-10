@@ -14,6 +14,7 @@
 #include <QElapsedTimer>
 #include <QDir>
 #include <QFile>
+#include <QTemporaryDir>
 #include <QTextStream>
 
 namespace {int failures=0;void check(bool c,const char*m){if(!c){QTextStream(stderr)<<"FAIL: "<<m<<Qt::endl;++failures;}}
@@ -21,7 +22,44 @@ MibEffectivePlan plan(){MibEffectivePlan p;p.sha256="phase3-consumer-test";for(S
 int liveCount(SmiNode*n){if(!n)return 0;int total=1;for(SmiNode*c=smiGetFirstChildNode(n);c;c=smiGetNextChildNode(c))total+=liveCount(c);return total;}int snapshotCount(const MibTreeNodeRecord&n){int total=1;for(const auto&c:n.children)total+=snapshotCount(c);return total;}
 QModelIndex findOid(QAbstractItemModel*m,const QString&oid,const QModelIndex&p={}){for(int r=0;r<m->rowCount(p);++r){const QModelIndex i=m->index(r,0,p);if(i.data(MibTreeModel::OidRole).toString()==oid)return i;const QModelIndex n=findOid(m,oid,i);if(n.isValid())return n;}return {};}
 
-int main(int argc,char**argv){QApplication app(argc,argv);const bool large=app.arguments().contains("--large");const QString root=SNMPB_SOURCE_DIR;const QStringList paths={root+"/libsmi/mibs/ietf",root+"/libsmi/mibs/iana",root+"/libsmi/mibs/irtf",root+"/libsmi/mibs/site",root+"/libsmi/mibs/tubs"};const QByteArray path=paths.join(QDir::listSeparator()).toLocal8Bit();smiInit("phase3-consumers");smiSetFlags((smiGetFlags()|SMI_FLAG_ERRORS)&~SMI_FLAG_NODESCR);smiSetPath(path.constData());for(const char*m:{"SNMPv2-MIB","IF-MIB","ACCOUNTING-CONTROL-MIB"})check(smiLoadModule(m)!=nullptr,m);if(large)for(const QString&directory:paths)for(const QString&file:QDir(directory).entryList(QDir::Files,QDir::Name))smiLoadModule(QDir::toNativeSeparators(QDir(directory).filePath(file)).toLocal8Bit().constData());const int parserTreeCount=liveCount(smiGetNode(nullptr,"iso"));const MibEffectivePlan allPlan=plan();auto environment=MibEnvironmentExtractor().extract(allPlan);MibEffectivePlan partialPlan=allPlan;partialPlan.effectiveModules<<"NO-SUCH-MIB";auto partialEnvironment=MibEnvironmentExtractor().extract(partialPlan,{"NO-SUCH-MIB"});auto extremeEnvironment=std::make_shared<MibEnvironment>(*environment);auto extremeBEnvironment=std::make_shared<MibEnvironment>(*environment);MibEnvironmentRegistry::publish(environment);smiExit();
+int main(int argc,char**argv){QApplication app(argc,argv);const bool large=app.arguments().contains("--large");const QString root=SNMPB_SOURCE_DIR;const QStringList paths={root+"/libsmi/mibs/ietf",root+"/libsmi/mibs/iana",root+"/libsmi/mibs/irtf",root+"/libsmi/mibs/site",root+"/libsmi/mibs/tubs"};const QByteArray path=paths.join(QDir::listSeparator()).toLocal8Bit();smiInit("phase3-consumers");smiSetFlags((smiGetFlags()|SMI_FLAG_ERRORS)&~SMI_FLAG_NODESCR);smiSetPath(path.constData());for(const char*m:{"SNMPv2-MIB","IF-MIB","ACCOUNTING-CONTROL-MIB"})check(smiLoadModule(m)!=nullptr,m);if(large)for(const QString&directory:paths)for(const QString&file:QDir(directory).entryList(QDir::Files,QDir::Name))smiLoadModule(QDir::toNativeSeparators(QDir(directory).filePath(file)).toLocal8Bit().constData());QTemporaryDir valueFixtures;
+check(valueFixtures.isValid(), "value-semantic fixture directory");
+QFile valueFixture(valueFixtures.filePath("values.mib"));
+const QByteArray valueMib = R"MIB(MAINTENANCE-VALUES-MIB DEFINITIONS ::= BEGIN
+IMPORTS OBJECT-TYPE, Integer32, enterprises FROM SNMPv2-SMI
+        DisplayString, DateAndTime, TEXTUAL-CONVENTION FROM SNMPv2-TC;
+maintenanceValues OBJECT IDENTIFIER ::= { enterprises 64992 }
+Hundredths ::= TEXTUAL-CONVENTION
+    DISPLAY-HINT "d-2"
+    STATUS current
+    DESCRIPTION "Synthetic scaled measurement."
+    SYNTAX Integer32 (-10000..10000)
+scaledValue OBJECT-TYPE SYNTAX Hundredths MAX-ACCESS read-only STATUS current
+    DESCRIPTION "Synthetic value." ::= { maintenanceValues 1 }
+dateValue OBJECT-TYPE SYNTAX DateAndTime MAX-ACCESS read-only STATUS current
+    DESCRIPTION "Synthetic date." ::= { maintenanceValues 2 }
+textValue OBJECT-TYPE SYNTAX DisplayString MAX-ACCESS read-only STATUS current
+    DESCRIPTION "Synthetic text." ::= { maintenanceValues 3 }
+END
+)MIB";
+check(valueFixture.open(QIODevice::WriteOnly) && valueFixture.write(valueMib) == valueMib.size(), "write value-semantic fixture");
+valueFixture.close();
+check(smiLoadModule(valueFixture.fileName().toLocal8Bit().constData()) != nullptr, "load value-semantic fixture through real parser");
+const int parserTreeCount=liveCount(smiGetNode(nullptr,"iso"));const MibEffectivePlan allPlan=plan();auto environment=MibEnvironmentExtractor().extract(allPlan);MibEffectivePlan partialPlan=allPlan;partialPlan.effectiveModules<<"NO-SUCH-MIB";auto partialEnvironment=MibEnvironmentExtractor().extract(partialPlan,{"NO-SUCH-MIB"});auto extremeEnvironment=std::make_shared<MibEnvironment>(*environment);auto extremeBEnvironment=std::make_shared<MibEnvironment>(*environment);MibEnvironmentRegistry::publish(environment);smiExit();
+// Values retain their real parsed type ancestry and hints after the parser is gone.
+Vb scaledResponse(Oid("1.3.6.1.4.1.64992.1.0")); scaledResponse.set_value(SnmpInt32(-123));
+const auto scaledObject = ResolveMibObject(environment, scaledResponse.get_oid());
+check(scaledObject.node && RenderMibValue(scaledObject, scaledResponse) == "-1.23", "parsed DISPLAY-HINT renders after smiExit");
+Vb badDate(Oid("1.3.6.1.4.1.64992.2.0")); badDate.set_value(OctetStr::from_hex_string("07e7021d00000000"));
+const auto dateCheck = CheckMibValue(ResolveMibObject(environment, badDate.get_oid()), badDate);
+check(!dateCheck.warnings.isEmpty() && dateCheck.warnings.join(' ').contains("DateAndTime"), "parsed DateAndTime ancestry warns after smiExit");
+TrapRecord typedTrap; typedTrap.notificationOid = "1.3.6.1.4.1.64992.0.1";
+TrapVarbind textBinding;
+textBinding.value.set_oid(Oid("1.3.6.1.4.1.64992.3.0"));
+textBinding.value.set_value(OctetStr::from_hex_string("ff")); typedTrap.varbinds.append(textBinding);
+const auto typedPresentation = TrapPresenter().present(typedTrap);
+check(typedPresentation.bindings.size() == 1 && !typedPresentation.bindings.first().warnings.isEmpty() &&
+      !typedPresentation.bindings.first().rawValue.isEmpty(), "trap workflow retains raw octets and shared textual-convention warnings after parser reset");
 QElapsedTimer timer;timer.start();QStringList modules;for(const auto&m:environment->modules())modules<<m.identity;MibViewLoader loader;loader.SetEnvironment(environment,modules);check(!loader.TreeSnapshot().children.isEmpty(),"Tree projects after smiExit");check(snapshotCount(loader.TreeSnapshot())==parserTreeCount+1,"Tree structure parity");const qint64 treeMs=timer.elapsed();
 // Exercise the chooser with a normal MIB-II scope even in the all-MIB stress run.
 // A closed OID chooser must not remain a target of later profile publication.

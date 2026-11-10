@@ -5,7 +5,13 @@ The owner approved the accumulated work and authorized a local commit on
 not claim a new desktop test run, native-platform validation or real-device test.
 The authoritative build order remains [redesign-plan.md](redesign-plan.md).
 Completed/superseded entries in historical documents are not reopened here.
-No implementation, push, tag or publication is authorized by this inventory.
+The later owner request to do five autonomous items authorizes the follow-up
+marked implemented below; its latest evidence is [here](autonomous-five-validation.md).
+The owner subsequently authorized the five maintenance/release items. Their
+current evidence/status is [maintenance-five-validation.md](maintenance-five-validation.md).
+After reviewing that status, the owner authorized Query Macros milestone 1.
+See [its checkpoint and working notes](query-macros-milestone-1.md). This inventory
+does not authorize a commit, push, tag or publication.
 
 ## Release work still outstanding
 
@@ -32,37 +38,55 @@ No implementation, push, tag or publication is authorized by this inventory.
 
 ## Planned features and refinements
 
-5. **Query Macros v1 — highest-priority deferred feature.** Design and estimate
-   agreed on 2026-11-07; implementation remains deferred. The four working
+5. **Query Macros v1 — milestone 2 authorized 2026-11-08.** Definitions,
+   storage and offline editing are done ([milestone 1](query-macros-milestone-1.md)).
+   Captured scalar/exact runs, grouped Results, Stop and logging are the active
+   workstream ([milestone 2](query-macros-milestone-2.md)). Table retrieval and
+   legacy dialog retirement remain milestones 3 and 4. The four working
    milestones are definition model/repository/editor; captured scalar/exact
    runs and grouped Results; table groups with all/prompt/fixed instances; then
    regressions, old Multiple Varbinds retirement and release validation.
    Estimate: **6–10 focused development days**, plus owner review/platform CI.
    See [the agreed design](query-macros-v1-design.md). Single-object SET stays.
-6. **Global SNMPv3 context name.** Add the planned Preferences/request setting
-   with captured operation semantics. Current connection-bar requests always
-   use the default empty context. Per-query context is only a later possibility.
-7. **Watch persistence and interval editing.** Save/reload Watch definitions
-   safely and allow per-row polling-interval edits. These are not implemented.
+6. **Global SNMPv3 context name — implemented 2026-11-07.** Preferences,
+   persistence and captured UTF-8 request semantics are present. Per-query context
+   is only a later possibility; see [follow-up validation](autonomous-five-validation.md).
+7. **Watch persistence and interval editing — implemented 2026-11-07.**
+   Definitions save without secrets/results, return paused after restart, and
+   support selected-row interval edits. Port/context remain captured.
 8. **Watch columns/tables.** Settle the all-instances/table design before work:
    discovery, polling, membership changes, persistence and presentation remain
    undecided. This is separate from Query Macros and retains captured endpoints.
-9. **Broader MIB value checks.** Extend DISPLAY-HINT and TEXTUAL-CONVENTION
-   validation beyond the implemented type, range, size, enumeration and BITS
-   checks; preserve tolerant parsing and the shared renderer/checker ownership.
-10. **MIB Problems tools.** Add further filtering/sorting and copy/export.
+9. **Broader MIB value checks — implemented in the maintenance batch.** Shared
+   integer/octet hints, ASCII/UTF-8 warnings, qualified DisplayString/DateAndTime/
+   RowStatus semantics, Counter64 constraints and undefined BITS are covered.
+   Unsupported/zero-length/wide-numeric hint forms retain received presentation;
+   arbitrary vendor DESCRIPTION semantics are not inferred. Further TC-specific
+   rules remain incremental refinements. Tolerant MIB loading is unchanged.
+10. **MIB Problems tools — implemented 2026-11-07.** Text/severity filtering,
+    sorting and snapshot-based CSV copy/export are present.
 11. **Logging refinements.** Decide whether/how Watch polls belong in the
-    request log. Normalize raw libsmi/SNMP++ diagnostic timestamps with the
-    structured logger. Full PDU/packet decoding is optional later, not an
+    request log. Raw libsmi/SNMP++ diagnostic timestamp wrapping, redaction and
+    shared file/UI delivery are implemented (2026-11-07). Full PDU/packet decoding
+    is optional later, not an
     unimplemented requirement of the current request log.
 
 ## Maintenance and known limitations requiring separate work
 
-12. **Legacy leaks and warnings.** Investigate existing full-application/libsmi
-    leaks and older UI ownership paths. Resolve Qt deprecations and unchecked
-    returns (including Linux privilege setup and test-file writes) without
-    suppressing warnings or casually changing the patched parser. Broad ASAN
-    invalid-access passes currently disable leak detection; strict widgets pass.
+12. **Residual parser leaks.** Diagnostic-message and application/UI ownership
+    leaks were reduced by about 84% in the same headless workflow (92,179 to
+    14,567 bytes). Unsuppressed residual stacks are historical scanner strings and
+    pending nodes. Their compatibility-sensitive cleanup remains separate work;
+    parser/scanner sources were not regenerated. Qt deprecations and known
+    unchecked results were corrected, including fail-closed privilege dropping.
+    The clean Release build still reports SNMP++ address/TimeTicks formatting
+    warnings and a const-qualification warning in the generated libsmi parser.
+    Valid protocol boundary checks pass under strict ASAN; the legacy LP64
+    TimeTicks type-width assumption remains a separate vendor hardening concern.
+    SNMP++ also renders the extreme unsigned IPv6 scope ID as signed in
+    printable text. These warnings are retained, not suppressed. Exact final warning and sanitizer
+    results are in the maintenance record.
+    Broad ASAN still disables leak detection; isolated strict checks retain it.
 13. **Credential protection at rest.** Decide and implement an OS-keychain or
     other protection strategy; current local secret storage is reversibly
     encoded, not encrypted. Preserve safe migration and current credential IDs.
@@ -79,10 +103,19 @@ No implementation, push, tag or publication is authorized by this inventory.
     should count as equivalent providers and how old pins/profiles migrate.
     Raw SHA-256 is currently authoritative. Never normalize user/source MIBs as
     a side effect of this decision.
-17. **Documentation and translations.** Complete translations and reconcile or
-    clearly date older architecture/security/dependency documents where they
-    still describe retired saved-device, Graphs, legacy Modules or profile
-    transfer behavior. The current redesign plan/settings/release guides win.
+17. **Translations and remaining distribution review.** Current security,
+    dependency, Library and architecture guidance has been reconciled; retired
+    device/Graphs/Discovery/transfer designs and earlier credential stages are
+    clearly marked historical. Translation completion/native-language review
+    remains outstanding. Current redesign/settings/release guides win.
+
+18. **Library conflict explanations — resolved 2026-11-09.** The Library now judges
+    conflicts for the viewed profile, lists the competing files with revisions on the
+    Providers tab, offers a read-only Compare and a Use This Copy action, and applies the
+    owner's newest-revision rule: a strictly newest copy resolves the conflict
+    (reported as "Resolved conflict"); ties and undated copies stay "Conflict". See
+    the MIBs page rework section in [the redesign plan](redesign-plan.md). Not done: an
+    Editor-based side-by-side merge (the owner has not decided whether it is wanted).
 
 ## Optional or conditional decisions, not scheduled commitments
 
@@ -115,7 +148,7 @@ trap clearing, source navigation, busy/Stop behavior or credential Name/Version
 columns. Graphs, Discovery, saved devices and offline saved-walk browsing are
 retired/out of scope, not outstanding tasks.
 
-## Current validation reference
+## Earlier approved checkpoint
 
 [Finishing validation](finish-review-validation.md): 65/65 deterministic tests,
 all 27 tolerance scenarios, five libsmi goldens, focused 7/7, ASAN 8/8 and strict

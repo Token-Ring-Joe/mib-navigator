@@ -38,6 +38,8 @@
 #include "snmp_pp/snmp_pp.h"
 
 class ConnectionBar;
+class QueryMacroRunner;
+struct QueryMacroDefinition;
 
 class Agent: public QObject
 {
@@ -66,6 +68,9 @@ public:
     void SetConnectionBar(ConnectionBar *bar);
     // Every request is recorded here, with how it ended.
     void SetRequestLog(class RequestLog *log) { requestLog = log; }
+    void RunMacro(const QueryMacroDefinition &definition);
+    bool ForegroundQueryBusy() const;
+    quint64 ActiveRequestLogId() const { return activeLogId; }
 
     inline USM *GetUSMObj(void) { return v3mp->get_usm(); }
 
@@ -107,6 +112,7 @@ private:
     bool resultSortingWasOn = false;
     void PresentWalkBatch(const QVector<Vb> &batch);
     void PresentWalkResult(const SnmpWalkResult &result);
+    void PresentMacroResult();
 
 public slots:
     void WalkFrom(const QString& oid);
@@ -144,6 +150,8 @@ protected slots:
 
 signals:
     void StartWalk(bool);
+    void foregroundBusyChanged(bool busy);
+    void macroRejected(const QString &message);
 
 private:
     Snmpb *s;
@@ -173,12 +181,13 @@ private:
     SnmpInstanceAsyncRunner *instanceRunner = nullptr;
     SnmpWalkAsyncRunner *walkRunner = nullptr;
     SnmpSingleAsyncRunner *singleRunner = nullptr;
+    QueryMacroRunner *macroRunner = nullptr;
     std::unique_ptr<SnmpRequestContext> pendingTableRowContext;
     SnmpTablePlan pendingTableRowPlan;
     QString pendingInstanceOid;
     int pendingInstanceOperation = 0;
 
-    Ui_Varbinds *vbui;
+    Ui_Varbinds *vbui = nullptr;
     QDialog *vbd;
 };
 

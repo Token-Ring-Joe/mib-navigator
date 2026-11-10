@@ -176,6 +176,7 @@ ConnectionError ConnectionModel::build(
     profile.v1 = protocol == 0;
     profile.v2 = protocol == 1;
     profile.v3 = protocol == 2;
+    if (protocol == 2) profile.contextname = preferences.contextName;
 
     selection->profile = profile;
     selection->selectedProtocol = protocol;

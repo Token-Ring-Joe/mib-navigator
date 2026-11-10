@@ -18,6 +18,7 @@ public:
     static void log(const QString &category, const QString &message,
                     bool mirrorToUi = true);
     static QString redact(const QString &message);
+    static QString redactLibraryMessage(const QString &message);
     static QString logFilePath();
     static QString logDirectory();
     static void attachLogWidget(QTextEdit *widget);

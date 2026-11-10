@@ -1,5 +1,10 @@
 # Device Manager v1
 
+> Retired design, retained as history (status reconciled 2026-11-07).
+> Do not use this document as current implementation guidance. Saved devices,
+> device-profile transfer, Discovery and Graphs are outside the current product.
+> [Redesign Plan](redesign-plan.md) and [outstanding tasks](outstanding-tasks.md) govern.
+
 Agent profiles remain the authoritative SNMP endpoint and request-settings
 records and continue to be stored in `agents.conf`. The Device Manager adds an
 organizational model around those records; it does not copy their settings.

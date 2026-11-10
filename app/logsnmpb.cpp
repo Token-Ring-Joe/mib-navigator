@@ -22,7 +22,7 @@
 
 #include <QPushButton>
 
-LogSnmpb::LogSnmpb(Snmpb *snmpb)
+LogSnmpb::LogSnmpb(Snmpb *snmpb) : QObject(snmpb)
 {
     s = snmpb;
     DiagnosticLogger::attachLogWidget(s->MainUI()->LogOutput);
@@ -51,7 +51,7 @@ LogSnmpb::LogSnmpb(Snmpb *snmpb)
              this, SLOT( SetDebugLevelState ( int ) ));
 
     // Initialize SNMP++ logging system
-    DefaultLog::init(new SnmpbAgentLog(s->MainUI()->LogOutput));
+    DefaultLog::init(new SnmpbAgentLog);
 
     // Load preferences from file
     bool logenable = settings->value("logenable", true).toBool();
