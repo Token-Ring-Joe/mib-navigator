@@ -15,7 +15,7 @@ SnmpWalkResult SnmpWalkOperation::execute(ISnmpTransport &transport,
 {
     SnmpWalkResult result;
     const bool bulk = requestContext.config().version != SnmpRequestVersion::V1;
-    int repetitions = std::max(1, requestContext.maxRepetitions());
+    int repetitions = (std::max)(1, requestContext.maxRepetitions());
     Oid cursor = rootOid;       // the last OID received; the next request asks for what follows it
 
     while (true) {
@@ -45,7 +45,7 @@ SnmpWalkResult SnmpWalkOperation::execute(ISnmpTransport &transport,
                 return result;
             }
             if (code == SNMP_ERROR_TOO_BIG && bulk && repetitions > 1) {
-                repetitions = std::max(1, repetitions / 2);
+                repetitions = (std::max)(1, repetitions / 2);
                 continue;
             }
             result.status = response.status;

@@ -31,6 +31,9 @@ signals:
     void showInTreeRequested(const QString &oid);
     void openInEditorRequested(const QString &file, int line);
 
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
+
 private:
     void activate(int row);
 

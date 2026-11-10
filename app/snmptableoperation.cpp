@@ -88,7 +88,7 @@ SnmpOperationStatus readRow(const SnmpRequestContext &context, const SnmpTablePl
         ++result.requests;
         if (response.status == SnmpOperationStatus::SnmpError) {
             if (response.snmpErrorStatus == SNMP_ERROR_TOO_BIG && chunk.size() > 1) {
-                chunkSize = std::max(1, int(chunk.size()) / 2); continue;
+                chunkSize = (std::max)(1, int(chunk.size()) / 2); continue;
             }
             if (context.config().version == SnmpRequestVersion::V1 &&
                 response.snmpErrorStatus == SNMP_ERROR_NO_SUCH_NAME &&
@@ -145,7 +145,7 @@ public:
         : context(context), plan(plan), transport(transport), cancellation(cancellation),
           result(result), states(plan.columns.size()),
           bulkRepetitions(context.config().version == SnmpRequestVersion::V1
-                              ? 1 : std::max(1, context.maxRepetitions()))
+                              ? 1 : (std::max)(1, context.maxRepetitions()))
     {
         for (int i = 0; i < states.size(); ++i) states[i].cursor = plan.columns.at(i).oid;
     }
@@ -209,7 +209,7 @@ SnmpOperationStatus Walker::refill(QList<int> need)
             fail(QObject::tr("Stopped after %1 requests.").arg(kMaxRequests));
             return SnmpOperationStatus::Complete;
         }
-        const int count = std::min<int>(chunkSize, need.size());
+        const int count = (std::min<int>)(chunkSize, need.size());
         const QList<int> chunk = need.mid(0, count);
         const bool bulk = bulkRepetitions > 1;
         SnmpTransportRequest request;
@@ -228,8 +228,8 @@ SnmpOperationStatus Walker::refill(QList<int> need)
         if (response.status == SnmpOperationStatus::SnmpError) {
             const int code = response.snmpErrorStatus;
             if (code == SNMP_ERROR_TOO_BIG) {
-                if (bulk && bulkRepetitions > 1) bulkRepetitions = std::max(1, bulkRepetitions / 2);
-                else if (chunkSize > 1) chunkSize = std::max(1, chunkSize / 2);
+                if (bulk && bulkRepetitions > 1) bulkRepetitions = (std::max)(1, bulkRepetitions / 2);
+                else if (chunkSize > 1) chunkSize = (std::max)(1, chunkSize / 2);
                 else {
                     result.status = response.status;
                     result.snmpErrorStatus = code;

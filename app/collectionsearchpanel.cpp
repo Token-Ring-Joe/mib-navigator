@@ -6,6 +6,7 @@
 #include <QApplication>
 #include <QBrush>
 #include <QClipboard>
+#include <QKeyEvent>
 #include <QColor>
 #include <QFileInfo>
 #include <QFontDatabase>
@@ -46,6 +47,8 @@ CollectionSearchPanel::CollectionSearchPanel(MibCollectionService *collection, L
     setProperty("workbenchFocusTarget", QStringLiteral("SearchResults"));
 
     connect(table, &QTableWidget::cellActivated, this, [this](int row, int) { activate(row); });
+    // Qt item views do not emit activated() for Return on macOS, so handle it here on every platform.
+    table->installEventFilter(this);
     connect(service, &MibCollectionService::indexChanged, this, [this]() {
         if (!lastQuery.isEmpty() && !service->isBuilding()) search(lastQuery);   // refresh with the new index
         else if (lastQuery.isEmpty()) search({});
@@ -132,6 +135,18 @@ void CollectionSearchPanel::search(const QString &query)
     text += tr(" Green rows are in the active MIB Profile. Double-click a row to open it.");
     if (service->isBuilding()) text += tr(" (The index is updating.)");
     summary->setText(text);
+}
+
+bool CollectionSearchPanel::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == table && event->type() == QEvent::KeyPress) {
+        const int key = static_cast<QKeyEvent *>(event)->key();
+        if (key == Qt::Key_Return || key == Qt::Key_Enter) {
+            activate(table->currentRow());
+            return true;
+        }
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 void CollectionSearchPanel::activate(int row)
