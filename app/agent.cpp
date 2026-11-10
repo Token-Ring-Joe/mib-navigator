@@ -174,7 +174,8 @@ Agent::Agent(Snmpb *snmpb, bool offline_mode)
     connect(macroRunner, &QueryMacroRunner::requestStarted, this, [this](const QStringList &oids) {
         if (!requestLog) return;
         const auto &run = macroRunner->snapshot();
-        activeLogId = requestLog->begin(tr("Macro %1 / Objects and values / GET").arg(run.name),
+        const QString description = macroRunner->requestDescription();
+        activeLogId = requestLog->begin(description.isEmpty() ? tr("Macro %1 / Objects and values / GET").arg(run.name) : description,
             run.target, run.credential, oids.join(QStringLiteral(", ")));
     });
     connect(macroRunner, &QueryMacroRunner::requestFinished, this,
@@ -184,6 +185,44 @@ Agent::Agent(Snmpb *snmpb, bool offline_mode)
                 : failed ? RequestOutcome::Failed : RequestOutcome::Succeeded);
             activeLogId = 0;
         });
+    // "Choose when run" tables: the previous results stay on screen until every picker is answered.
+    connect(macroRunner, &QueryMacroRunner::selectionStarted, this, [this] {
+        stop = false; s->MainUI()->actionStop->setEnabled(true); emit StartWalk(true);
+        presentRequestStatus(s, tr("Finding table instances for the macro…"), 0, false);
+    });
+    connect(macroRunner, &QueryMacroRunner::abandoned, this, [this] {
+        activeRequestContext.reset(); s->MainUI()->actionStop->setEnabled(false); emit StartWalk(false);
+        presentRequestStatus(s, tr("Macro not run: no instances were chosen. The previous results were kept."), 0);
+    });
+    macroRunner->setInstanceChooser([this](const QString &label, const QStringList &instances, const QStringList &decoded) {
+        QDialog dialog(s->MainUI()->MIBTree);
+        dialog.setObjectName("MacroInstanceDialog");
+        QVBoxLayout layout(&dialog);
+        QLabel caption(tr("Select the instances of %1 to read. Hold Ctrl or Shift to choose several.").arg(label), &dialog);
+        caption.setWordWrap(true);
+        QListWidget list(&dialog); list.setObjectName("MacroInstanceList");
+        list.setSelectionMode(QAbstractItemView::ExtendedSelection);
+        list.setAccessibleName(tr("Available table instances"));
+        for (int i = 0; i < instances.size(); ++i) {
+            const QString text = decoded.value(i);
+            auto *item = new QListWidgetItem(text.isEmpty() ? instances[i] : instances[i] + QStringLiteral("  \u00b7  ") + text, &list);
+            item->setData(Qt::UserRole, instances[i]);
+        }
+        QDialogButtonBox box(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+        auto *run = box.button(QDialogButtonBox::Ok); run->setText(tr("Run")); run->setEnabled(false);
+        connect(&list, &QListWidget::itemSelectionChanged, run, [&list, run] { run->setEnabled(!list.selectedItems().isEmpty()); });
+        layout.addWidget(&caption); layout.addWidget(&list, 1); layout.addWidget(&box);
+        connect(&box, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+        connect(&box, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        connect(&list, &QListWidget::itemDoubleClicked, &dialog, &QDialog::accept);
+        dialog.setWindowTitle(tr("Select Instances"));
+        DialogLayout::initialize(dialog, QSize(560, 420));
+        list.setFocus();
+        if (dialog.exec() != QDialog::Accepted || list.selectedItems().isEmpty()) return std::optional<QStringList>();
+        QStringList chosen;
+        for (auto *item : list.selectedItems()) chosen.append(item->data(Qt::UserRole).toString());
+        return std::optional<QStringList>(chosen);
+    });
     connect(macroRunner, &QueryMacroRunner::changed, this, &Agent::PresentMacroResult);
     connect(macroRunner, &QueryMacroRunner::completed, this, [this] {
         if (s->Results()) s->Results()->finishQuery();
@@ -688,6 +727,23 @@ void Agent::PresentMacroResult()
     QList<QueryResultGroup> groups;
     for (const auto &source : run.groups) {
         QueryResultGroup group; group.id = source.id; group.name = source.name; group.status = source.problem;
+        if (source.isTable) {
+            group.isTable = true;
+            for (const auto &column : source.table.columns) group.columns << column.name;
+            for (const SnmpTableRow &row : source.table.rows) {
+                QueryResultTableRow gridRow; gridRow.instance = row.instance; gridRow.index = row.indexText;
+                for (int i = 0; i < group.columns.size(); ++i) {
+                    if (i >= row.cells.size() || !row.cells[i].available) { gridRow.cells.append(QueryResultValue{}); continue; }
+                    Vb vb = row.cells[i].varbind; Oid oid = source.table.columns[i].oid, instanceOid;
+                    vb.get_oid(instanceOid);
+                    if (instanceOid.len() == 0) instanceOid = oid;
+                    gridRow.cells.append(resultValue(ResolveMibObject(run.environment, instanceOid), instanceOid, vb));
+                }
+                group.rows.append(gridRow);
+            }
+            groups.append(group);
+            continue;
+        }
         for (const auto &read : source.reads) {
             if (!read.finished) continue;
             QueryResultValue value;

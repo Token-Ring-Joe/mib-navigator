@@ -1,4 +1,5 @@
 #include "querymacrorunner.h"
+#include "fakesnmpagent.h"
 #include "mibenvironmentregistry.h"
 #include <QCoreApplication>
 #include <QEventLoop>
@@ -18,18 +19,22 @@ struct Script {
     QList<QStringList> requests;
     QList<SnmpRequestConfig> configs;
     std::function<SnmpTransportResult(const SnmpTransportRequest &, int)> answer;
+    // Table traffic (GETNEXT/GETBULK, and exact GETs when agentGets) is answered by this agent.
+    FakeSnmpAgent *agent = nullptr;
+    bool agentGets = false;
 };
 class Transport final : public ISnmpTransport {
 public:
     Transport(Script &script, SnmpRequestConfig config) : script(script), captured(std::move(config)) {}
     const SnmpRequestConfig &config() const override { return captured; }
     SnmpTransportResult execute(const SnmpTransportRequest &request) override {
-        check(request.operation == SnmpTransportOperation::Get, "macros send exact GETs only");
+        const bool viaAgent = script.agent && (request.operation != SnmpTransportOperation::Get || script.agentGets);
+        check(viaAgent || request.operation == SnmpTransportOperation::Get, "scalar and exact entries send exact GETs only");
         int number;
         { QMutexLocker lock(&script.mutex); QStringList oids;
           for (int i = 0; i < request.pdu.get_vb_count(); ++i) { Vb vb; request.pdu.get_vb(vb, i); oids.append(QString::fromLatin1(vb.get_printable_oid())); }
           script.requests.append(oids); script.configs.append(captured); number = script.requests.size(); }
-        return script.answer(request, number);
+        return viaAgent ? script.agent->execute(request) : script.answer(request, number);
     }
 private:
     Script &script; SnmpRequestConfig captured;
@@ -69,19 +74,30 @@ void wait(QueryMacroRunner &runner) {
     QTimer::singleShot(15000, &loop, &QEventLoop::quit); if (runner.isBusy()) loop.exec();
     check(!runner.isBusy(), "run completes within its deterministic budget");
 }
+constexpr auto kRow = "1.3.6.1.4.1.999.1.1";
+void put(FakeSnmpAgent &agent, int column, int instance, long value) {
+    agent.addInteger(QString("%1.%2.%3").arg(kRow).arg(column).arg(instance).toLatin1().constData(), value);
+}
+// Three rows, two columns; column 2 of row 2 is missing (a sparse table).
+void fillTable(FakeSnmpAgent &agent) {
+    for (int row = 1; row <= 3; ++row) { put(agent, 1, row, row * 10); if (row != 2) put(agent, 2, row, row * 100); }
+}
+QueryMacroEntry tableEntry(QueryMacroInstancePolicy policy = QueryMacroInstancePolicy::All, QStringList fixed = {}) {
+    QueryMacroEntry entry; entry.id = QueryMacroNewId(); entry.kind = QueryMacroKind::Table; entry.label = "testTable";
+    entry.oid = kRow; entry.columns = {QString(kRow) + ".1", QString(kRow) + ".2"};
+    entry.instancePolicy = policy; entry.fixedInstances = fixed; return entry;
+}
+QueryMacroDefinition tableMacro(const QList<QueryMacroEntry> &entries) {
+    QueryMacroDefinition macro; macro.id = QueryMacroNewId(); macro.name = "Table macro"; macro.entries = entries; return macro;
+}
+void waitAbandoned(QueryMacroRunner &runner) {
+    QEventLoop loop; QObject::connect(&runner, &QueryMacroRunner::abandoned, &loop, &QEventLoop::quit);
+    QObject::connect(&runner, &QueryMacroRunner::completed, &loop, &QEventLoop::quit);
+    QTimer::singleShot(15000, &loop, &QEventLoop::quit); if (runner.isBusy()) loop.exec();
+}
 }
 int main(int argc, char **argv) {
     QCoreApplication app(argc, argv);
-    {
-        Script script; script.answer = [](const auto &request, int) { return success(request); };
-        QueryMacroRunner runner; auto macro = definition(0);
-        QueryMacroEntry table; table.id = QueryMacroNewId(); table.kind = QueryMacroKind::Table;
-        table.oid = "1.3.6.1.2.1.2.2.1"; table.columns = {"1.3.6.1.2.1.2.2.1.2"}; macro.entries.append(table);
-        check(start(runner, macro, script), "table-only macro starts an explanatory result"); wait(runner);
-        check(script.requests.isEmpty() && runner.snapshot().groups.size() == 1 &&
-            runner.snapshot().groups[0].id == table.id && !runner.snapshot().groups[0].problem.isEmpty(),
-            "table-only macro shows its deferred group directly and never sends network requests");
-    }
     {
         Script script; script.answer = [](const auto &request, int) { return success(request); };
         QueryMacroRunner runner; QString problem;
@@ -94,7 +110,8 @@ int main(int argc, char **argv) {
         QueryMacroRunner runner; auto macro = definition(); auto settings = config();
         macro.entries[0].kind = QueryMacroKind::Scalar; macro.entries[0].oid = "1.3.6.1.2.1.1.1";
         QueryMacroEntry table; table.id = QueryMacroNewId(); table.kind = QueryMacroKind::Table;
-        table.oid = "1.3.6.1.2.1.2.2.1"; table.columns = {"1.3.6.1.2.1.2.2.1.2"}; macro.entries.append(table);
+        table = tableEntry(); macro.entries.append(table);
+        FakeSnmpAgent agent(config()); fillTable(agent); script.agent = &agent;
         const auto environment = std::make_shared<MibEnvironment>(); int starts = 0, finishes = 0;
         QObject::connect(&runner, &QueryMacroRunner::requestStarted, [&](const QStringList &) { ++starts; });
         QObject::connect(&runner, &QueryMacroRunner::requestFinished, [&](const QString &, int, bool, bool, bool) { ++finishes; });
@@ -104,9 +121,10 @@ int main(int argc, char **argv) {
         wait(runner); const auto &run = runner.snapshot();
         check(run.name == "Captured essentials" && run.environment == environment && run.credential == "Lab read credential" &&
             run.profile == "Captured Profile" && run.started.isValid(), "definition, environment and display identity are captured values");
-        check(run.state == QueryMacroRunState::Partial && run.valueCount() == 20 && run.groups.size() == 2 &&
-            !run.groups[1].problem.isEmpty(), "table groups are explained while scalar/exact reads complete");
-        check(starts == 3 && finishes == starts && script.requests.size() == 3, "one lifecycle pair per actual bounded batch");
+        check(run.state == QueryMacroRunState::Complete && run.valueCount() == 20 + 5 && run.groups.size() == 2 &&
+            run.groups[1].isTable && run.groups[1].table.rows.size() == 3 && run.groups[1].problem.isEmpty(),
+            "a table group runs after the scalar/exact reads and keeps its own grid");
+        check(starts >= 4 && finishes == starts && int(script.requests.size()) >= starts, "one lifecycle pair per scalar batch and per table request");
         check(script.requests.first().first() == "1.3.6.1.2.1.1.1.0" &&
             script.requests.first()[1] == "1.3.6.1.4.1.64994.2.0", "scalar appends .0 and exact instance stays exact");
         for (const auto &seen : script.configs) check(seen.address == "192.0.2.10" && seen.port == "4161" &&
@@ -239,12 +257,139 @@ int main(int argc, char **argv) {
     }
     {
         Script script; script.answer = [](const auto &request, int) { return success(request); };
-        auto macro = definition(1); QueryMacroEntry table; table.id = QueryMacroNewId(); table.kind = QueryMacroKind::Table;
-        table.oid = "1.3.6.1.2.1.2.2.1"; table.columns = {"1.3.6.1.2.1.2.2.1.2"}; macro.entries.append(table);
+        auto macro = definition(1); macro.entries.append(tableEntry());
+        FakeSnmpAgent agent(config()); fillTable(agent); script.agent = &agent;
+        agent.setFailure([](int, SnmpTransportResult *result) { result->status = SnmpOperationStatus::Timeout; return true; });
         QueryMacroRunner runner; check(start(runner, macro, script), "table summary run starts"); wait(runner);
         const QString text = runner.snapshot().summary();
-        check(text.contains("Problems:") && text.contains("table entry was skipped") && !text.contains("\u00d7"),
-            "a skipped table entry is explained in the headline");
+        check(runner.snapshot().state == QueryMacroRunState::Partial && text.contains("Problems:") && text.contains("Timeout"),
+            "a table that stops answering is explained in the headline and keeps the scalar value");
+    }
+    // ---- Milestone 3: table groups ----
+    {   // All instances, sparse cells, raw numeric (no MIB definition in the captured environment).
+        Script script; script.answer = [](const auto &request, int) { return success(request); };
+        FakeSnmpAgent agent(config()); fillTable(agent); script.agent = &agent;
+        QueryMacroRunner runner;
+        check(start(runner, tableMacro({tableEntry()}), script), "table-only macro starts"); wait(runner);
+        const auto &run = runner.snapshot();
+        check(run.state == QueryMacroRunState::Complete && run.groups.size() == 1 && run.groups[0].isTable &&
+            run.groups[0].table.rows.size() == 3 && run.groups[0].table.columns.size() == 2 && run.valueCount() == 5,
+            "All instances reads the whole table into one grid");
+        const auto &rows = run.groups[0].table.rows;
+        check(rows.size() == 3 && rows[1].instance == "2" && rows[1].cells[0].available && !rows[1].cells[1].available,
+            "a sparse row keeps its missing cell instead of shifting columns");
+        check(agent.countOf(SnmpTransportOperation::Get) == 0, "an All-instances table sends no exact GETs");
+    }
+    {   // SNMPv1 uses GETNEXT only.
+        Script script; script.answer = [](const auto &request, int) { return success(request); };
+        FakeSnmpAgent agent(config(SnmpRequestVersion::V1)); fillTable(agent); script.agent = &agent;
+        QueryMacroRunner runner;
+        check(start(runner, tableMacro({tableEntry()}), script, config(SnmpRequestVersion::V1)), "v1 table starts"); wait(runner);
+        check(runner.snapshot().groups[0].table.rows.size() == 3 && agent.countOf(SnmpTransportOperation::GetBulk) == 0 &&
+            agent.countOf(SnmpTransportOperation::GetNext) > 0, "SNMPv1 tables use GETNEXT, never GETBULK");
+    }
+    {   // Fixed instances: exact reads; a vanished row never becomes its successor.
+        Script script; script.answer = [](const auto &request, int) { return success(request); };
+        FakeSnmpAgent agent(config()); fillTable(agent); script.agent = &agent; script.agentGets = true;
+        QueryMacroRunner runner;
+        check(start(runner, tableMacro({tableEntry(QueryMacroInstancePolicy::Fixed, {"1", "7", "3"})}), script), "fixed table starts");
+        wait(runner);
+        const auto &run = runner.snapshot();
+        check(run.state == QueryMacroRunState::Partial && run.groups[0].table.rows.size() == 2 &&
+            run.groups[0].table.rows[0].instance == "1" && run.groups[0].table.rows[1].instance == "3" &&
+            run.groups[0].problem.contains("Instance 7"), "Fixed instances read exactly those rows and explain the vanished one");
+        check(agent.countOf(SnmpTransportOperation::GetNext) == 0 && agent.countOf(SnmpTransportOperation::GetBulk) == 0,
+            "Fixed instances never walk");
+    }
+    {   // Choose when run: discovery, picker, then retrieval of only the chosen rows.
+        Script script; script.answer = [](const auto &request, int) { return success(request); };
+        FakeSnmpAgent agent(config()); fillTable(agent); script.agent = &agent; script.agentGets = true;
+        QueryMacroRunner runner; QStringList order, offered; int started = 0;
+        QObject::connect(&runner, &QueryMacroRunner::selectionStarted, [&] { order << "selection"; });
+        QObject::connect(&runner, &QueryMacroRunner::started, [&] { order << "started"; ++started; });
+        runner.setInstanceChooser([&](const QString &label, const QStringList &instances, const QStringList &) {
+            order << "chooser"; offered = instances; check(label == "testTable", "picker is told which table it chooses for");
+            return std::optional<QStringList>(QStringList{"3", "1"});
+        });
+        check(start(runner, tableMacro({tableEntry(QueryMacroInstancePolicy::ChooseWhenRun)}), script), "choose table starts");
+        wait(runner);
+        check(order == QStringList({"selection", "chooser", "started"}) && started == 1,
+            "results are replaced only after the picker is answered");
+        check(offered == QStringList({"1", "2", "3"}), "the picker is offered every discovered instance");
+        const auto &run = runner.snapshot();
+        check(run.groups[0].table.rows.size() == 2 && run.groups[0].table.rows[0].instance == "1" &&
+            run.groups[0].table.rows[1].instance == "3", "only the chosen rows are retrieved, in table order");
+    }
+    {   // Cancelling the picker abandons the run before any retrieval.
+        Script script; script.answer = [](const auto &request, int) { return success(request); };
+        FakeSnmpAgent agent(config()); fillTable(agent); script.agent = &agent; script.agentGets = true;
+        QueryMacroRunner runner; int started = 0, abandoned = 0, completed = 0;
+        QObject::connect(&runner, &QueryMacroRunner::started, [&] { ++started; });
+        QObject::connect(&runner, &QueryMacroRunner::abandoned, [&] { ++abandoned; });
+        QObject::connect(&runner, &QueryMacroRunner::completed, [&] { ++completed; });
+        runner.setInstanceChooser([](const QString &, const QStringList &, const QStringList &) { return std::optional<QStringList>(); });
+        auto macro = definition(1); macro.entries.append(tableEntry(QueryMacroInstancePolicy::ChooseWhenRun));
+        check(start(runner, macro, script), "cancelled picker run starts"); waitAbandoned(runner);
+        check(abandoned == 1 && started == 0 && completed == 0 && !runner.isBusy(),
+            "a cancelled picker leaves earlier results in place and ends the run");
+        check(agent.countOf(SnmpTransportOperation::Get) == 0 && script.requests.size() == agent.requestCount(),
+            "no scalar or table retrieval starts after a cancelled picker");
+    }
+    {   // Stop during the picker's discovery also abandons without touching results.
+        Script script; script.answer = [](const auto &request, int) { return success(request); };
+        FakeSnmpAgent agent(config()); fillTable(agent); script.agent = &agent;
+        QueryMacroRunner runner; int started = 0, abandoned = 0;
+        QObject::connect(&runner, &QueryMacroRunner::started, [&] { ++started; });
+        QObject::connect(&runner, &QueryMacroRunner::abandoned, [&] { ++abandoned; });
+        QObject::connect(&runner, &QueryMacroRunner::requestStarted, &runner, [&] { runner.cancel(); });
+        runner.setInstanceChooser([](const QString &, const QStringList &i, const QStringList &) { return std::optional<QStringList>(i); });
+        check(start(runner, tableMacro({tableEntry(QueryMacroInstancePolicy::ChooseWhenRun)}), script), "stopped discovery starts");
+        waitAbandoned(runner);
+        check(abandoned == 1 && started == 0 && !runner.isBusy(), "Stop during instance discovery abandons the run");
+    }
+    {   // A table that cannot be listed is explained; the rest of the macro still runs.
+        Script script; script.answer = [](const auto &request, int) { return success(request); };
+        FakeSnmpAgent agent(config()); script.agent = &agent;   // empty agent: no instances exist
+        QueryMacroRunner runner; runner.setInstanceChooser([](const QString &, const QStringList &i, const QStringList &) { return std::optional<QStringList>(i); });
+        auto macro = definition(2); macro.entries.append(tableEntry(QueryMacroInstancePolicy::ChooseWhenRun));
+        check(start(runner, macro, script), "empty-table choose starts"); wait(runner);
+        const auto &run = runner.snapshot();
+        check(run.valueCount() == 2 && run.groups.size() == 2 && run.groups[1].problem.contains("no instances") &&
+            run.state == QueryMacroRunState::Partial, "a table with no instances is explained and scalars still run");
+    }
+    {   // Stop keeps rows already received and does not start the next table.
+        Script script; script.answer = [](const auto &request, int) { return success(request); };
+        FakeSnmpAgent agent(config()); fillTable(agent); script.agent = &agent; script.agentGets = true;
+        QueryMacroRunner runner; int requests = 0;
+        QObject::connect(&runner, &QueryMacroRunner::requestStarted, &runner, [&] { if (++requests == 2) runner.cancel(); });
+        auto macro = tableMacro({tableEntry(QueryMacroInstancePolicy::Fixed, {"1", "2", "3"}), tableEntry()});
+        check(start(runner, macro, script), "stopped table run starts"); wait(runner);
+        const auto &run = runner.snapshot();
+        check(run.state == QueryMacroRunState::Stopped && run.groups[0].table.rows.size() >= 1 && run.groups[0].table.rows.size() <= 2 && run.groups.size() == 2 &&
+            run.groups[1].problem.contains("stopped") && agent.countOf(SnmpTransportOperation::GetBulk) == 0,
+            "Stop keeps received rows, marks unread tables, and sends nothing further");
+    }
+    {   // Security refusal ends the run; later tables are not attempted with the same login.
+        Script script; script.answer = [](const auto &request, int) { return success(request); };
+        FakeSnmpAgent agent(config(SnmpRequestVersion::V3)); fillTable(agent); script.agent = &agent;
+        agent.setFailure([](int, SnmpTransportResult *result) {
+            result->status = SnmpOperationStatus::TransportFailure; result->transportStatus = SNMPv3_USM_AUTHENTICATION_FAILURE; return true; });
+        QueryMacroRunner runner;
+        check(start(runner, tableMacro({tableEntry(), tableEntry()}), script, config(SnmpRequestVersion::V3)), "refused tables start");
+        wait(runner);
+        check(runner.snapshot().state == QueryMacroRunState::Refused && agent.requestCount() == 1 &&
+            runner.snapshot().groups[1].problem.contains("refused"), "a refused login is not repeated for every table");
+    }
+    {   // Two tables run independently; a failing one does not discard the other.
+        Script script; script.answer = [](const auto &request, int) { return success(request); };
+        FakeSnmpAgent agent(config()); fillTable(agent); script.agent = &agent;
+        auto broken = tableEntry(); broken.oid = "1.3.6.1.4.1.999.9.1";
+        broken.columns = {"1.3.6.1.4.1.999.9.1.1"};
+        QueryMacroRunner runner;
+        check(start(runner, tableMacro({broken, tableEntry()}), script), "two-table run starts"); wait(runner);
+        const auto &run = runner.snapshot();
+        check(run.groups.size() == 2 && run.groups[1].table.rows.size() == 3 && run.state == QueryMacroRunState::Complete,
+            "an empty table is not a failure and does not affect an independent table");
     }
     return failures ? 1 : 0;
 }

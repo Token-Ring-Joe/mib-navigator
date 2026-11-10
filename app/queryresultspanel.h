@@ -21,14 +21,18 @@ struct QueryResultValue
     QString id, problem; // Stable row identity and an unavailable-read explanation.
 };
 
-struct QueryResultGroup {
-    QString id, name, status;
-    QList<QueryResultValue> values;
-};
 struct QueryResultTableRow
 {
     QString instance, index;
     QList<QueryResultValue> cells; // an empty OID denotes an unavailable cell
+};
+
+struct QueryResultGroup {
+    QString id, name, status;
+    QList<QueryResultValue> values;      // flat group: one row per object/value
+    bool isTable = false;                // table group: one grid with a column per object
+    QStringList columns;
+    QList<QueryResultTableRow> rows;
 };
 
 class QueryResultsPanel : public QWidget

@@ -170,6 +170,27 @@ int main(int argc, char **argv)
         filter->text() == "42" && table->isRowHidden(1) && starts == 1,
         "group updates reacquire selection by stable ID and retain filter/navigation");
     check(panel.csvRecords().size() == 2, "CSV contains only selected-group visible rows");
+    {   // A table group shows one grid with a column per object; switching groups swaps the layout.
+        filter->clear(); settle();
+        QueryResultGroup grid{"grid", "ifTable", {}, {}, true, {"ifDescr", "ifSpeed"}, {}};
+        QueryResultTableRow first; first.instance = "1"; first.index = "ifIndex=1";
+        first.cells = {value("1.3.6.1.2.1.2.2.1.2.1", "eth0"), value("1.3.6.1.2.1.2.2.1.5.1", "100")};
+        QueryResultTableRow second; second.instance = "2"; second.index = "ifIndex=2";
+        second.cells = {value("1.3.6.1.2.1.2.2.1.2.2", "eth1"), QueryResultValue{}};   // sparse: no ifSpeed
+        grid.rows = {first, second};
+        panel.updateGroups({reads, grid}, "Table delivered");
+        auto *groups = panel.findChild<QComboBox *>("ResultsGroup");
+        groups->setCurrentIndex(1);
+        check(panel.isTableResult() && table->rowCount() == 2 && table->columnCount() == 4 &&
+              table->horizontalHeaderItem(1)->text() == "ifDescr" && table->item(1, 2)->data(QueryResultsPanel::MissingRole).toBool(),
+              "a table group shows one grid with a column per object and a marked missing cell");
+        check(panel.csvRecords().size() == 3, "CSV of a table group has a header and one record per row");
+        panel.updateGroups({reads, grid}, "Table updated");
+        check(panel.isTableResult() && table->rowCount() == 2, "a background update keeps the chosen table group");
+        groups->setCurrentIndex(0);
+        check(!panel.isTableResult() && table->rowCount() == 2 && table->columnCount() == 9,
+              "switching back to the flat group restores the object/value layout");
+    }
     filter->clear(); QueryResultGroup large{"large", "Large scalar group", {}, {}};
     qint64 longestUpdate = 0;
     for (int i = 0; i < 1024; ++i) {

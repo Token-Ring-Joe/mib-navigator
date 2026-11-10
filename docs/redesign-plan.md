@@ -254,8 +254,9 @@ The menu/Help/Preferences work and design/estimate review preceded authorization
 The [agreed design](query-macros-v1-design.md) separates four working milestones.
 Milestone 1 is implemented. The owner authorized milestone 2 on 2026-11-08:
 captured scalar/exact-instance runs, grouped Results, Stop and request logging.
-Table retrieval and legacy-dialog retirement remain milestones 3 and 4. Existing
-single-object SET remains.
+Milestone 3 (table groups: all, fixed and choose-when-run instances) was
+implemented on 2026-11-10; see [milestone 3](query-macros-milestone-3.md).
+Legacy-dialog retirement remains milestone 4. Existing single-object SET remains.
 
 ## Build order
 

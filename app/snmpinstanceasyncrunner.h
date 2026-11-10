@@ -18,12 +18,15 @@ public:
                std::unique_ptr<ISnmpTransport> transport);
     void cancel();
     bool isRunning() const;
+    // True from start() until the result has been delivered (the thread may still be exiting).
+    bool isBusy() const { return thread && !resultDelivered; }
     bool wait(unsigned long milliseconds = ULONG_MAX);
 signals:
     void completed(const SnmpInstanceResult &result);
 private:
     QThread *thread = nullptr;
     std::shared_ptr<SnmpCancellationToken> cancellation;
+    bool resultDelivered = false;
 };
 
 #endif

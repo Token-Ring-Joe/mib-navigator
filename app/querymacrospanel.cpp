@@ -128,7 +128,7 @@ QueryMacrosPanel::QueryMacrosPanel(QueryMacroService *s, ObjectPicker p, ObjectL
 {
     setObjectName("QueryMacrosPanel"); setProperty("workbenchFocusTarget", QStringLiteral("QueryMacroList"));
     auto *layout = new QVBoxLayout(this);
-    auto *intro = new QLabel(tr("Save reusable read definitions. Run reads scalars and exact instances using the current Target, Credential and MIB Profile. Table retrieval is not available yet. Editing sends no requests."));
+    auto *intro = new QLabel(tr("Save reusable read definitions. Run reads scalars, exact instances and table groups using the current Target, Credential and MIB Profile. Editing sends no requests."));
     intro->setWordWrap(true); layout->addWidget(intro);
     auto *splitter = new QSplitter; splitter->setObjectName("QueryMacroSplitter"); layout->addWidget(splitter, 1);
     auto *left = new QWidget; auto *leftLayout = new QVBoxLayout(left); leftLayout->setContentsMargins(0, 0, 0, 0);

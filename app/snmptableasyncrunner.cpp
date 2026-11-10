@@ -44,21 +44,28 @@ bool SnmpTableAsyncRunner::start(const SnmpRequestContext &context,
                                  const SnmpTablePlan &plan,
                                  std::unique_ptr<ISnmpTransport> transport)
 {
-    if (thread || !transport)
+    if (!transport || isBusy())
         return false;
+    // The previous request has reported its result; let its thread finish exiting first.
+    if (thread && !wait(2000))
+        return false;
+    resultDelivered = false;
     cancellation = std::make_shared<SnmpCancellationToken>();
     thread = new QThread;
     auto *worker = new TableWorker(context, plan, std::move(transport), cancellation);
     worker->moveToThread(thread);
     connect(thread, &QThread::started, worker, &TableWorker::run);
     connect(worker, &TableWorker::finished, this,
-            [this](const SnmpTableResult &result) { emit completed(result); });
+            [this](const SnmpTableResult &result) { resultDelivered = true; emit completed(result); });
     connect(worker, &TableWorker::finished, thread, &QThread::quit);
     connect(worker, &TableWorker::finished, worker, &QObject::deleteLater);
-    connect(thread, &QThread::finished, this, [this]() {
-        thread->deleteLater();
-        thread = nullptr;
-        cancellation.reset();
+    // Captures its own thread: after a new request has started, this must not touch the new one.
+    connect(thread, &QThread::finished, this, [this, finishedThread = thread]() {
+        finishedThread->deleteLater();
+        if (thread == finishedThread) {
+            thread = nullptr;
+            cancellation.reset();
+        }
     });
     thread->start();
     return true;

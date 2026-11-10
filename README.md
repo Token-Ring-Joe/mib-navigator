@@ -29,8 +29,8 @@ modern interface around it.
 - **Tables.** Sparse-aware table grids, decoded indexes, exact row selection and
   CSV export.
 - **Query Macros.** Saved, editable query definitions that run captured
-  scalar and exact-instance requests and show grouped results. Table retrieval is
-  planned.
+  scalar, exact-instance and table requests (all rows, fixed rows, or rows you pick
+  when it runs) and show grouped results.
 - **Watch.** Poll values at per-row intervals. Each Watch keeps the target,
   port, credential and context it was created with, and starts paused after a
   restart.

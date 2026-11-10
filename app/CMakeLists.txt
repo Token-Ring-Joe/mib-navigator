@@ -552,7 +552,9 @@ if(BUILD_TESTING)
         querymacrorunner.cpp querymacrorunner.h querymacrorunner_test.cpp
         snmpsingleoperation.cpp snmpsingleasyncrunner.cpp snmpsingleasyncrunner.h
         snmprequestcontext.cpp snmprequestconfig.cpp snmprequestconfigadapter.cpp
-        snmptransport.cpp snmpreport.cpp mibvaluesemantics.cpp mibdisplayhint.cpp)
+        snmptransport.cpp snmpreport.cpp mibvaluesemantics.cpp mibdisplayhint.cpp
+        snmptableoperation.cpp snmptableasyncrunner.cpp snmpinstanceoperation.cpp snmpinstanceasyncrunner.cpp
+        tabletraversal.cpp tableindex.cpp fakesnmpagent.h)
     set_target_properties(snmpb_query_macro_runner_test PROPERTIES AUTOMOC ON)
     target_link_libraries(snmpb_query_macro_runner_test PRIVATE snmpb_query_macro_core
         Qt6::Core snmpb_libsmi snmpb_snmp_pp snmpb_libtomcrypt)

@@ -269,7 +269,12 @@ void QueryResultsPanel::showGroup()
     {
         const QSignalBlocker blocker(this);
         ++layoutGeneration; results->setSortingEnabled(false); results->setRowCount(0); warnings = 0;
-        for (const auto &value : groups[group].values) appendValue(value);
+        // Switching between a table group and a flat group changes the column layout.
+        if (groups[group].isTable) showTable(groups[group].columns, groups[group].rows);
+        else {
+            if (tableMode) configure(false);
+            for (const auto &value : groups[group].values) appendValue(value);
+        }
         results->setSortingEnabled(sorting);
         if (sort >= 0) results->sortItems(sort, direction);
         for (int row = 0; row < results->rowCount(); ++row)
@@ -277,7 +282,10 @@ void QueryResultsPanel::showGroup()
                 results->setCurrentCell(row, qMax(0, column));
         results->verticalScrollBar()->setValue(scroll);
         warnings = 0;
-        for (const auto &item : groups) for (const auto &value : item.values) warnings += !value.warnings.isEmpty();
+        for (const auto &item : groups) {
+            for (const auto &value : item.values) warnings += !value.warnings.isEmpty();
+            for (const auto &row : item.rows) for (const auto &cell : row.cells) warnings += !cell.warnings.isEmpty();
+        }
     }
     groupStatus->setText(groups[group].status); groupStatus->setVisible(!groups[group].status.isEmpty());
     filterRows(); emit warningsChanged(warnings);

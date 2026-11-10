@@ -41,8 +41,9 @@ does not authorize a commit, push, tag or publication.
 5. **Query Macros v1 — milestone 2 authorized 2026-11-08.** Definitions,
    storage and offline editing are done ([milestone 1](query-macros-milestone-1.md)).
    Captured scalar/exact runs, grouped Results, Stop and logging are the active
-   workstream ([milestone 2](query-macros-milestone-2.md)). Table retrieval and
-   legacy dialog retirement remain milestones 3 and 4. The four working
+   workstream ([milestone 2](query-macros-milestone-2.md)). Table retrieval is
+   implemented ([milestone 3](query-macros-milestone-3.md)); legacy dialog
+   retirement remains milestone 4. The four working
    milestones are definition model/repository/editor; captured scalar/exact
    runs and grouped Results; table groups with all/prompt/fixed instances; then
    regressions, old Multiple Varbinds retirement and release validation.

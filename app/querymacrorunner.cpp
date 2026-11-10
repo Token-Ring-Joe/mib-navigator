@@ -1,5 +1,6 @@
 #include "querymacrorunner.h"
 #include "snmpreport.h"
+#include "tableindex.h"
 #include "mibvaluesemantics.h"
 #include <QTimer>
 
@@ -12,7 +13,11 @@ QString readError(int code) {
 }
 
 int QueryMacroRunSnapshot::valueCount() const {
-    int count = 0; for (const auto &group : groups) for (const auto &read : group.reads) count += read.value.has_value();
+    int count = 0;
+    for (const auto &group : groups) {
+        for (const auto &read : group.reads) count += read.value.has_value();
+        for (const auto &row : group.table.rows) for (const auto &cell : row.cells) count += cell.available;
+    }
     return count;
 }
 int QueryMacroRunSnapshot::problemCount() const {
@@ -56,16 +61,22 @@ QString QueryMacroRunSnapshot::summary() const {
 
 QueryMacroRunner::QueryMacroRunner(QObject *parent) : QObject(parent) {
     connect(&worker, &SnmpSingleAsyncRunner::completed, this, &QueryMacroRunner::receive);
+    connect(&tableWorker, &SnmpTableAsyncRunner::completed, this, &QueryMacroRunner::receiveTable);
+    connect(&instanceWorker, &SnmpInstanceAsyncRunner::completed, this, &QueryMacroRunner::receiveInstances);
 }
 QueryMacroRunner::~QueryMacroRunner() { shutdown(); }
 void QueryMacroRunner::shutdown() {
     shuttingDown = true; stopped = true; ++generation;
     disconnect(&worker, nullptr, this, nullptr);
-    pending.clear(); factory = {}; context.reset(); busy = false;
+    disconnect(&tableWorker, nullptr, this, nullptr); disconnect(&instanceWorker, nullptr, this, nullptr);
+    tableWorker.cancel(); instanceWorker.cancel();
+    pending.clear(); tableJobs.clear(); factory = {}; context.reset(); tableContext.reset(); busy = false;
 }
 void QueryMacroRunner::cancel() {
     if (!busy || stopped) return;
     stopped = true;
+    tableWorker.cancel(); instanceWorker.cancel();
+    if (selecting) return;   // nothing has replaced the earlier results yet; abandon() reports it
     result.detail = tr("Stop requested. Waiting for the current request; no further requests will be sent.");
     emit changed();
 }
@@ -75,7 +86,7 @@ bool QueryMacroRunner::start(const QueryMacroDefinition &definition, const SnmpR
     TransportFactory transportFactory, QString *error)
 {
     if (error) error->clear();
-    if (busy || shuttingDown || worker.isBusy() || !transportFactory) {
+    if (busy || shuttingDown || worker.isBusy() || tableWorker.isBusy() || instanceWorker.isBusy() || !transportFactory) {
         if (error) *error = tr("Another query is running or the application is closing."); return false;
     }
     if (!ValidateQueryMacros({definition}, error)) return false;
@@ -85,10 +96,38 @@ bool QueryMacroRunner::start(const QueryMacroDefinition &definition, const SnmpR
     result.environment = captured.environment();
     QueryMacroRunGroup values; values.id = "values"; values.name = tr("Objects and values");
     QList<QueryMacroRunGroup> tables;
+    QList<TableJob> jobs;
+    tableJobs.clear();
+    const auto &environment = result.environment;
     for (const auto &entry : definition.entries) {
         if (entry.kind == QueryMacroKind::Table) {
-            tables.append({entry.id, entry.label.isEmpty() ? entry.oid : entry.label,
-                tr("Table retrieval is not available yet, so this table entry was skipped. Scalar and exact-instance entries still run."), {}});
+            QueryMacroRunGroup group; group.id = entry.id; group.isTable = true;
+            group.name = entry.label.isEmpty() ? entry.oid : entry.label;
+            group.table.environment = environment;
+            TableJob job; job.label = group.name; job.plan.rowOid = Oid(entry.oid.toLatin1().constData());
+            const auto *row = environment ? environment->nodeByOid(entry.oid) : nullptr;
+            if (row && row->kind != MibEnvironmentNodeKind::Row) {
+                group.problem = tr("The captured MIB Profile no longer defines a table row here. Review this entry.");
+            } else {
+                if (row) job.plan.indexSpecs = TableIndexSpecsForRow(*environment, *row);
+                for (const QString &column : entry.columns) {
+                    const auto *node = environment ? environment->nodeByOid(column) : nullptr;
+                    if (node && node->kind != MibEnvironmentNodeKind::Column) {
+                        group.problem = tr("The captured MIB Profile no longer defines %1 as a table column. Review this entry.").arg(column);
+                        break;
+                    }
+                    job.plan.columns.append({node ? node->name : column, Oid(column.toLatin1().constData())});
+                    group.table.columns.append(job.plan.columns.last());
+                }
+                if (group.problem.isEmpty() && job.plan.columns.isEmpty()) group.problem = tr("This table group has no columns.");
+            }
+            if (group.problem.isEmpty()) {
+                job.choose = entry.instancePolicy == QueryMacroInstancePolicy::ChooseWhenRun;
+                if (entry.instancePolicy == QueryMacroInstancePolicy::Fixed) job.instances = entry.fixedInstances;
+                job.group = int(tables.size());   // made absolute below
+                jobs.append(job);
+            }
+            tables.append(group);
             continue;
         }
         QueryMacroRead read; read.id = entry.id; read.label = entry.label;
@@ -103,6 +142,8 @@ bool QueryMacroRunner::start(const QueryMacroDefinition &definition, const SnmpR
         }
         values.reads.append(read);
     }
+    const int tableBase = values.reads.isEmpty() ? 0 : 1;
+    for (auto &job : jobs) { job.group += tableBase; tableJobs.append(job); }
     // A table-only macro opens its explanation, rather than an unrelated empty
     // object/value group. Whenever requests exist, group zero is the read group.
     if (!values.reads.isEmpty()) result.groups.append(values);
@@ -113,12 +154,142 @@ bool QueryMacroRunner::start(const QueryMacroDefinition &definition, const SnmpR
     }
     if (!batch.isEmpty()) pending.append(batch);
     context.emplace(captured.config(), SnmpRequestOperation::Get, captured.environment());
-    factory = std::move(transportFactory); batchLimit = 8;
+    tableContext.emplace(captured.config(), SnmpRequestOperation::Walk, captured.environment());
+    factory = std::move(transportFactory); batchLimit = 8; requestLabel.clear();
     stopped = false; busy = true; ++generation;
+    selecting = std::any_of(tableJobs.cbegin(), tableJobs.cend(), [](const TableJob &job) { return job.choose; });
+    if (selecting) {
+        // Earlier results stay on screen until every picker is answered.
+        emit selectionStarted();
+        const auto current = generation;
+        QTimer::singleShot(0, this, [this, current] { if (current == generation) selectNext(); });
+    } else beginRun();
+    return true;
+}
+void QueryMacroRunner::beginRun() {
+    selecting = false;
     emit started(); emit changed();
     const auto current = generation;
     QTimer::singleShot(0, this, [this, current] { if (current == generation) advance(); });
-    return true;
+}
+void QueryMacroRunner::abandon() {
+    selecting = false; busy = false; ++generation;
+    pending.clear(); tableJobs.clear(); factory = {}; context.reset(); tableContext.reset();
+    emit abandoned();
+}
+void QueryMacroRunner::selectNext() {
+    if (!busy || shuttingDown || !selecting) return;
+    if (stopped) { abandon(); return; }
+    int at = -1;
+    for (int i = 0; i < tableJobs.size(); ++i) if (tableJobs[i].choose) { at = i; break; }
+    if (at < 0) { beginRun(); return; }
+    const auto &job = tableJobs[at];
+    QVector<Oid> roots; for (const auto &column : job.plan.columns) roots.append(column.oid);
+    requestLabel = tr("Macro %1 / %2 / Find instances").arg(result.name, job.label);
+    auto transport = factory(tableContext->config());
+    if (!transport || !instanceWorker.start(*tableContext, roots, std::move(transport))) {
+        result.groups[job.group].problem = tr("Instance discovery could not be started.");
+        tableJobs.removeAt(at);
+        const auto current = generation;
+        QTimer::singleShot(0, this, [this, current] { if (current == generation) selectNext(); });
+        return;
+    }
+    emit requestStarted({QString::fromLatin1(job.plan.rowOid.get_printable())});
+}
+void QueryMacroRunner::receiveInstances(const SnmpInstanceResult &found) {
+    if (!busy || shuttingDown || !selecting) return;
+    int at = -1;
+    for (int i = 0; i < tableJobs.size(); ++i) if (tableJobs[i].choose) { at = i; break; }
+    if (at < 0) return;
+    auto &job = tableJobs[at];
+    const bool timeout = found.status == SnmpOperationStatus::Timeout;
+    const bool refused = (found.transportStatus >= SNMPv3_USM_UNSUPPORTED_SECURITY_LEVEL &&
+        found.transportStatus <= SNMPv3_USM_UNSUPPORTED_PRIVPROTOCOL) || found.snmpErrorStatus == SNMP_ERROR_AUTH_ERR ||
+        (found.status == SnmpOperationStatus::SnmpError && !found.problem.isEmpty());
+    QString detail;
+    if (found.status == SnmpOperationStatus::Cancelled || stopped) { emit requestFinished(tr("Stopped."), 0, true, false, false); abandon(); return; }
+    if (timeout) detail = tr("Timeout: the device did not answer while looking for instances.");
+    else if (!found.problem.isEmpty()) detail = found.problem;
+    else if (found.status == SnmpOperationStatus::SnmpError) detail = tr("SNMP error %1: the device refused to list instances.").arg(found.snmpErrorStatus);
+    else if (found.status != SnmpOperationStatus::Complete) detail = tr("No response received while looking for instances.");
+    else if (found.instances.isEmpty()) detail = tr("The device has no instances of this table.");
+    result.requests += qMax(1, found.requests);
+    if (!detail.isEmpty()) {
+        emit requestFinished(detail, found.instances.size(), true, timeout, refused);
+        result.groups[job.group].problem = detail;
+        if (refused) {
+            // The same refused login is not repeated for every remaining table.
+            selecting = false; emit started(); emit changed(); finish(QueryMacroRunState::Refused, detail); return;
+        }
+        tableJobs.removeAt(at);
+    } else {
+        emit requestFinished(tr("%1 instance(s) found.").arg(found.instances.size()), found.instances.size(), false, false, false);
+        QStringList decoded;
+        for (const QString &instance : found.instances) {
+            QVector<quint32> suffix; for (const QString &part : instance.split('.')) suffix.append(part.toUInt());
+            QString text; DecodeTableInstance(job.plan.indexSpecs, suffix, &text); decoded.append(text);
+        }
+        const auto picked = instanceChooser ? instanceChooser(job.label, found.instances, decoded) : std::nullopt;
+        if (!picked || picked->isEmpty()) { abandon(); return; }
+        job.instances.clear();
+        for (const QString &instance : found.instances) if (picked->contains(instance)) job.instances.append(instance);
+        if (job.instances.isEmpty()) { abandon(); return; }
+        job.choose = false;
+    }
+    const auto current = generation;
+    QTimer::singleShot(0, this, [this, current] { if (current == generation) selectNext(); });
+}
+void QueryMacroRunner::startTableRequest() {
+    auto &job = tableJobs.first();
+    SnmpTablePlan plan = job.plan;
+    if (!job.instances.isEmpty()) plan.instance = job.instances.value(job.next);
+    requestLabel = plan.instance.isEmpty() ? tr("Macro %1 / %2 / Table").arg(result.name, job.label)
+        : tr("Macro %1 / %2 / Table row %3").arg(result.name, job.label, plan.instance);
+    auto transport = factory(tableContext->config());
+    if (!transport || !tableWorker.start(*tableContext, plan, std::move(transport))) {
+        result.groups[job.group].problem = tr("The table request could not be started.");
+        tableJobs.removeFirst();
+        const auto current = generation;
+        QTimer::singleShot(0, this, [this, current] { if (current == generation) advance(); });
+        emit changed(); return;
+    }
+    emit requestStarted({QString::fromLatin1(plan.rowOid.get_printable())});
+    emit changed();
+}
+void QueryMacroRunner::receiveTable(const SnmpTableResult &table) {
+    if (!busy || shuttingDown || selecting || tableJobs.isEmpty()) return;
+    auto &job = tableJobs.first();
+    auto &group = result.groups[job.group];
+    const QString instance = job.instances.isEmpty() ? QString() : job.instances.value(job.next);
+    result.requests += qMax(1, table.requests);
+    for (const auto &row : table.rows) group.table.rows.append(row);
+    const bool timeout = table.status == SnmpOperationStatus::Timeout;
+    const bool securityFailure = table.transportStatus >= SNMPv3_USM_UNSUPPORTED_SECURITY_LEVEL &&
+        table.transportStatus <= SNMPv3_USM_UNSUPPORTED_PRIVPROTOCOL;
+    const bool refused = securityFailure || table.snmpErrorStatus == SNMP_ERROR_AUTH_ERR ||
+        (table.status == SnmpOperationStatus::SnmpError && !table.problem.isEmpty());
+    QString detail; bool failed = false;
+    if (table.status == SnmpOperationStatus::Cancelled) detail = tr("Stopped. Rows received so far were kept.");
+    else if (timeout) { detail = tr("Timeout: the device stopped answering, so the table may be incomplete."); failed = true; }
+    else if (table.status == SnmpOperationStatus::SnmpError)
+        { detail = !table.problem.isEmpty() ? table.problem : readError(table.snmpErrorStatus); failed = true; }
+    else if (table.status == SnmpOperationStatus::TransportFailure)
+        { detail = !table.problem.isEmpty() ? table.problem : tr("No response received."); failed = true; }
+    else if (!table.problem.isEmpty()) { detail = table.problem; failed = true; }
+    if (failed || table.status == SnmpOperationStatus::Cancelled) {
+        const QString line = instance.isEmpty() ? detail : tr("Instance %1: %2").arg(instance, detail);
+        group.problem = group.problem.isEmpty() ? line : group.problem + QLatin1Char(' ') + line;
+    }
+    emit requestFinished(detail.isEmpty() ? tr("Table returned %n row(s).", nullptr, int(table.rows.size())) : detail,
+        int(table.rows.size()), failed, timeout, refused);
+    emit changed();
+    if (refused) { finish(QueryMacroRunState::Refused, detail); return; }
+    // A silent or failing device will not answer the rest of this group's rows either.
+    const bool deviceGone = timeout || table.status == SnmpOperationStatus::TransportFailure;
+    if (!job.instances.isEmpty() && !deviceGone && ++job.next < job.instances.size()) {}
+    else tableJobs.removeFirst();
+    const auto current = generation;
+    QTimer::singleShot(0, this, [this, current] { if (current == generation) advance(); });
 }
 void QueryMacroRunner::failReads(const QVector<int> &indexes, const QString &problem) {
     for (int i : indexes) { auto &read = result.groups[0].reads[i]; read.problem = problem; read.finished = true; }
@@ -127,6 +298,13 @@ void QueryMacroRunner::advance()
 {
     if (!busy || shuttingDown) return;
     if (stopped) { finish(QueryMacroRunState::Stopped, tr("Completed values have been kept.")); return; }
+    if (pending.isEmpty() && !tableJobs.isEmpty()) {
+        if (result.requests >= 4096) {
+            finish(result.valueCount() ? QueryMacroRunState::Partial : QueryMacroRunState::Failed,
+                   tr("The macro request limit was reached.")); return;
+        }
+        startTableRequest(); return;
+    }
     if (pending.isEmpty()) {
         finish(result.problemCount() ? (result.valueCount() ? QueryMacroRunState::Partial : QueryMacroRunState::Failed)
                                      : QueryMacroRunState::Complete); return;
@@ -210,12 +388,19 @@ void QueryMacroRunner::receive(const SnmpSingleResult &response)
 void QueryMacroRunner::finish(QueryMacroRunState state, const QString &detail)
 {
     result.state = state; result.detail = detail;
-    for (auto &read : result.groups[0].reads) if (!read.finished) {
+    for (const auto &job : std::as_const(tableJobs)) {
+        auto &group = result.groups[job.group];
+        if (group.problem.isEmpty())
+            group.problem = state == QueryMacroRunState::Stopped ? tr("Not read: the macro was stopped.")
+                : state == QueryMacroRunState::Refused ? tr("Not read: the device refused the credential or security settings.")
+                : tr("Not read: the macro ended before this table was requested.");
+    }
+    if (!result.groups.isEmpty()) for (auto &read : result.groups[0].reads) if (!read.finished) {
         read.finished = true;
         read.problem = state == QueryMacroRunState::Stopped ? tr("Not read: the macro was stopped.")
             : state == QueryMacroRunState::Refused ? tr("Not read: the device refused the credential or security settings.")
             : tr("Not read: the macro ended before this entry was requested.");
     }
-    pending.clear(); factory = {}; context.reset();
+    pending.clear(); tableJobs.clear(); factory = {}; context.reset(); tableContext.reset();
     emit changed(); busy = false; emit completed();
 }

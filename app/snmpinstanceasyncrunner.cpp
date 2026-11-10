@@ -40,18 +40,22 @@ bool SnmpInstanceAsyncRunner::start(const SnmpRequestContext &context,
                                   const QVector<Oid> &roots,
                                   std::unique_ptr<ISnmpTransport> transport)
 {
-    if (thread || !transport) return false;
+    if (!transport || isBusy()) return false;
+    // The previous request has reported its result; let its thread finish exiting first.
+    if (thread && !wait(2000)) return false;
+    resultDelivered = false;
     cancellation = std::make_shared<SnmpCancellationToken>();
     thread = new QThread;
     auto *worker = new InstanceWorker(context, roots, std::move(transport), cancellation);
     worker->moveToThread(thread);
     connect(thread, &QThread::started, worker, &InstanceWorker::run);
     connect(worker, &InstanceWorker::finished, this,
-            [this](const SnmpInstanceResult &result) { emit completed(result); });
+            [this](const SnmpInstanceResult &result) { resultDelivered = true; emit completed(result); });
     connect(worker, &InstanceWorker::finished, thread, &QThread::quit);
     connect(worker, &InstanceWorker::finished, worker, &QObject::deleteLater);
-    connect(thread, &QThread::finished, this, [this]() {
-        thread->deleteLater(); thread = nullptr; cancellation.reset();
+    connect(thread, &QThread::finished, this, [this, finishedThread = thread]() {
+        finishedThread->deleteLater();
+        if (thread == finishedThread) { thread = nullptr; cancellation.reset(); }
     });
     thread->start(); return true;
 }
