@@ -2833,6 +2833,17 @@ int main( int argc, char ** argv )
                     smoke_output << "launch-smoke: SMALL-WINDOW page=" << page << " size=" << mw.width() << "x" << mw.height()
                                  << " minimum=" << mw.minimumSize().width() << "x" << mw.minimumSize().height()
                                  << " controls-fit=" << controlsFit << " navigation-y=" << y << Qt::endl;
+                    // When the window cannot shrink to the target width, say which widgets set it.
+                    if (qEnvironmentVariableIsSet("SNMPB_DUMP_MINWIDTH") || mw.width() > 1024) {
+                        QList<QPair<int, QString>> wide;
+                        for (auto *child : mw.findChildren<QWidget *>()) {
+                            if (!child->isVisibleTo(&mw)) continue;
+                            const int w = qMax(child->minimumSizeHint().width(), child->minimumWidth());
+                            if (w > 250) wide.append({w, QString("%1 '%2' hint=%3 minW=%4 layout=%5").arg(child->metaObject()->className(), child->objectName()).arg(child->minimumSizeHint().width()).arg(child->minimumWidth()).arg(child->layout() ? child->layout()->metaObject()->className() : "-")});
+                        }
+                        std::sort(wide.begin(), wide.end(), [](const auto &x, const auto &y) { return x.first > y.first; });
+                        for (int i = 0; i < qMin(24, int(wide.size())); ++i) smoke_output << "launch-smoke: MINW page=" << page << " " << wide[i].first << " " << wide[i].second << Qt::endl;
+                    }
                     check(mw.width() <= 1024 && mw.height() <= 720 && controlsFit && navigationY == y,
                           "dialog-polish: smaller desktop keeps workspace navigation fixed and connection controls visible");
                     mw.grab().save(QDir(smoke_config_dir).filePath(QString("small-window-workspace-%1.png").arg(page)));
@@ -2997,6 +3008,10 @@ int main( int argc, char ** argv )
                     auto *scroll = dialog->findChild<QScrollArea *>("CredentialEditorScroll");
                     auto *footer = dialog->findChild<QDialogButtonBox *>();
                     if (scroll) { scroll->ensureWidgetVisible(privSecret); privSecret->setFocus(); QCoreApplication::processEvents(); }
+                    smoke_output << "launch-smoke: CRED-COMPACT dialog=" << dialog->width() << "x" << dialog->height()
+                                 << " minimumHint=" << dialog->minimumSizeHint().width() << "x" << dialog->minimumSizeHint().height()
+                                 << " minimum=" << dialog->minimumWidth() << "x" << dialog->minimumHeight()
+                                 << " scroll=" << (scroll ? 1 : 0) << " footer=" << (footer ? 1 : 0) << Qt::endl;
                     check(scroll && footer && dialog->width() <= 640 && dialog->height() <= 480 &&
                           dialog->rect().contains(footer->mapTo(dialog, footer->rect().bottomRight())) &&
                           scroll->viewport()->rect().intersects(QRect(privSecret->mapTo(scroll->viewport(), QPoint()), privSecret->size())),
