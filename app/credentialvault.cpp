@@ -130,7 +130,12 @@ bool CredentialVault::write(const QString &password, const QHash<QString, QByteA
         {"iv", QString::fromLatin1(iv.toBase64())}, {"data", QString::fromLatin1(cipher.toBase64())},
         {"mac", QString::fromLatin1(mac.toBase64())}};
     QSaveFile file(fileName);
-    if (!file.open(QIODevice::WriteOnly) || !file.setPermissions(QFile::ReadOwner | QFile::WriteOwner)) {
+    bool prepared = file.open(QIODevice::WriteOnly);
+#ifndef Q_OS_WIN
+    // Owner-only access. Windows has no such mode bits; the profile folder's ACL applies there.
+    prepared = prepared && file.setPermissions(QFile::ReadOwner | QFile::WriteOwner);
+#endif
+    if (!prepared) {
         lastError = QObject::tr("The credential vault file could not be written."); return false;
     }
     const QByteArray bytes = QJsonDocument(envelope).toJson();

@@ -95,7 +95,7 @@ END
     const QByteArray paths = (temporary.path() + QDir::listSeparator() +
         QStringLiteral(SNMPB_SOURCE_DIR "/libsmi/mibs/ietf")).toLocal8Bit();
     smiSetPath(paths.constData());
-    check(smiLoadModule(file.fileName().toLocal8Bit().constData()), "filename != module identity loads");
+    check(smiLoadModule(QDir::toNativeSeparators(file.fileName()).toLocal8Bit().constData()), "filename != module identity loads");
     check(smiLoadModule("IF-MIB"), "standard profile includes table and Counter64 objects");
     const auto environment = snapshot();
     check(environment->nodes().size() > 100, "profile contains realistic standard MIB metadata");
@@ -109,7 +109,7 @@ END
     file.write(alternateSource); file.close();
     smiInit("trap-view-alternate-profile");
     smiSetPath(paths.constData());
-    check(smiLoadModule(file.fileName().toLocal8Bit().constData()), "different profile loads alternative definitions for same OIDs");
+    check(smiLoadModule(QDir::toNativeSeparators(file.fileName()).toLocal8Bit().constData()), "different profile loads alternative definitions for same OIDs");
     const auto alternate = snapshot();
     smiExit();
     MibEnvironmentRegistry::publish(environment);

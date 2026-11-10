@@ -2,9 +2,9 @@
 #include <QFile>
 #include <QSettings>
 #include <QSaveFile>
-#include <QTemporaryFile>
 #include <QFileInfo>
 #include <QSet>
+#include <QUuid>
 
 CommunityCredentialRepository::CommunityCredentialRepository(const QString &name)
     : fileName(name) {}
@@ -47,9 +47,13 @@ QList<CommunityCredentialRecord> CommunityCredentialRepository::load(QString *er
 bool CommunityCredentialRepository::save(
     const QList<CommunityCredentialRecord> &records) const
 {
-    QTemporaryFile temporary(QFileInfo(fileName).absolutePath() + QStringLiteral("/.credentials-XXXXXX"));
-    if (!temporary.open()) return false;
-    const QString temporaryName = temporary.fileName(); temporary.close();
+    // QSettings would quietly create a missing folder; a store whose folder is gone is an error.
+    if (!QFileInfo(QFileInfo(fileName).absolutePath()).isDir()) return false;
+    // QSettings writes a scratch file next to the store (a name nothing else holds open); the
+    // bytes are then committed atomically over the real file.
+    const QString temporaryName = QFileInfo(fileName).absolutePath() + QStringLiteral("/.credentials-") +
+        QUuid::createUuid().toString(QUuid::Id128) + QStringLiteral(".tmp");
+    struct Scratch { QString name; ~Scratch() { QFile::remove(name); } } scratch{temporaryName};
     {
         QSettings settings(temporaryName, QSettings::IniFormat);
         settings.setValue("schema/version", CurrentVersion);
@@ -69,7 +73,10 @@ bool CommunityCredentialRepository::save(
     if (!source.open(QIODevice::ReadOnly)) return false;
     const auto bytes = source.readAll();
     QSaveFile destination(fileName);
-    if (!destination.open(QIODevice::WriteOnly) ||
-        !destination.setPermissions(QFile::ReadOwner | QFile::WriteOwner)) return false;
+    if (!destination.open(QIODevice::WriteOnly)) return false;
+#ifndef Q_OS_WIN
+    // Owner-only access. Windows has no such mode bits; the profile folder's ACL applies there.
+    if (!destination.setPermissions(QFile::ReadOwner | QFile::WriteOwner)) return false;
+#endif
     return destination.write(bytes) == bytes.size() && destination.commit();
 }

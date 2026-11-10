@@ -99,6 +99,10 @@ bool UsmCredentialRepository::saveRecords(const QList<UsmCredentialRecord> &reco
         {"privacySecret", QString::fromLatin1(r.privacySecret.bytes().toBase64())}});
     const QByteArray data = QJsonDocument(QJsonObject{{"schema", 2}, {"credentials", entries}}).toJson();
     QSaveFile file(recordPath());
-    if (!file.open(QIODevice::WriteOnly) || !file.setPermissions(QFile::ReadOwner | QFile::WriteOwner)) return false;
+    if (!file.open(QIODevice::WriteOnly)) return false;
+#ifndef Q_OS_WIN
+    // Owner-only access. Windows has no such mode bits; the profile folder's ACL applies there.
+    if (!file.setPermissions(QFile::ReadOwner | QFile::WriteOwner)) return false;
+#endif
     return file.write(data) == data.size() && file.commit();
 }

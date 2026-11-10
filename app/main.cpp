@@ -2249,7 +2249,8 @@ int main( int argc, char ** argv )
                                 smoke_output << "launch-smoke: MACRO-RUN " << run.summary()
                                     << " profile=" << run.profile << " rows=" << run.groups[0].reads.size()
                                     << " kindProblem=" << run.groups[0].reads.last().problem << Qt::endl;
-                                check(run.state == QueryMacroRunState::Partial && run.valueCount() == 25 && run.requests == 4 &&
+                                check(run.state == QueryMacroRunState::Partial && run.valueCount() == 28 && run.requests == 5 &&
+                                      run.groups.size() == 2 && run.groups[1].isTable && !run.groups[1].table.rows.isEmpty() &&
                                       run.groups[0].reads.size() == 27 && run.groups[0].reads[26].problem.contains("readable scalar") &&
                                       run.environment == capturedEnvironment && run.name == "Live captured macro" && run.target == smoke_live_target,
                                       "macro-run: edits/deletion and connection/profile changes cannot retarget or reinterpret the run");

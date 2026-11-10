@@ -44,7 +44,7 @@ END
 )MIB";
 check(valueFixture.open(QIODevice::WriteOnly) && valueFixture.write(valueMib) == valueMib.size(), "write value-semantic fixture");
 valueFixture.close();
-check(smiLoadModule(valueFixture.fileName().toLocal8Bit().constData()) != nullptr, "load value-semantic fixture through real parser");
+check(smiLoadModule(QDir::toNativeSeparators(valueFixture.fileName()).toLocal8Bit().constData()) != nullptr, "load value-semantic fixture through real parser");
 const int parserTreeCount=liveCount(smiGetNode(nullptr,"iso"));const MibEffectivePlan allPlan=plan();auto environment=MibEnvironmentExtractor().extract(allPlan);MibEffectivePlan partialPlan=allPlan;partialPlan.effectiveModules<<"NO-SUCH-MIB";auto partialEnvironment=MibEnvironmentExtractor().extract(partialPlan,{"NO-SUCH-MIB"});auto extremeEnvironment=std::make_shared<MibEnvironment>(*environment);auto extremeBEnvironment=std::make_shared<MibEnvironment>(*environment);MibEnvironmentRegistry::publish(environment);smiExit();
 // Values retain their real parsed type ancestry and hints after the parser is gone.
 Vb scaledResponse(Oid("1.3.6.1.4.1.64992.1.0")); scaledResponse.set_value(SnmpInt32(-123));
