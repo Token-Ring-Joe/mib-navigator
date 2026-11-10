@@ -39,6 +39,7 @@
 
 #include "mibview.h"
 #include "agent.h"
+#include "credentialprotection.h"
 #include "tableindex.h"
 #include "communitycredentialservice.h"
 #include "connectionbar.h"
@@ -488,8 +489,9 @@ void Agent::Init(void)
     // (null when the v3MP could not be created, e.g. a second v3MP in the same process)
     USM *usm = v3mp->get_usm();
     
-    // Load the USM users from a file, if any
-    if (usm)
+    // Load the USM users from a file, if any. With password protection on, the saved SNMPv3
+    // passwords come from the unlocked vault instead, so the legacy file is not read.
+    if (usm && !(s->Protection() && s->Protection()->isEnabled()))
         usm->load_users(s->GetUsmUsersConfigFile().toLatin1().data());
 }
 

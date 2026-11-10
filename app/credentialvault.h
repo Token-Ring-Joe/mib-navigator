@@ -4,6 +4,7 @@
 #include <QByteArray>
 #include <QHash>
 #include <QString>
+#include "credentialsecretstore.h"
 
 // Password-protected storage for saved credential secrets (communities and SNMPv3 passwords).
 //
@@ -17,14 +18,14 @@
 // The master password is never stored. If it is lost the secrets cannot be recovered; the
 // callers keep the non-secret credential details (IDs, names, users, protocols) in their own
 // files so the user can re-enter the secrets.
-class CredentialVault
+class CredentialVault : public CredentialSecretStore
 {
 public:
     static constexpr int DefaultIterations = 600000;
     explicit CredentialVault(const QString &fileName, int iterations = DefaultIterations);
 
     bool exists() const;                       // a vault file is present (protection is on)
-    bool isUnlocked() const { return unlocked; }
+    bool isUnlocked() const override { return unlocked; }
     QString error() const { return lastError; }
     QString path() const { return fileName; }
 
@@ -36,9 +37,12 @@ public:
     bool unlock(const QString &password);
     void lock();
     // Replaces every stored secret and rewrites the file; requires an unlocked vault.
-    bool store(const QHash<QString, QByteArray> &secrets);
+    bool store(const QHash<QString, QByteArray> &secrets) override;
+    // True if `password` is the master password of the unlocked vault (for actions that must
+    // re-confirm it, such as turning protection off).
+    bool verifyPassword(const QString &password) const;
     bool changePassword(const QString &currentPassword, const QString &newPassword);
-    const QHash<QString, QByteArray> &secrets() const { return values; }
+    const QHash<QString, QByteArray> &secrets() const override { return values; }
     // Turns protection off: after the caller has written the secrets back to its own files.
     bool removeFile();
 

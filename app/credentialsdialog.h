@@ -2,6 +2,7 @@
 #define CREDENTIALSDIALOG_H
 
 #include <QDialog>
+#include <functional>
 #include "credentialrecords.h"
 
 class CommunityCredentialService;
@@ -26,6 +27,9 @@ public:
     bool applyChanges();
     void accept() override;
     QListWidget *credentialList() const { return list; }
+    // Adds a "Password protection…" button that runs `handler`. If the credentials were locked
+    // and the handler unlocked them, the list is read again.
+    void setProtectionHandler(std::function<void()> handler);
 private:
     void storeFields();
     void selectRow();
@@ -49,5 +53,6 @@ private:
     QStackedWidget *pages;
     QPushButton *removeButton, *duplicateButton;
     QDialogButtonBox *buttons;
+    QPushButton *protectionButton = nullptr;
 };
 #endif

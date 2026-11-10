@@ -4,8 +4,34 @@
 
 CommunityCredentialService::CommunityCredentialService(
     const QString &credentialFile, QObject *parent)
-    : QObject(parent), credentialRepository(credentialFile),
-      credentials(credentialRepository.load(&loadError)) {}
+    : CommunityCredentialService(credentialFile, nullptr, parent) {}
+
+CommunityCredentialService::CommunityCredentialService(
+    const QString &credentialFile, std::shared_ptr<CredentialSecretStore> store, QObject *parent)
+    : QObject(parent), credentialRepository(credentialFile), secretStore(store)
+{
+    credentialRepository.setSecretStore(store);
+    credentials = credentialRepository.load(&loadError);
+    locked = !loadError.isEmpty() && loadError == CommunityCredentialRepository::lockedMessage();
+}
+
+void CommunityCredentialService::attachSecretStore(std::shared_ptr<CredentialSecretStore> store)
+{
+    secretStore = store;
+    credentialRepository.setSecretStore(std::move(store));
+}
+
+bool CommunityCredentialService::rewriteStorage() { return saveCredentials(); }
+
+void CommunityCredentialService::reload()
+{
+    QString error;
+    const auto loaded = credentialRepository.load(&error);
+    loadError = error;
+    locked = !error.isEmpty() && error == CommunityCredentialRepository::lockedMessage();
+    if (!error.isEmpty()) return;
+    applyCommitted(loaded);
+}
 
 const QList<CommunityCredentialRecord> &CommunityCredentialService::records() const { return credentials; }
 const CommunityCredentialRecord *CommunityCredentialService::find(const QString &id) const

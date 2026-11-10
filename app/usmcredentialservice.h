@@ -17,6 +17,12 @@ public:
     bool saveIdentities() const;
     bool saveWorkingCopy(const QList<UsmCredentialRecord> &records) const;
     QString storageError() const { return loadError; }
+    // Password protection; see CommunityCredentialService. The repository passed to the
+    // constructor already carries the store the first load needs.
+    void attachSecretStore(std::shared_ptr<CredentialSecretStore> store) { repository.setSecretStore(std::move(store)); }
+    bool rewriteStorage() const { return loadError.isEmpty() && repository.saveRecords(credentials); }
+    void reload();
+    bool isLocked() const { return locked; }
     bool needsMigration() const { return loadError.isEmpty() && !repository.hasRecordStore() && !credentials.isEmpty(); }
     bool rename(const QString &credentialId, const QString &securityName);
     bool remove(const QString &credentialId);
@@ -43,6 +49,7 @@ private:
     QList<UsmCredentialRecord> credentials;
     UsmCredentialRepository repository;
     QString loadError;
+    bool locked = false;
 };
 
 #endif

@@ -7,6 +7,9 @@ set(SNMPB_APP_SOURCES
     comboboxes.cpp
     communitycredentialrepository.cpp
     communitycredentialservice.cpp
+    credentialprotection.cpp
+    credentialprotectiondialog.cpp
+    credentialvault.cpp
     communitycredentialmanager.cpp
     credentialsdialog.cpp
     credentialrecords.cpp
@@ -116,6 +119,10 @@ set(SNMPB_APP_HEADERS
     communitycredentialservice.h
     communitycredentialmanager.h
     credentialsdialog.h
+    credentialprotection.h
+    credentialprotectiondialog.h
+    credentialsecretstore.h
+    credentialvault.h
     credentialrecords.h
     diagnosticlogger.h
     mibproblemsexport.h
@@ -1008,6 +1015,25 @@ if(BUILD_TESTING)
         add_test(NAME snmpb.community-credential COMMAND
             $<TARGET_FILE:snmpb_community_credential_test>)
     endif()
+
+    add_executable(snmpb_credential_protection_test
+        credentialprotection.cpp credentialprotection.h credentialvault.cpp credentialvault.h
+        credentialsecretstore.h
+        communitycredentialrepository.cpp communitycredentialrepository.h
+        communitycredentialservice.cpp communitycredentialservice.h
+        usmcredentialrepository.cpp usmcredentialrepository.h
+        usmcredentialservice.cpp usmcredentialservice.h
+        credentialrecords.cpp credentialrecords.h
+        credentialprotection_test.cpp)
+    set_target_properties(snmpb_credential_protection_test PROPERTIES AUTOMOC ON)
+    target_link_libraries(snmpb_credential_protection_test PRIVATE Qt6::Core Qt6::Network snmpb_libtomcrypt)
+    if(WIN32)
+        add_test(NAME snmpb.credential-protection COMMAND ${CMAKE_COMMAND} -E env
+            "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}" $<TARGET_FILE:snmpb_credential_protection_test>)
+    else()
+        add_test(NAME snmpb.credential-protection COMMAND $<TARGET_FILE:snmpb_credential_protection_test>)
+    endif()
+    set_tests_properties(snmpb.credential-protection PROPERTIES TIMEOUT 120)
 
     add_executable(snmpb_credential_architecture_test
          snmprequestsettings.h

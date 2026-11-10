@@ -172,6 +172,17 @@ void CredentialsDialog::prepare(Tab preferred)
     status->setText(error);
     buttons->button(QDialogButtonBox::Ok)->setEnabled(error.isEmpty());
 }
+void CredentialsDialog::setProtectionHandler(std::function<void()> handler)
+{
+    if (protectionButton) return;
+    protectionButton = DialogLayout::action(buttons, tr("Password protection…"), QStringLiteral("CredentialProtection"));
+    connect(protectionButton, &QPushButton::clicked, this, [this, handler = std::move(handler)]() {
+        const bool wasLocked = communityService->isLocked() || userService->isLocked();
+        handler();
+        if (wasLocked && !communityService->isLocked() && !userService->isLocked())
+            prepare(currentKind == CredentialKind::Usm ? Users : Communities);
+    });
+}
 void CredentialsDialog::execute(Tab preferred) { prepare(preferred); exec(); }
 
 void CredentialsDialog::storeFields()

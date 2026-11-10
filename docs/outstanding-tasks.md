@@ -88,12 +88,15 @@ does not authorize a commit, push, tag or publication.
     printable text. These warnings are retained, not suppressed. Exact final warning and sanitizer
     results are in the maintenance record.
     Broad ASAN still disables leak detection; isolated strict checks retain it.
-13. **Credential protection at rest.** Decide and implement an OS-keychain or
-    other protection strategy; current local secret storage is reversibly
-    encoded, not encrypted. Preserve safe migration and current credential IDs.
-    Owner prefers a master password. The tested vault module exists; wiring it
-    in is waiting on one compatibility decision
-    ([design](credential-protection-design.md)).
+13. **Credential protection at rest.** Implemented 2026-11-10 as an opt-in master
+    password ([design](credential-protection-design.md)). Default is unchanged
+    (secrets in the credential files); Credentials > "Password protection…" turns
+    the encrypted vault on, off, changes the password, or unlocks. Still open:
+    manual acceptance on the Linux desktop (startup prompt, cancel-and-unlock),
+    and a later choice of OS-keychain or password-manager backends, which the
+    `CredentialSecretStore` interface allows without further changes to the
+    repositories. Known limits: the old plaintext may remain in free disk space or
+    backups after protecting, and a legacy `usm_users.conf` is left untouched.
 18a. **Window width on a real Windows desktop.** CI (2026-11-10) is green on all
     three platforms, but the GitHub Windows runner renders text much wider than
     Linux or macOS, so the smoke layout checks scale their 1024-px window and

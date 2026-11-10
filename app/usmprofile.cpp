@@ -2,6 +2,7 @@
 #include "snmpb.h"
 #include "agent.h"
 #include "usmcredentialservice.h"
+#include "credentialprotection.h"
 #include "usmcredentialruntime.h"
 #include <QSet>
 
@@ -9,8 +10,9 @@ USMProfileManager::USMProfileManager(Snmpb *snmpb)
     : QObject(snmpb), application(snmpb)
 {
     const auto legacy = UsmCredentialRuntimeRepository::snapshot(snmpb->AgentObj()->GetUSMObj());
-    credentialService = new UsmCredentialService(legacy,
-        UsmCredentialRepository(snmpb->GetCredentialIdentitiesConfigFile()), this);
+    UsmCredentialRepository repository(snmpb->GetCredentialIdentitiesConfigFile());
+    if (snmpb->Protection()) repository.setSecretStore(snmpb->Protection()->activeSecretStore());
+    credentialService = new UsmCredentialService(legacy, repository, this);
     // Even a corrupt canonical store must not leave legacy users silently active.
     RefreshRuntime();
     connect(credentialService, &UsmCredentialService::credentialsChanged, this, [this]() {

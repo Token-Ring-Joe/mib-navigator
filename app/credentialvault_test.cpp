@@ -1,6 +1,7 @@
 #include "credentialvault.h"
 
 #include <QCoreApplication>
+#include "tomcrypt.h"
 #include <QDir>
 #include <QFile>
 #include <QJsonDocument>
@@ -22,6 +23,9 @@ void spit(const QString &path, const QByteArray &bytes)
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
+    // SNMP++ registers libtomcrypt's "rijndael" cipher before any credential is touched; the
+    // vault must work in that state, which is the state of the real application.
+    register_cipher(&rijndael_desc);
     QTemporaryDir dir; const QString path = dir.filePath("vault.json");
     const QHash<QString, QByteArray> secrets{{"c1/read", "public"}, {"c1/write", "private"},
         {"u1/auth", QByteArray("pass\0word", 9)}, {"u1/priv", QByteArray("\xc3\xa9t\xc3\xa9", 4)}, {"empty/read", QByteArray()}};

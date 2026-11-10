@@ -11,6 +11,7 @@ UsmCredentialService::UsmCredentialService(
 {
     if (repository.hasRecordStore()) {
         credentials = repository.loadRecords(&loadError);
+        locked = loadError == UsmCredentialRepository::lockedMessage();
         return;
     }
     const QList<UsmCredentialIdentityRecord> stored = repository.load();
@@ -38,6 +39,17 @@ UsmCredentialService::UsmCredentialService(
                 record.displayName = entry.displayName;
         if (record.displayName.isEmpty()) record.displayName = record.securityName;
     }
+}
+
+void UsmCredentialService::reload()
+{
+    if (!repository.hasRecordStore()) return;
+    QString error;
+    const auto loaded = repository.loadRecords(&error);
+    loadError = error; locked = error == UsmCredentialRepository::lockedMessage();
+    if (!error.isEmpty()) return;
+    credentials = loaded;
+    emit credentialsReloaded(); emit credentialsChanged();
 }
 
 UsmCredentialRecord UsmCredentialService::createWorkingRecord(

@@ -13,6 +13,8 @@ class CommunityCredentialService : public QObject
     Q_OBJECT
 public:
     CommunityCredentialService(const QString &credentialFile, QObject *parent = nullptr);
+    CommunityCredentialService(const QString &credentialFile,
+                               std::shared_ptr<CredentialSecretStore> secretStore, QObject *parent = nullptr);
     const QList<CommunityCredentialRecord> &records() const;
     const CommunityCredentialRecord *find(const QString &credentialId) const;
     QString create(const CommunityCredentialRecord &draft);
@@ -22,6 +24,12 @@ public:
     bool saveWorkingCopy(const QList<CommunityCredentialRecord> &records) const;
     void applyCommitted(const QList<CommunityCredentialRecord> &records);
     QString storageError() const { return loadError; }
+    // Password protection: the secrets live in `store` instead of the credentials file.
+    // attach changes where the next save writes; it does not touch the file or the records.
+    void attachSecretStore(std::shared_ptr<CredentialSecretStore> store);
+    bool rewriteStorage();                  // saves the records in memory with the current setting
+    void reload();                          // re-reads the file (after an unlock); announces changes
+    bool isLocked() const { return locked; }
 
 signals:
     void credentialCreated(const QString &credentialId);
@@ -35,7 +43,9 @@ private:
     bool saveCredentials();
     CommunityCredentialRepository credentialRepository;
     QString loadError;
+    bool locked = false;
     QList<CommunityCredentialRecord> credentials;
+    std::shared_ptr<CredentialSecretStore> secretStore;
 };
 
 #endif

@@ -51,6 +51,11 @@ bool UsmCredentialRepository::save(
 
 bool UsmCredentialRepository::hasRecordStore() const { return QFile::exists(recordPath()); }
 
+QString UsmCredentialRepository::lockedMessage()
+{
+    return QObject::tr("Saved credentials are locked. Enter the master password to unlock them.");
+}
+
 QList<UsmCredentialRecord> UsmCredentialRepository::loadRecords(QString *error) const
 {
     QList<UsmCredentialRecord> result;
@@ -66,6 +71,11 @@ QList<UsmCredentialRecord> UsmCredentialRepository::loadRecords(QString *error) 
     if (parse.error != QJsonParseError::NoError || !doc.isObject()) return fail();
     const auto root = doc.object();
     if (root.value("schema").toInt() != 2 || !root.value("credentials").isArray()) return fail();
+    const bool protectedFile = root.value("protected").toBool();
+    if (protectedFile && (!secretStore || !secretStore->isUnlocked())) {
+        if (error) *error = lockedMessage();
+        return {};
+    }
     QSet<QString> ids;
     for (const auto &value : root.value("credentials").toArray()) {
         const auto o = value.toObject();
@@ -75,8 +85,18 @@ QList<UsmCredentialRecord> UsmCredentialRepository::loadRecords(QString *error) 
         record.securityName = o.value("user").toString();
         record.authProtocol = o.value("authProtocol").toInt(-1);
         record.privacyProtocol = o.value("privacyProtocol").toInt(-1);
-        const QByteArray auth = o.value("authSecret").toString().toLatin1();
-        const QByteArray priv = o.value("privacySecret").toString().toLatin1();
+        QByteArray auth = o.value("authSecret").toString().toLatin1();
+        QByteArray priv = o.value("privacySecret").toString().toLatin1();
+        if (protectedFile) {
+            const auto &all = secretStore->secrets();
+            const QString authKey = CredentialSecretKeys::usm(record.identity.credentialId, QStringLiteral("auth"));
+            const QString privKey = CredentialSecretKeys::usm(record.identity.credentialId, QStringLiteral("priv"));
+            if (!all.contains(authKey) || !all.contains(privKey)) {
+                if (error) *error = QObject::tr("The saved credentials do not match the protected secrets. The file has been left untouched.");
+                return {};
+            }
+            auth = all.value(authKey).toBase64(); priv = all.value(privKey).toBase64();
+        }
         const auto authBytes = QByteArray::fromBase64(auth), privBytes = QByteArray::fromBase64(priv);
         if (record.identity.credentialId.isEmpty() || ids.contains(record.identity.credentialId) ||
             record.displayName.trimmed().isEmpty() || record.securityName.trimmed().isEmpty() ||
@@ -91,13 +111,29 @@ QList<UsmCredentialRecord> UsmCredentialRepository::loadRecords(QString *error) 
 
 bool UsmCredentialRepository::saveRecords(const QList<UsmCredentialRecord> &records) const
 {
+    if (!secretStore) return writeRecords(records, false);
+    QHash<QString, QByteArray> mine, previous;
+    for (const auto &r : records) {
+        mine.insert(CredentialSecretKeys::usm(r.identity.credentialId, QStringLiteral("auth")), r.authSecret.bytes());
+        mine.insert(CredentialSecretKeys::usm(r.identity.credentialId, QStringLiteral("priv")), r.privacySecret.bytes());
+    }
+    if (!credentialStoreReplace(*secretStore, CredentialSecretKeys::usmPrefix(), mine, &previous)) return false;
+    if (writeRecords(records, true)) return true;
+    secretStore->store(previous);
+    return false;
+}
+
+bool UsmCredentialRepository::writeRecords(const QList<UsmCredentialRecord> &records, bool withoutSecrets) const
+{
     QJsonArray entries;
     for (const auto &r : records) entries.append(QJsonObject{
         {"id", r.identity.credentialId}, {"name", r.displayName}, {"user", r.securityName},
         {"authProtocol", r.authProtocol}, {"privacyProtocol", r.privacyProtocol},
-        {"authSecret", QString::fromLatin1(r.authSecret.bytes().toBase64())},
-        {"privacySecret", QString::fromLatin1(r.privacySecret.bytes().toBase64())}});
-    const QByteArray data = QJsonDocument(QJsonObject{{"schema", 2}, {"credentials", entries}}).toJson();
+        {"authSecret", withoutSecrets ? QString() : QString::fromLatin1(r.authSecret.bytes().toBase64())},
+        {"privacySecret", withoutSecrets ? QString() : QString::fromLatin1(r.privacySecret.bytes().toBase64())}});
+    QJsonObject root{{"schema", 2}, {"credentials", entries}};
+    if (withoutSecrets) root.insert("protected", true);
+    const QByteArray data = QJsonDocument(root).toJson();
     QSaveFile file(recordPath());
     if (!file.open(QIODevice::WriteOnly)) return false;
 #ifndef Q_OS_WIN

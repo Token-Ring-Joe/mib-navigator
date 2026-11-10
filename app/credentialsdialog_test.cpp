@@ -1,6 +1,8 @@
 #include "credentialsdialog.h"
 #include "communitycredentialservice.h"
 #include "usmcredentialservice.h"
+#include "credentialsecretstore.h"
+#include <memory>
 #include <QApplication>
 #include <QAction>
 #include <QComboBox>
@@ -14,6 +16,13 @@
 #include <cstdio>
 
 namespace {
+class FakeStore : public CredentialSecretStore {
+public:
+    bool isUnlocked() const override { return open; }
+    const QHash<QString, QByteArray> &secrets() const override { return held; }
+    bool store(const QHash<QString, QByteArray> &all) override { held = all; return true; }
+    bool open = true; QHash<QString, QByteArray> held;
+};
 int failures = 0;
 void check(bool ok, const char *why) { if (!ok) { ++failures; std::fprintf(stderr, "FAIL: %s\n", why); } }
 void field(CredentialsDialog &d, const char *name, const QString &value) { d.findChild<QLineEdit *>(name)->setText(value); }
@@ -92,5 +101,35 @@ int main(int argc, char **argv)
     UsmCredentialService rollbackRestart({}, UsmCredentialRepository(dir.filePath("rollback.ini")));
     check(rollbackRestart.records().isEmpty() && rollbackRestart.storageError().isEmpty(), "failed mixed save restores durable v3 state");
     check(!failed.findChild<QLabel *>("CredentialStatus")->text().isEmpty(), "save failure is explained without closing the editor");
+
+    // Password protection: a locked start shows no credentials; unlocking from the Password
+    // protection button reloads the editor, and the button only exists once a handler is set.
+    {
+        auto store = std::make_shared<FakeStore>();
+        const QString lockedCommunities = dir.filePath("locked-c.ini"), lockedUsers = dir.filePath("locked-u.ini");
+        {
+            CommunityCredentialService seed(lockedCommunities, store);
+            CommunityCredentialRecord r; r.displayName = "Protected lab"; r.readCommunity = CredentialSecret("ro-secret");
+            check(!seed.create(r).isEmpty(), "protected fixture saved");
+        }
+        check(!bytes(lockedCommunities).contains("ro-secret"), "the protected fixture keeps the secret out of the file");
+        store->open = false;
+        UsmCredentialRepository repository(lockedUsers); repository.setSecretStore(store);
+        CommunityCredentialService lockedService(lockedCommunities, store);
+        UsmCredentialService lockedUsersService({}, repository);
+        CredentialsDialog locked(&lockedService, &lockedUsersService); locked.prepare();
+        check(lockedService.isLocked() && locked.credentialList()->count() == 0, "a locked start lists no credentials");
+        check(!locked.findChild<QLabel *>("CredentialStatus")->text().isEmpty(), "the locked state is explained");
+        check(!locked.findChild<QPushButton *>("CredentialProtection"), "no protection button until a handler is set");
+        int calls = 0;
+        locked.setProtectionHandler([&]() { ++calls; store->open = true; lockedService.reload(); lockedUsersService.reload(); });
+        auto *button = locked.findChild<QPushButton *>("CredentialProtection");
+        check(button != nullptr, "the Password protection button appears");
+        if (button) button->click();
+        check(calls == 1 && !lockedService.isLocked() && locked.credentialList()->count() == 1,
+              "unlocking from the button reloads the credential list");
+        field(locked, "CredentialDisplayName", "Protected lab");
+        check(locked.findChild<QLineEdit *>("CredentialReadCommunity")->text() == "ro-secret", "the unlocked secret is shown in the editor");
+    }
     return failures ? 1 : 0;
 }

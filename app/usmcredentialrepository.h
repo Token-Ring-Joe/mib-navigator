@@ -3,6 +3,8 @@
 
 #include <QList>
 #include <QString>
+#include <memory>
+#include "credentialsecretstore.h"
 #include "credentialrecords.h"
 
 struct UsmCredentialIdentityRecord
@@ -25,9 +27,15 @@ public:
     bool hasRecordStore() const;
     QString recordPath() const { return fileName + QStringLiteral(".v2.json"); }
     QString path() const { return fileName; }
+    // With a store attached, SNMPv3 secrets live there and the record file holds only names,
+    // users and protocols. Reading such a file while the store is locked is refused.
+    void setSecretStore(std::shared_ptr<CredentialSecretStore> store) { secretStore = std::move(store); }
+    static QString lockedMessage();
 
 private:
+    bool writeRecords(const QList<UsmCredentialRecord> &records, bool withoutSecrets) const;
     QString fileName;
+    std::shared_ptr<CredentialSecretStore> secretStore;
 };
 
 #endif

@@ -48,8 +48,10 @@ bool sameBytes(const QByteArray &a, const QByteArray &b)
 
 bool aesCbc(bool encrypt, const QByteArray &key, const QByteArray &iv, const QByteArray &input, QByteArray *output)
 {
-    if (register_cipher(&aes_desc) == -1) return false;
-    const int cipher = find_cipher("aes");
+    // libtomcrypt identifies ciphers by ID, and AES and Rijndael share one. SNMP++ registers the
+    // "rijndael" descriptor, so in the application find_cipher("aes") finds nothing. The index
+    // returned here is the registered AES-compatible entry either way.
+    const int cipher = register_cipher(&aes_desc);
     if (cipher < 0 || input.size() % 16 != 0) return false;
     symmetric_CBC cbc;
     if (cbc_start(cipher, reinterpret_cast<const unsigned char *>(iv.constData()),
@@ -193,6 +195,11 @@ bool CredentialVault::store(const QHash<QString, QByteArray> &secrets)
     if (!write(sessionPassword, secrets)) return false;   // the old file stays if this fails
     values = secrets;
     return true;
+}
+
+bool CredentialVault::verifyPassword(const QString &password) const
+{
+    return unlocked && sameBytes(password.toUtf8(), sessionPassword.toUtf8());
 }
 
 bool CredentialVault::changePassword(const QString &currentPassword, const QString &newPassword)

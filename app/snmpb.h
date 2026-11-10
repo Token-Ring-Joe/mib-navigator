@@ -32,6 +32,7 @@ class LogSnmpb;
 class USMProfileManager;
 class UsmCredentialService;
 class CommunityCredentialService;
+class CredentialProtection;
 class QueryResultsPanel;
 class Preferences;
 class QDockWidget;
@@ -74,6 +75,8 @@ public:
     QString GetLogConfigFile(void);
     QString GetCredentialIdentitiesConfigFile(void);
     QString GetCommunityCredentialsConfigFile(void);
+    QString GetCredentialVaultFile(void);
+    CredentialProtection *Protection(void) { return credentialProtection; }
 
 public slots:
     void TabSelected(void);
@@ -87,6 +90,7 @@ private:
     Ui_MainW w;
     USMProfileManager *upm;
     CommunityCredentialService *communityCredentialService;
+    CredentialProtection *credentialProtection = nullptr;
     Preferences *prefs;
 
     MibModule *modules;

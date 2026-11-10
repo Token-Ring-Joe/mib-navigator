@@ -93,6 +93,8 @@
 #include "mibcollection.h"
 #include "usmprofile.h"
 #include "communitycredentialservice.h"
+#include "credentialprotection.h"
+#include "credentialprotectiondialog.h"
 #include "communitycredentialmanager.h"
 #include "usmcredentialservice.h"
 #include "preferences.h"
@@ -111,6 +113,7 @@
 #define LOG_CONFIG_FILE          "log.conf"
 #define CREDENTIAL_IDENTITIES_CONFIG_FILE "credential-identities.conf"
 #define COMMUNITY_CREDENTIALS_CONFIG_FILE "community-credentials.conf"
+#define CREDENTIAL_VAULT_FILE "credentials.vault"
 
 
 
@@ -274,8 +277,15 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     QElapsedTimer mibStartupTimer; mibStartupTimer.start();
     modules = new MibModule(this);
     DiagnosticLogger::log("Startup", QStringLiteral("MIB initialization complete elapsed_ms=%1").arg(mibStartupTimer.elapsed()));
+    // Password protection is off unless the user turned it on; then the secrets must be
+    // unlocked before any credential service reads them. Cancelling starts with the credentials
+    // locked: their secrets are not loaded (so nothing can send a blank one) and the
+    // Credentials screen offers Unlock.
+    credentialProtection = new CredentialProtection(GetCredentialVaultFile(),
+                                                    CredentialVault::DefaultIterations, this);
+    if (credentialProtection->isEnabled()) PromptToUnlockCredentials(credentialProtection, nullptr);
     communityCredentialService = new CommunityCredentialService(
-        GetCommunityCredentialsConfigFile(), this);
+        GetCommunityCredentialsConfigFile(), credentialProtection->activeSecretStore(), this);
     QElapsedTimer phaseTimer; phaseTimer.start(); prefs->Init();
     DiagnosticLogger::log("Startup", QStringLiteral("settings UI load complete elapsed_ms=%1").arg(phaseTimer.elapsed()));
     trap = new Trap(this);
@@ -1333,6 +1343,11 @@ void Snmpb::BindToGUI(QMainWindow* mw)
              this, SLOT( TabSelected() ) );
     connect(mibLibrary, &MibLibraryWidget::workspaceModeChanged, this, &Snmpb::TabSelected);
     credentialsDialog = new CredentialsDialog(communityCredentialService, upm->Credentials(), mw);
+    credentialsDialog->setProtectionHandler([this]() {
+        CredentialProtectionDialog dialog(credentialProtection, communityCredentialService,
+                                          upm->Credentials(), GetUsmUsersConfigFile(), credentialsDialog);
+        dialog.exec();
+    });
     connect( w.actionCredentials, &QAction::triggered, this, [this](bool) {
         credentialsDialog->execute(CredentialsDialog::Communities);
     });
@@ -1640,6 +1655,13 @@ QString Snmpb::GetCredentialIdentitiesConfigFile(void)
     QSettings settings;
     QDir cfgdir = QFileInfo(settings.fileName()).dir();
     return cfgdir.filePath(CREDENTIAL_IDENTITIES_CONFIG_FILE);
+}
+
+QString Snmpb::GetCredentialVaultFile(void)
+{
+    QSettings settings;
+    QDir cfgdir = QFileInfo(settings.fileName()).dir();
+    return cfgdir.filePath(CREDENTIAL_VAULT_FILE);
 }
 
 QString Snmpb::GetCommunityCredentialsConfigFile(void)
