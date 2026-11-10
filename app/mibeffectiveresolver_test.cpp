@@ -263,7 +263,7 @@ int main(int argc, char **argv)
                 fileProviding(equivalentPlan, "EQUIVALENT-DEP")->canonicalPath ==
                     (std::min)(equivalentA, equivalentB) &&
                 fileProviding(equivalentPlan, "EQUIVALENT-DEP")->resolutionRationale.contains(
-                    "byte-identical alternatives"),
+                    "equivalent alternatives"),
                 "identical providers resolve by deterministic canonical path");
 
     const auto ambiguous = resolve("ambiguous", {ambiguityRoot}, {batch, standards});
@@ -405,6 +405,25 @@ int main(int argc, char **argv)
                     (tie && tie->tier == MibPlanResolutionTier::Ambiguous && !fallback.resolvedByRevision("REV-MIB") &&
                      fallback.ambiguousModules.contains("REV-MIB")),
                     "when revisions cannot decide, the conflict stays unresolved");
+    }
+
+    // Copies that differ only by leading/trailing whitespace or line endings are not a conflict;
+    // a real content difference still is.
+    {
+        const QByteArray base = dated("200501010000Z");
+        QByteArray padded = "  \t";
+        for (const QByteArray &line : base.split('\n')) padded += "   " + line + "  \r\n";
+        write(sibling, "a-old.mib", base);
+        write(sibling, "z-new.mib", padded + "\r\n\r\n");
+        index.update({batch, standards, outside});
+        const auto spaced = resolve("whitespace-only", {oldRevision, newRevision}, {batch, standards});
+        ok &= check(!diagnostic(spaced, "REV-MIB") && !spaced.ambiguousModules.contains("REV-MIB"),
+                    "copies differing only by edge whitespace are not a conflict");
+        write(sibling, "z-new.mib", padded + "-- really different\n");
+        index.update({batch, standards, outside});
+        const auto different = resolve("whitespace-plus-content", {oldRevision, newRevision}, {batch, standards});
+        ok &= check(diagnostic(different, "REV-MIB") != nullptr,
+                    "a real content difference is still reported");
     }
 
     // Each declaration has its own date; fake clauses in comments/descriptions do not count.

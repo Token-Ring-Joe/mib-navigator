@@ -522,6 +522,32 @@ MibEffectivePlan MibEffectiveRuntimePlanResolver::resolve(
         return file.open(QIODevice::ReadOnly) ? QString::fromLatin1(QCryptographicHash::hash(
             file.readAll(), QCryptographicHash::Sha256).toHex()) : QString();
     };
+    // Two copies whose lines differ only by leading or trailing whitespace (including CRLF versus
+    // LF) are the same definition. Identity and pins stay on the raw SHA-256; this key is used only
+    // to decide whether differing copies are a real conflict.
+    QHash<QString, QString> contentKeyCache;
+    const auto contentKey = [&contentKeyCache](const MibIndexedProvider &provider) {
+        if (provider.sha256.isEmpty()) return QString();
+        const QString cacheKey = provider.canonicalPath + QLatin1Char('|') + provider.sha256;
+        const auto cached = contentKeyCache.constFind(cacheKey);
+        if (cached != contentKeyCache.cend()) return cached.value();
+        QString value = provider.sha256;
+        QFile file(provider.canonicalPath);
+        if (file.open(QIODevice::ReadOnly)) {
+            QByteArray text = file.readAll();
+            if (text.startsWith("\xEF\xBB\xBF")) text.remove(0, 3);
+            QByteArray normalized;
+            for (const QByteArray &line : text.split('\n')) {
+                normalized += line.trimmed();
+                normalized += '\n';
+            }
+            while (normalized.endsWith("\n\n")) normalized.chop(1);   // trailing blank lines
+            value = QStringLiteral("n:") + QString::fromLatin1(QCryptographicHash::hash(
+                normalized, QCryptographicHash::Sha256).toHex());
+        }
+        contentKeyCache.insert(cacheKey, value);
+        return value;
+    };
     QStringList scopes;
     for (const QString &scope : input.orderedScopes) {
         const QString value = canonicalPath(scope);
@@ -621,14 +647,14 @@ MibEffectivePlan MibEffectiveRuntimePlanResolver::resolve(
     // The copies differ, but one is strictly newer than every copy with different content: that
     // copy is the answer, so this is a resolved conflict rather than an unresolved one. Any copy
     // without a readable revision date, or a tie for newest, leaves it unresolved.
-    const auto decidedByRevision = [&revisionFor](const QString &identity,
+    const auto decidedByRevision = [&revisionFor, &contentKey](const QString &identity,
         const QList<MibIndexedProvider> &candidates, const MibIndexedProvider &chosen) {
         const QDateTime best = revisionFor(chosen.canonicalPath, identity);
         if (!best.isValid()) return false;
         for (const auto &candidate : candidates) {
             const QDateTime date = revisionFor(candidate.canonicalPath, identity);
             if (!date.isValid()) return false;
-            if (candidate.sha256 != chosen.sha256 && date >= best) return false;
+            if (contentKey(candidate) != contentKey(chosen) && date >= best) return false;
         }
         return true;
     };
@@ -685,7 +711,7 @@ MibEffectivePlan MibEffectiveRuntimePlanResolver::resolve(
         if (group.value().size() < 2) continue;
         const auto chosen = chooseProvider(group.key(), group.value());
         QSet<QString> hashes;
-        for (const auto &candidate : group.value()) hashes.insert(candidate.sha256);
+        for (const auto &candidate : group.value()) hashes.insert(contentKey(candidate));
         if (hashes.size() > 1)
             diagnostics.append({group.key(), {}, QStringLiteral("ROOT"), group.value(),
                 decidedByRevision(group.key(), group.value(), chosen)
@@ -801,7 +827,7 @@ MibEffectivePlan MibEffectiveRuntimePlanResolver::resolve(
                 continue;
             }
             QSet<QString> hashes;
-            for (const auto &provider : std::as_const(winning)) hashes.insert(provider.sha256);
+            for (const auto &provider : std::as_const(winning)) hashes.insert(contentKey(provider));
             MibIndexedProvider chosen = winning.first();
             if (hashes.size() != 1 || hashes.contains(QString())) {
                 QList<MibIndexedProvider> readable;
@@ -844,7 +870,7 @@ MibEffectivePlan MibEffectiveRuntimePlanResolver::resolve(
                 : tier == MibPlanResolutionTier::RequesterBatch ? QObject::tr("Requester batch %1").arg(winningScope)
                 : QObject::tr("Ordered scope %1").arg(winningScope);
             if (winning.size() > 1 && hashes.size() == 1)
-                rationale += QObject::tr("; %1 byte-identical alternatives; chose canonical path first")
+                rationale += QObject::tr("; %1 equivalent alternatives (identical apart from edge whitespace); chose canonical path first")
                     .arg(winning.size());
             selected.insert(key(dependency.canonicalPath), {dependency, tier, rationale});
             progress = true;

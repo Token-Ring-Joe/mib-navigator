@@ -1529,7 +1529,7 @@ void MibLibraryWidget::compareSelectedProviders()
     auto *layout = new QVBoxLayout(dialog);
     const auto hash = [](const QByteArray &bytes) { return QString::fromLatin1(QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex().left(12)); };
     QString summary = diff.identical()
-        ? tr("The two files have the same lines. They may still differ in line endings or trailing spaces, which is why the Library treats them as different copies.")
+        ? tr("The two files have the same lines. They differ only in line endings or leading/trailing spaces, which the MIB environment treats as the same definition; the Library still lists them as separate files.")
         : tr("%n line(s) differ.", nullptr, diff.differingRows);
     if (!diff.aligned) summary += tr(" The files are too different to line up; they are shown row by row.");
     auto *header = new QLabel(summary, dialog); header->setWordWrap(true); layout->addWidget(header);
