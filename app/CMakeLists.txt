@@ -562,6 +562,11 @@ if(BUILD_TESTING)
     snmpb_configure_qt_test_runtime(snmpb.query-macro-runner)
     set_tests_properties(snmpb.query-macro-runner PROPERTIES TIMEOUT 60)
 
+    add_executable(snmpb_credential_vault_test credentialvault.cpp credentialvault.h credentialvault_test.cpp)
+    target_link_libraries(snmpb_credential_vault_test PRIVATE Qt6::Core Qt6::Network snmpb_libtomcrypt)
+    add_test(NAME snmpb.credential-vault COMMAND $<TARGET_FILE:snmpb_credential_vault_test>)
+    snmpb_configure_qt_test_runtime(snmpb.credential-vault)
+
     add_executable(snmpb_mib_text_diff_test mibtextdiff.h mibtextdiff_test.cpp)
     target_link_libraries(snmpb_mib_text_diff_test PRIVATE Qt6::Core)
     if(WIN32)

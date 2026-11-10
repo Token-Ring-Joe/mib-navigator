@@ -91,6 +91,9 @@ does not authorize a commit, push, tag or publication.
 13. **Credential protection at rest.** Decide and implement an OS-keychain or
     other protection strategy; current local secret storage is reversibly
     encoded, not encrypted. Preserve safe migration and current credential IDs.
+    Owner prefers a master password. The tested vault module exists; wiring it
+    in is waiting on one compatibility decision
+    ([design](credential-protection-design.md)).
 14. **Same-username SNMPv3 notification variants.** Decide how to improve the
     unsolicited-notification limitation: the first saved variant supplies the
     default until a successful query teaches a device's engine-specific keys.
