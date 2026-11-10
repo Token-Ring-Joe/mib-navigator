@@ -94,6 +94,13 @@ does not authorize a commit, push, tag or publication.
     Owner prefers a master password. The tested vault module exists; wiring it
     in is waiting on one compatibility decision
     ([design](credential-protection-design.md)).
+18a. **Window width on a real Windows desktop.** CI (2026-11-10) is green on all
+    three platforms, but the GitHub Windows runner renders text much wider than
+    Linux or macOS, so the smoke layout checks scale their 1024-px window and
+    640-px Credentials limits by the measured font width (`SmokeFontWidthFactor`
+    in `main.cpp`). Confirm on a real Windows machine with the normal system font
+    that the window still shrinks to 1024 px. `SNMPB_SMOKE_FONT_SCALE` emulates
+    wide fonts locally; `SNMPB_DUMP_MINWIDTH` lists the widest widgets.
 14. **Same-username SNMPv3 notification variants.** Decide how to improve the
     unsolicited-notification limitation: the first saved variant supplies the
     default until a successful query teaches a device's engine-specific keys.
