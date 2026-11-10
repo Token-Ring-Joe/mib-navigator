@@ -32,7 +32,7 @@ matter to a profile that cannot choose between copies.
   are gone.
 - **Providers tab** lists the files that provide the selected module: those the viewed
   profile can reach (Used / Candidate / Older copy), with copies outside the profile
-  hidden unless "Show copies outside this profile" is ticked. File Information describes
+  hidden unless "Show outside copies" is ticked. File Information describes
   the file the view uses (folder, real filename), not the global record.
 - **Compare Selected Copies** opens a read-only side-by-side diff. A full merge in the
   Editor remains undecided.

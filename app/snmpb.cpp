@@ -529,6 +529,8 @@ void Snmpb::BindToGUI(QMainWindow* mw)
         AppearanceColors::SemanticLabel::EnvironmentBadge, contextWidget);
     environmentContext->setObjectName(QStringLiteral("CurrentEnvironmentStatus"));
     environmentContext->setWordWrap(true); // Warning text must not force a wider connection bar.
+    // The badge may shrink (its text wraps) so the header never sets the window's minimum width.
+    environmentContext->setMinimumWidth(96);
     environmentContext->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     environmentContext->setProperty("status", QStringLiteral("building"));
     // The connection bar replaces the saved-device header: Target, Credential and the

@@ -219,7 +219,7 @@ MibLibraryWidget::MibLibraryWidget(const QStringList &paths,
     scopeCombo->setToolTip(tr("Show the Library as one MIB Profile sees it, or the entire collection. "
         "Conflicts and missing MIBs are judged for the chosen profile."));
     scopeCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-    scopeCombo->setMinimumContentsLength(12);
+    scopeCombo->setMinimumContentsLength(9);
     scopeCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     scopeCombo->addItem(tr("Active profile"), QStringLiteral("@active"));
     scopeCombo->addItem(tr("Entire collection"), QStringLiteral("@all"));
@@ -243,15 +243,17 @@ MibLibraryWidget::MibLibraryWidget(const QStringList &paths,
     search->setClearButtonEnabled(true);
     {
         const int digit = search->fontMetrics().horizontalAdvance(QLatin1Char('0'));
-        search->setMinimumWidth(digit * 12 + 36);
+        search->setMinimumWidth(digit * 9 + 36);
         search->setMaximumWidth(digit * 20 + 36);
     }
     search->setAccessibleName(tr("Search Library modules"));
     inventoryPage->setProperty("workbenchFocusTarget", QStringLiteral("MibLibrarySearch"));
     sourceFilter = new QComboBox(this); sourceFilter->addItem(tr("All sources"));
     sourceFilter->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-    sourceFilter->setMinimumContentsLength(9);
+    sourceFilter->setMinimumContentsLength(7);
     statusFilter = new QComboBox(this); statusFilter->setObjectName("MibLibraryStatusFilter");
+    statusFilter->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    statusFilter->setMinimumContentsLength(9);
     statusFilter->addItem(tr("All states"));
     for (const QString &state : {tr("Ready"), tr("Available"), tr("Missing dependency"),
                                  tr("Conflict"), tr("Resolved conflict"), tr("Invalid"), tr("Failed")})
@@ -272,9 +274,12 @@ MibLibraryWidget::MibLibraryWidget(const QStringList &paths,
     getIana->setObjectName("MibLibraryGetIana");
     layout->addLayout(filters);
     // Actions share one row with the folder button so the search row stays short.
-    location->addWidget(localRefresh); location->addWidget(checkDependencies); location->addWidget(getIana);
-    location->addStretch(1); location->addWidget(openRoot);
+    // Two short rows (not one long one) so the page fits small windows and large fonts.
+    location->addWidget(localRefresh); location->addWidget(checkDependencies); location->addStretch(1);
     layout->addLayout(location);
+    auto *sources = new QHBoxLayout;
+    sources->addWidget(getIana); sources->addStretch(1); sources->addWidget(openRoot);
+    layout->addLayout(sources);
     table = new QTableWidget(this); table->setObjectName("MibLibraryTable");
     table->setColumnCount(7); table->setHorizontalHeaderLabels(
         {QString(), tr("Module"), tr("Status"), tr("In Profiles"), tr("Revision"), tr("Source file"), tr("Filename")});
@@ -494,7 +499,8 @@ MibLibraryWidget::MibLibraryWidget(const QStringList &paths,
         });
     }
     providersLayout->addWidget(providersTable, 1);
-    auto *providersButtons = new QHBoxLayout;
+    // Two short rows keep the page narrow enough for small windows and large fonts.
+    auto *providersButtons = new QGridLayout;
     auto *providersOpen = new QPushButton(tr("Open in Editor"), providersPage);
     providersOpen->setObjectName("MibLibraryProvidersOpen"); providersOpen->setEnabled(false);
     providersCompare = new QPushButton(tr("Compare Selected Copies…"), providersPage);
@@ -505,11 +511,12 @@ MibLibraryWidget::MibLibraryWidget(const QStringList &paths,
     providersUse->setObjectName("MibLibraryProvidersUse"); providersUse->setEnabled(false);
     providersUse->setToolTip(tr("Make the selected copy the one the viewed profile uses for this module. "
                                 "Automatic profiles follow their folders, so this offers to make an editable Custom copy of the profile first."));
-    providersShowOutside = new QCheckBox(tr("Show copies outside this profile"), providersPage);
+    providersShowOutside = new QCheckBox(tr("Show outside copies"), providersPage);
+    providersShowOutside->setToolTip(tr("Also list copies of this module that are not part of the viewed profile."));
     providersShowOutside->setObjectName("MibLibraryProvidersShowOutside");
-    providersButtons->addWidget(providersUse); providersButtons->addWidget(providersOpen);
-    providersButtons->addWidget(providersCompare); providersButtons->addStretch(1);
-    providersButtons->addWidget(providersShowOutside);
+    providersButtons->addWidget(providersUse, 0, 0); providersButtons->addWidget(providersOpen, 0, 1);
+    providersButtons->addWidget(providersCompare, 1, 0); providersButtons->addWidget(providersShowOutside, 1, 1);
+    providersButtons->setColumnStretch(2, 1);
     connect(providersShowOutside, &QCheckBox::toggled, this, [this]() { updateProviders(); });
     connect(providersUse, &QPushButton::clicked, this, &MibLibraryWidget::useSelectedProvider);
     providersLayout->addLayout(providersButtons);
@@ -592,6 +599,7 @@ MibLibraryWidget::MibLibraryWidget(const QStringList &paths,
     auto *profileDetails = new QHBoxLayout;
     profileSource = new QLabel(profilePage); profileSource->setObjectName("MibProfileSource");
     profileSource->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    profileSource->setWordWrap(true);   // a long source path must not widen the page
     openProfileFolderButton = new QPushButton(tr("Open Folder"), profilePage);
     openProfileFolderButton->setObjectName("MibProfileOpenFolder");
     profileDetails->addWidget(profileSource, 1); profileDetails->addWidget(openProfileFolderButton);
@@ -1391,7 +1399,7 @@ void MibLibraryWidget::updateProviders()
     if (found.isEmpty()) text = tr("%1 has no file in the Library.").arg(module);
     else if (inView.size() == 1)
         text = outside.isEmpty() ? tr("%1 is provided by one file.").arg(module)
-            : tr("%1 has one copy that %2 can use. %n other copy(ies) elsewhere in the Library are not part of this profile and do not matter here (tick \"Show copies outside this profile\" to list them).", nullptr, int(outside.size())).arg(module, viewProfileName);
+            : tr("%1 has one copy that %2 can use. %n other copy(ies) elsewhere in the Library are not part of this profile and do not matter here (tick \"Show outside copies\" to list them).", nullptr, int(outside.size())).arg(module, viewProfileName);
     else if (contents.size() == 1)
         text = tr("%1 has %n copies with identical content; any of them gives the same result.", nullptr, int(inView.size())).arg(module);
     else if (!viewProfileName.isEmpty() && member && viewPlan.resolvedByRevision(module))

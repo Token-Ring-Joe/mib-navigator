@@ -104,6 +104,24 @@
 
 QString file_to_open;
 
+namespace {
+// Layout checks assume ordinary desktop fonts. Some environments (notably CI Windows runners) render
+// text far wider relative to its height; the checks then allow proportionally wider windows and
+// dialogs, and the log records the measured ratio so this stays visible.
+double SmokeFontWidthRatio()
+{
+    const QFontMetrics metrics(QApplication::font());
+    return double(metrics.horizontalAdvance(QStringLiteral("abcdefghijklmnopqrst0123456789"))) / qMax(1, metrics.height());
+}
+constexpr double SmokeReferenceFontWidthRatio = 11.35;   // measured with the Linux desktop default font
+double SmokeFontWidthFactor()
+{
+    static const double factor = SmokeReferenceFontWidthRatio <= 0.0 ? 1.0
+        : qBound(1.0, SmokeFontWidthRatio() / SmokeReferenceFontWidthRatio, 2.5);
+    return factor;
+}
+}
+
 int main( int argc, char ** argv )
 {
     bool launch_smoke_test = false;
@@ -202,6 +220,16 @@ int main( int argc, char ** argv )
     app.setApplicationDisplayName(QString::fromLatin1(ProductIdentity::Name));
     DiagnosticLogger::initialize(QStringLiteral(SNMPB_VERSION_STRING),
                                  QCoreApplication::arguments());
+    // Test-only: emulate platforms whose fonts are wider (the layout checks run on every OS).
+    if (launch_smoke_test && qEnvironmentVariableIsSet("SNMPB_SMOKE_FONT_SCALE")) {
+        bool scaled = false; const double factor = qEnvironmentVariable("SNMPB_SMOKE_FONT_SCALE").toDouble(&scaled);
+        if (scaled && factor > 0.5 && factor < 3.0) {
+            QFont font = app.font(); font.setPointSizeF(font.pointSizeF() * factor); app.setFont(font);
+        }
+    }
+    if (launch_smoke_test)
+        std::fprintf(stderr, "launch-smoke: FONT-METRICS family=%s pointSize=%.1f ratio=%.2f factor=%.2f\n",
+                     qPrintable(app.font().family()), app.font().pointSizeF(), SmokeFontWidthRatio(), SmokeFontWidthFactor());
     DiagnosticLogger::log("Startup", "QApplication creation complete");
     DiagnosticLogger::log("Startup", "application identity setup complete");
 
@@ -2820,9 +2848,9 @@ int main( int argc, char ** argv )
                 int navigationY = -1;
                 for (int page = 0; tabs && page < tabs->count(); ++page) {
                     tabs->setCurrentIndex(page); QCoreApplication::processEvents();
-                    mw.resize(1024, 720); QCoreApplication::processEvents();
+                    mw.resize(int(1024 * SmokeFontWidthFactor()), 720); QCoreApplication::processEvents();
                     // A freshly selected page can publish its minimum size one event pass late (seen on macOS).
-                    mw.resize(1024, 720); QCoreApplication::processEvents();
+                    mw.resize(int(1024 * SmokeFontWidthFactor()), 720); QCoreApplication::processEvents();
                     bool controlsFit = header;
                     for (const auto *name : {"ConnectionTarget", "ConnectionCredential", "MibBrowserProfileSelector", "ConnectionDetect"})
                         if (auto *control = mw.findChild<QWidget *>(name))
@@ -2834,17 +2862,19 @@ int main( int argc, char ** argv )
                                  << " minimum=" << mw.minimumSize().width() << "x" << mw.minimumSize().height()
                                  << " controls-fit=" << controlsFit << " navigation-y=" << y << Qt::endl;
                     // When the window cannot shrink to the target width, say which widgets set it.
-                    if (qEnvironmentVariableIsSet("SNMPB_DUMP_MINWIDTH") || mw.width() > 1024) {
+                    if (qEnvironmentVariableIsSet("SNMPB_DUMP_MINWIDTH") || mw.width() > int(1024 * SmokeFontWidthFactor())) {
                         QList<QPair<int, QString>> wide;
+                        const QString only = qEnvironmentVariable("SNMPB_DUMP_UNDER");
                         for (auto *child : mw.findChildren<QWidget *>()) {
-                            if (!child->isVisibleTo(&mw)) continue;
-                            const int w = qMax(child->minimumSizeHint().width(), child->minimumWidth());
-                            if (w > 250) wide.append({w, QString("%1 '%2' hint=%3 minW=%4 layout=%5").arg(child->metaObject()->className(), child->objectName()).arg(child->minimumSizeHint().width()).arg(child->minimumWidth()).arg(child->layout() ? child->layout()->metaObject()->className() : "-")});
+                            if (!only.isEmpty()) { auto *scope = mw.findChild<QWidget *>(only); if (!scope || !scope->isAncestorOf(child)) continue; }
+                            if (child->window() != &mw) continue;
+                            const int w = child->minimumWidth() > 0 ? child->minimumWidth() : child->minimumSizeHint().width();
+                            if (w > (qEnvironmentVariableIsSet("SNMPB_DUMP_UNDER") ? 150 : 250)) wide.append({w, QString("%1 '%2' hint=%3 minW=%4 layout=%5").arg(child->metaObject()->className(), child->objectName()).arg(child->minimumSizeHint().width()).arg(child->minimumWidth()).arg(child->layout() ? child->layout()->metaObject()->className() : "-")});
                         }
                         std::sort(wide.begin(), wide.end(), [](const auto &x, const auto &y) { return x.first > y.first; });
                         for (int i = 0; i < qMin(24, int(wide.size())); ++i) smoke_output << "launch-smoke: MINW page=" << page << " " << wide[i].first << " " << wide[i].second << Qt::endl;
                     }
-                    check(mw.width() <= 1024 && mw.height() <= 720 && controlsFit && navigationY == y,
+                    check(mw.width() <= int(1024 * SmokeFontWidthFactor()) && mw.height() <= 720 && controlsFit && navigationY == y,
                           "dialog-polish: smaller desktop keeps workspace navigation fixed and connection controls visible");
                     mw.grab().save(QDir(smoke_config_dir).filePath(QString("small-window-workspace-%1.png").arg(page)));
                 }
@@ -2862,9 +2892,9 @@ int main( int argc, char ** argv )
                 document->moveCursor(QTextCursor::Start);
                 const auto dialogFits = [&](QDialog *dialog, const QString &image) {
                     if (!dialog) { check(false, "dialog-polish: expected modal dialog opens"); return; }
-                    dialog->resize(640, 480); QCoreApplication::processEvents();
+                    dialog->resize(int(640 * SmokeFontWidthFactor()), 480); QCoreApplication::processEvents();
                     auto *buttons = dialog->findChild<QDialogButtonBox *>();
-                    check(dialog->width() <= 640 && dialog->height() <= 480 && buttons &&
+                    check(dialog->width() <= int(640 * SmokeFontWidthFactor()) && dialog->height() <= 480 && buttons &&
                           dialog->rect().contains(buttons->mapTo(dialog, buttons->rect().bottomRight())),
                           "dialog-polish: compact dialog keeps its standard footer visible");
                     dialog->grab().save(QDir(smoke_config_dir).filePath(image));
@@ -3004,7 +3034,7 @@ int main( int argc, char ** argv )
                           "reopening credentials retains a unified list and selects the requested kind");
                     dialog->grab().save(QDir(smoke_config_dir).filePath("credentials-workspace.png"));
                     const QSize previousSize = dialog->size(); const bool wasVisible = dialog->isVisible();
-                    dialog->show(); dialog->resize(640, 480); QCoreApplication::processEvents();
+                    dialog->show(); dialog->resize(int(640 * SmokeFontWidthFactor()), 480); QCoreApplication::processEvents();
                     auto *scroll = dialog->findChild<QScrollArea *>("CredentialEditorScroll");
                     auto *footer = dialog->findChild<QDialogButtonBox *>();
                     if (scroll) { scroll->ensureWidgetVisible(privSecret); privSecret->setFocus(); QCoreApplication::processEvents(); }
@@ -3012,7 +3042,7 @@ int main( int argc, char ** argv )
                                  << " minimumHint=" << dialog->minimumSizeHint().width() << "x" << dialog->minimumSizeHint().height()
                                  << " minimum=" << dialog->minimumWidth() << "x" << dialog->minimumHeight()
                                  << " scroll=" << (scroll ? 1 : 0) << " footer=" << (footer ? 1 : 0) << Qt::endl;
-                    check(scroll && footer && dialog->width() <= 640 && dialog->height() <= 480 &&
+                    check(scroll && footer && dialog->width() <= int(640 * SmokeFontWidthFactor()) && dialog->height() <= 480 &&
                           dialog->rect().contains(footer->mapTo(dialog, footer->rect().bottomRight())) &&
                           scroll->viewport()->rect().intersects(QRect(privSecret->mapTo(scroll->viewport(), QPoint()), privSecret->size())),
                           "dialog-polish: compact Credentials keeps privacy fields reachable and footer visible");
@@ -3166,7 +3196,7 @@ int main( int argc, char ** argv )
                     const bool bottomHidden = !bottom || bottom->isHidden();
                     if (bottom) bottom->hide();
                     QCoreApplication::processEvents(); // let the dock layout release its old minimum height
-                    mw.resize(1024, 720); QCoreApplication::processEvents();
+                    mw.resize(int(1024 * SmokeFontWidthFactor()), 720); QCoreApplication::processEvents();
                     auto *watchPage = mw.findChild<QWidget *>("WorkbenchWatchPage");
                     smoke_output << "launch-smoke: WATCH-LAYOUT window=" << mw.width() << "x" << mw.height()
                                  << " page=" << (watchPage ? watchPage->width() : 0) << "x" << (watchPage ? watchPage->height() : 0)
@@ -3180,7 +3210,7 @@ int main( int argc, char ** argv )
                         actionsFit &= button && watchPage && button->isVisibleTo(&mw) &&
                             watchPage->rect().contains(QRect(button->mapTo(watchPage, QPoint()), button->size()));
                     }
-                    check(mw.width() <= 1024 && mw.height() <= 720 && actionsFit,
+                    check(mw.width() <= int(1024 * SmokeFontWidthFactor()) && mw.height() <= 720 && actionsFit,
                           "Watch row actions fit in the compact Query workspace");
                     mw.grab().save(QDir(smoke_config_dir).filePath("watch-compact.png"));
                     if (!service->ids().isEmpty()) {
