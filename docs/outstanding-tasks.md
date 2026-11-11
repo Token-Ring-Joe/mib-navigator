@@ -140,6 +140,88 @@ does not authorize a commit, push, tag or publication.
     (reported as "Resolved conflict"); ties and undated copies stay "Conflict". See
     the MIBs page rework section in [the redesign plan](redesign-plan.md). Not done: an
     Editor-based side-by-side merge (the owner has not decided whether it is wanted).
+19. **Open a problem's MIB from the Problems view (requested 2026-11-11).** The
+    Problems description shows the file name and line, but opening it means copying the
+    name, switching to the Editor tab, opening the file and pasting. Add a direct way
+    (for example double-click or a context-menu action) that opens that file in the
+    Editor at the reported line. **Priority: medium** (owner, 2026-11-11). The
+    search results already have "Open in Editor at this definition"; reuse that path.
+    Not started.
+20. **Line numbers in the Editor (requested 2026-11-11).** Show a line-number gutter
+    in the MIB Editor, which also makes the line references in Problems usable. Check
+    whether the existing `markerwidget` gutter can carry them. **Priority: high**
+    (owner, 2026-11-11). **Implemented 2026-11-11:** the existing marker gutter now
+    also shows line numbers (right-aligned, width grows with the line count, theme
+    colours, numbers beside the first row of a wrapped line). Test `snmpb.markerwidget`.
+    **Owner confirmed working 2026-11-11.**
+21. **Results readability and layout (requested 2026-11-11). Priority: high**
+    (owner, 2026-11-11; applies to all three parts). Three related changes, none
+    started. **Status 2026-11-11:** Module column, colorized Value and CSV export in
+    display order are implemented and **owner confirmed** ("I see module and I like
+    the blue", "Copy as CSV works"). The Results/Log swap is **dropped**: the owner
+    likes the current layout (2026-11-11).
+    - *Module column:* split `MIB::object.instance` so the flat Results table shows
+      Module | Object.Instance | ... with the rest following. Add the column; keep
+      the existing columns, including the hidden metadata columns other features use.
+      Make it hideable through the existing column-visibility setting. Objects the
+      profile does not know leave Module blank. Table results have their own
+      column layout and are handled separately. Owner decision (2026-11-11): the
+      end column is the **received type** (what the device returned). Syntax is not
+      needed in Results because the right-hand pane already shows it; hide the Syntax
+      column by default (keep it available through column visibility). Check whether a
+      bare wire-type difference (for example Counter32 returned for a declared
+      Gauge32) already raises a Warning and add it if it does not.
+    - *Colorized Value column:* make the Value stand out, using the same color the
+      Log uses (owner, 2026-11-11: the "value" in the bottom Log box is a light
+      blue; the two must match). The appearance code maps the original blue to the
+      theme's Link color, so this is probably that color; confirm in the Log code. Must follow the Light/Dark/Follow System themes through the shared
+      appearance colors (`appearancecolors.h`), keep contrast in both themes, and
+      not collide with the existing warning highlight on a value mismatch. Check
+      which Log color is meant before building.
+    - *View menu choice to swap Results and Log:* a View-menu option, remembered
+      between sessions, that exchanges the positions of Results (now under the
+      Tree) and Log (bottom panel). Record the layout change in
+      [the redesign plan](redesign-plan.md). A wider pane suits the extra Module
+      column. **Dropped by the owner (2026-11-11).** The analysis stays for the record:
+      Results is now a tab beside Watch
+      and Macros in the Query workspace, and Log lives in the shared bottom panel with
+      Output and Problems. A swap would move whole tabs between those areas and touch
+      the workbench shell, focus routing and the activity badges, so it is larger
+      than a menu toggle. Decide first whether the aim is to move Results to the
+      bottom panel, or only to make the Results pane wider.
+22. **Search field also shows the selected OID (requested 2026-11-11). Priority:
+    high** (owner). Give the "search MIBs by name or OID" field above the Tree a
+    second use: each time the user clicks an object in the Tree, the field shows that
+    object's current OID. Design to settle before work: a query the user has typed
+    must not be overwritten by a selection (for example show the OID only when the
+    field is empty or not focused, or use a separate read-only line), the OID must be
+    copyable, and typing or pasting an OID must still search and jump.
+    **Implemented 2026-11-11** (`selectedoidfield.*`, test `snmpb.selectedoidfield`):
+    the field shows the selected object's OID unless the user is typing in it,
+    clicking in selects the shown OID so typing replaces it, and Enter still searches
+    or jumps. Awaiting owner review.
+
+23. **New application icon (2026-11-11).** Replaced the old SnmpB art with an
+    original compass-in-a-ring icon chosen by the owner (`app/images/snmpb.svg`,
+    `.png` 256 px, multi-size `.ico`, `.icns`). Windows uses the `.ico` through
+    `snmpb.rc`; the main window uses the `.png`. Not done: `app/CMakeLists.txt` sets
+    no `MACOSX_BUNDLE_ICON_FILE`, so the macOS bundle does not use `snmpb.icns`
+    today; and the Linux desktop entry (`Icon=snmpb`) has no installed icon file
+    named `snmpb`. A simplified 16 px variant was considered and not requested.
+    **Update 2026-11-11:** `app/CMakeLists.txt` now copies `snmpb.icns` into the
+    macOS bundle and sets `MACOSX_BUNDLE_ICON_FILE`; this is untested locally and
+    needs the macOS CI build and a look on a Mac. The Linux package is a portable
+    archive that installs no desktop entry, so there is nothing to wire there; the
+    in-app window icon comes from `snmpb.png`.
+
+24. **Bottom panel View menu and Help link (owner feedback 2026-11-11).** The View
+    menu had a separate entry for each bottom tab (Output, Log, Problems) plus a panel
+    toggle and the Operations button. It now has one toggle, "Show/Hide Operations
+    panel" (Ctrl+J), the same as the Operations button; tabs are chosen by clicking
+    them. Help gained "Getting Started Guide" (F1), which opens the online guide at
+    `docs/getting-started.md` on the GitHub `main` branch; the guide is also packaged
+    as `getting-started.md`. The per-tab commands remain as unlisted actions so
+    automated checks can open a page. Awaiting owner review.
 
 ## Optional or conditional decisions, not scheduled commitments
 
@@ -156,6 +238,87 @@ does not authorize a commit, push, tag or publication.
 - **Catalog enhancements:** automatic update comparison needs reliable revision
   metadata; current IANA data does not support it. Additional RFC/other catalog
   extraction/mappings are separate from the working manual RFC extractor.
+- **Candidate features from the 2026-11-11 competitive review** (none approved
+  or started; all must stay within the lab/MIB-engineering scope, not NMS
+  features such as alerting, dashboards, inventory or scheduled polling):
+  - *Copy as command:* copy the equivalent `snmpget`/`snmpwalk`/`snmpset` line
+    for an object or table using the current target, credential and OID. Two
+    levels (owner design, 2026-11-11):
+    1. Secret-free command. The app knows the credential's security level
+       (noAuthNoPriv, authNoPriv, authPriv) and writes the matching syntax
+       (`-l`, `-u`, `-a`, `-x`) but leaves out `-A`/`-X`, so net-snmp prompts for
+       the passphrases (it prompts only at a terminal, and not when
+       `defAuthPassphrase`/`defPrivPassphrase` are set in `snmp.conf`). Passphrases
+       on a command line show in shell history and `ps`, so including them is an
+       explicit option only. v1/v2c: net-snmp does not prompt for the community,
+       so show a placeholder unless the user opts to include it.
+    Plan: do level 1 first; level 2 is deferred.
+    2. Optional later: a localized key generated for the current target
+       (needs its engine ID, which is read from the device; tied to that engine
+       and to the auth/priv protocols; never stored, to stay consistent with
+       the no-saved-devices model).
+    Companion ideas, not decided: a generated `snmp.conf` snippet with the
+    non-secret `def*` settings; `mibdirs`/`mibs` for the active profile (default
+    to numeric OIDs, since net-snmp's parser is stricter than the patched
+    libsmi); import credentials from an existing `snmp.conf` into the vault.
+    Never modify the user's `~/.snmp/snmp.conf`.
+  - *Semantic MIB diff:* compare two versions of a module by object (added,
+    removed, changed syntax/status/access/enums/index), building on the Library
+    text Compare. **Priority: medium** (owner, 2026-11-11).
+  - *Notification tester:* build a trap or inform from a `NOTIFICATION-TYPE`,
+    fill varbinds from the MIB and send it to a chosen target (see the trap/inform
+    sender idea below). **Priority: low; possible future feature** (owner,
+    2026-11-11).
+  - *Headless command line:* for example a collection check and a walk with
+    JSON/CSV output and exit codes, so the tolerant parser can lint vendor MIB
+    drops in CI. **Status: deferred, below low priority; kept on record, not
+    planned** (owner, 2026-11-11).
+  - *Export:* tree or module to CSV/JSON/HTML, and walk and table results to CSV
+    (table CSV already exists). **Priority: medium** (owner, 2026-11-11). Results
+    exports must not include credentials. Owner request (2026-11-11): the user
+    chooses which columns to export (for example only Object and Value, without
+    Module and Type); consider reusing the Results column-visibility setting.
+  - *Walk-backed simulator:* answer GET/GETNEXT/GETBULK from a saved walk; needs a
+    decision because saved-walk import is currently out of scope. **Status:
+    completely deferred** (owner, 2026-11-11). If ever built, it would likely be a
+    separate application (for example alongside GNS3), not part of MIB Navigator;
+    the owner is unlikely to implement it.
+  - *SNMPv3 failure explainer:* map timeouts and `usmStats` counters to plain
+    causes (engine ID, authentication, time window, unknown user); extends the
+    existing refusal explanations. **Priority: high** (owner, 2026-11-11).
+    **Partly implemented 2026-11-11:** REPORT-based explanations already existed; added
+    a v3-specific timeout message (target, user, security level, likely causes, honest
+    about what cannot be known) for Get/Get Next/Get Bulk/Set, for a Walk that never
+    gets an answer, and for Detect; and the snmpUnknownContexts /
+    snmpUnavailableContexts reports. Table and instance-list timeouts still use their
+    short messages. Say
+    what was observed and what could not be known; do not guess when an agent
+    sends no report. Test with a scripted transport.
+  - *Missing-import message (rescoped by the owner, 2026-11-11):* diagnose only; do
+    not fetch, add or change anything. For an unresolved IMPORTS entry, say which
+    module is missing and why, and suggest what to do. If the collection has a file
+    declaring that module but the profile excludes it: "Missing module `<name>`:
+    not included in this profile. Consider adding `<path>`." If no file in the
+    collection declares it: "Missing module `<name>`: no file in the collection
+    declares it." **Already implemented** in the Problems report
+    (`mibproblemreport.h`, "Missing dependency": unresolved says the module "is not in
+    your MIB Library"; out-of-scope lists the file paths and says to add the folder or
+    file to the profile). No change made 2026-11-11. Uses the existing dependency index (declared module names), with
+    no extra parsing. No network access and no automatic repair. **Priority: high**
+    (owner, 2026-11-11). First compare with the wording the Library and Problems
+    view already show, and change only what is missing.
+  - *OID calculator:* **closed; already implemented** (owner, 2026-11-11). Typing a
+    name such as `ifTable` in the search above the tree lists every match, and the
+    context menu has Show in MIB tree, Open in Editor at this definition, and Copy
+    OID. The follow-up is item 22.
+- **Library flag for bootstrap/definition files (2026-11-11):** a vendor file such
+  as Extreme's `def.my` (module `START-MIB`) redefines standard roots and
+  textual conventions and produces a parse error ("registers object identifier
+  already registered by `org`"). Owner suggestion (2026-11-11): keep this simple
+  and show it only as an entry in the Problems tab at the bottom, for example a
+  note that the file redefines standard roots and nothing imports it, not a new
+  Library screen or an exclusion mechanism. Do not hard-code vendor names.
+  **Priority: high** (owner, 2026-11-11).
 
 ## Historical ideas awaiting triage
 

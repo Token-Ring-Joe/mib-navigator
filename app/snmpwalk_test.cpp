@@ -238,6 +238,20 @@ void failures_()
     check(result.status == SnmpOperationStatus::Timeout && result.objects == 6 && result.varbinds.size() == 6,
           "a timeout mid-walk keeps the objects already read");
 
+    {
+        // A silent SNMPv3 device (nothing read yet) is explained; a device that answered first is not.
+        SnmpRequestConfig v3Quiet = config(SnmpRequestVersion::V3);
+        v3Quiet.securityName = "lab"; v3Quiet.securityLevel = SNMP_SECURITY_LEVEL_AUTH_NOPRIV;
+        ScriptedSnmpTransport silent(v3Quiet);
+        silent.append(failure(SnmpOperationStatus::Timeout, SNMP_CLASS_TIMEOUT));
+        const SnmpWalkResult silentResult = walk(silent);
+        check(silentResult.status == SnmpOperationStatus::Timeout && silentResult.problem.contains("user 'lab'") &&
+                  silentResult.problem.contains("authentication without privacy") &&
+                  silentResult.problem.contains("cannot be known"),
+              "an SNMPv3 walk that never gets an answer explains the likely causes");
+        check(result.problem.isEmpty(), "a timeout after objects were read keeps the plain message");
+    }
+
     ScriptedSnmpTransport denied(config());
     denied.append(snmpError(SNMP_ERROR_GENERAL_VB_ERR));
     result = walk(denied);

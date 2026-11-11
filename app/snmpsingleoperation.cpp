@@ -40,6 +40,8 @@ SnmpSingleResult SnmpSingleOperation::execute(ISnmpTransport &transport) const
     } else if (response.status == SnmpOperationStatus::TransportFailure && response.transportStatus != 0) {
         result.problem = ExplainSnmpTransportFailure(response.transportStatus,
                                                      requestContext.config().securityName);
+    } else if (response.status == SnmpOperationStatus::Timeout) {
+        result.problem = ExplainSnmpTimeout(requestContext.config());
     }
     return result;
 }

@@ -60,6 +60,9 @@ SnmpWalkResult SnmpWalkOperation::execute(ISnmpTransport &transport,
             if (response.status == SnmpOperationStatus::TransportFailure && response.transportStatus != 0)
                 result.problem = ExplainSnmpTransportFailure(response.transportStatus,
                                                              requestContext.config().securityName);
+            // Only when nothing came back yet: a device that answered and then went quiet is a different story.
+            else if (response.status == SnmpOperationStatus::Timeout && result.requests == 0)
+                result.problem = ExplainSnmpTimeout(requestContext.config());
             return result;
         }
 

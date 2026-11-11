@@ -108,6 +108,8 @@ for the full workflow.
 
 ## Documentation
 
+- [Getting started](docs/getting-started.md): a first session, from adding MIBs to
+  querying a device
 - [Redesign plan](docs/redesign-plan.md): product direction and build order
   (authoritative)
 - [Release notes for 1.0.0-rc1](docs/release-notes-1.0.0-rc1.md)

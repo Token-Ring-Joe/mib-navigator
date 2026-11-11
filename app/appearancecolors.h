@@ -16,6 +16,8 @@ enum Tone { None, Success, Warning, Error };
 constexpr int ToneRole = Qt::UserRole + 1000;
 constexpr int MutedRole = Qt::UserRole + 1001;
 constexpr int ForegroundToneRole = Qt::UserRole + 1002;
+// Draw the text in the theme's link colour: the same colour the Log gives to a received value.
+constexpr int LinkInkRole = Qt::UserRole + 1003;
 inline bool dark(const QPalette &p) { return p.color(QPalette::Base).lightness() < 128; }
 inline QColor foreground(const QPalette &p, Tone tone)
 {
@@ -116,6 +118,8 @@ public:
         if (tone != None) option->backgroundBrush = background(option->palette, tone);
         const auto textTone = static_cast<Tone>(index.data(ForegroundToneRole).toInt());
         if (textTone != None) option->palette.setColor(QPalette::Text, foreground(option->palette, textTone));
+        if (index.data(LinkInkRole).toBool())
+            option->palette.setColor(QPalette::Text, option->palette.color(QPalette::Link));
         if (index.data(MutedRole).toBool())
             option->palette.setColor(QPalette::Text, option->palette.color(QPalette::Disabled, QPalette::Text));
     }

@@ -34,14 +34,18 @@ public:
     void setTextEditor(QTextEdit*);
     void setMarker(int line);
 
+    // Width needed to show the marker column and line numbers up to the last line.
+    int gutterWidth() const;
+
 public slots:
     void doRepaint() { repaint(); }
+    void updateGutterWidth();
 
 protected:
     virtual void paintEvent( QPaintEvent* );
 
 private:
-    QTextEdit  *m_editor;
+    QTextEdit  *m_editor = nullptr;
     QPixmap    m_pixmap;
 };
 

@@ -1,4 +1,5 @@
 #include "queryresultspanel.h"
+#include "appearancecolors.h"
 #include "csvformat.h"
 #include "mibproblemsexport.h"
 #include <QTemporaryDir>
@@ -65,8 +66,26 @@ int main(int argc, char **argv)
     check(starts == 1, "only a named query start requests navigation, never value delivery or completion");
     check(!table->isColumnHidden(0) && !table->isColumnHidden(4) && !table->isColumnHidden(8) &&
           table->isColumnHidden(2) && table->isColumnHidden(5), "flat queries default to Object.Instance, Value, Type");
-    check(table->item(0, 0)->text() == "IF-MIB::ifInOctets.2" && table->item(0, 4)->text() == warned.interpreted &&
-          table->item(0, 8)->text() == "Counter32", "flat row contains instance, interpreted value and received type");
+    check(table->item(0, 0)->text() == "ifInOctets.2" && table->item(0, 9)->text() == "IF-MIB" &&
+          table->item(0, 4)->text() == warned.interpreted &&
+          table->item(0, 8)->text() == "Counter32", "flat row contains module, object.instance, interpreted value and received type");
+    filter->setText("IF-MIB"); settle();
+    check(!table->isRowHidden(0), "the filter still finds a row by its module name");
+    filter->setText("no-such-module"); settle();
+    check(table->isRowHidden(0), "a module name that is not in the row does not match");
+    filter->clear(); settle();
+    check(!table->isColumnHidden(9) && table->horizontalHeader()->visualIndex(9) == 0 &&
+          table->horizontalHeader()->visualIndex(0) == 1, "Module is shown first, before Object.Instance");
+    check(table->isColumnHidden(3), "Syntax stays hidden by default; the received Type is what Results shows");
+    check(table->item(0, 4)->data(AppearanceColors::LinkInkRole).toBool() &&
+          !table->item(0, 0)->data(AppearanceColors::LinkInkRole).toBool(),
+          "the Value column is drawn in the same theme link colour the Log uses for a value");
+    {
+        const auto records = panel.csvRecords();
+        check(!records.isEmpty() && records[0].size() >= 4 && records[0][0] == "Module" &&
+              records[0][1] == "Object.Instance" && records[1][0] == "IF-MIB" && records[1][1] == "ifInOctets.2",
+              "flat CSV follows the displayed column order, Module first");
+    }
     check(panel.warningCount() == 1 && !table->item(0, 0)->icon().isNull() &&
           table->item(0, 4)->toolTip().contains(warned.raw) &&
           table->item(0, 4)->toolTip().contains(warned.warnings), "warnings have an icon and raw-value explanation");
@@ -90,6 +109,8 @@ int main(int argc, char **argv)
     panel.finishQuery();
     check(panel.isTableResult() && table->rowCount() == 3 && table->columnCount() == 4 &&
           table->horizontalHeaderItem(0)->text() == "Index" && table->isColumnHidden(3), "table results form a grid with one row per instance");
+    check(table->horizontalHeader()->visualIndex(0) == 0 && table->horizontalHeader()->visualIndex(1) == 1,
+          "table results keep their natural column order (Module is only for flat results)");
     check(panel.oidAt(0, 1) == high.oid && panel.oidAt(0, 0).isEmpty() && panel.oidAt(1, 2).isEmpty(),
           "only actual grid values carry watchable OIDs");
     check(panel.warningCount() == 1 && table->item(2, 1)->icon().isNull() && !table->item(2, 2)->icon().isNull(),
@@ -188,7 +209,7 @@ int main(int argc, char **argv)
         panel.updateGroups({reads, grid}, "Table updated");
         check(panel.isTableResult() && table->rowCount() == 2, "a background update keeps the chosen table group");
         groups->setCurrentIndex(0);
-        check(!panel.isTableResult() && table->rowCount() == 2 && table->columnCount() == 9,
+        check(!panel.isTableResult() && table->rowCount() == 2 && table->columnCount() == 10,
               "switching back to the flat group restores the object/value layout");
     }
     filter->clear(); QueryResultGroup large{"large", "Large scalar group", {}, {}};

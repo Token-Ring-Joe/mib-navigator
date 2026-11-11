@@ -64,7 +64,8 @@ SnmpQueryText formatResponse(const SnmpSingleResult &result, const SnmpObjectRes
     case SnmpOperationStatus::SnmpError:
         break;
     case SnmpOperationStatus::Timeout:
-        return fail(timeoutText());
+        return fail(result.problem.isEmpty() ? timeoutText()
+                                             : QStringLiteral("<font color=red>%1</font>").arg(result.problem.toHtmlEscaped()));
     default:
         return fail(!result.problem.isEmpty()
             ? QStringLiteral("<font color=red>%1</font>").arg(result.problem.toHtmlEscaped())
@@ -199,7 +200,7 @@ SnmpQueryText FormatWalkEnd(const SnmpWalkResult &result)
         break;
     }
     case SnmpOperationStatus::Timeout:
-        msg = timeoutText();
+        msg = problem.isEmpty() ? timeoutText() : QStringLiteral("<font color=red>%1</font>").arg(problem);
         break;
     case SnmpOperationStatus::SnmpError:
         msg = !problem.isEmpty()

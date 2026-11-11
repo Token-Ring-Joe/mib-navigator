@@ -1,5 +1,7 @@
 #include "snmpreport.h"
 
+#include "snmprequestconfig.h"
+
 #include <QObject>
 
 namespace {
@@ -56,10 +58,42 @@ QString ExplainSnmpReport(const Pdu &pdu, const QString &securityName)
         default: break;
         }
     }
+    // snmpTargetMIB: snmpUnavailableContexts (.4) and snmpUnknownContexts (.5)
+    if (hasVarbind && under(oid, "1.3.6.1.6.3.12.1", &leaf) && (leaf == 4 || leaf == 5)) {
+        return QObject::tr("The device does not have the SNMPv3 context this request named (%1). The context name "
+            "comes from Preferences; leave it empty unless the device needs a specific one, and if one is set, check "
+            "its spelling against the device.")
+            .arg(leaf == 4 ? QObject::tr("snmpUnavailableContexts") : QObject::tr("snmpUnknownContexts"));
+    }
     if (pdu.get_type() == sNMP_PDU_REPORT)
         return QObject::tr("The device sent an SNMPv3 report instead of an answer%1. The request was not carried out.")
             .arg(hasVarbind ? QObject::tr(" (%1)").arg(QString::fromLatin1(oid.get_printable())) : QString());
     return {};
+}
+
+QString ExplainSnmpTimeout(const SnmpRequestConfig &config)
+{
+    if (config.version != SnmpRequestVersion::V3) return {};
+    const QString user = config.securityName.isEmpty() ? QObject::tr("(none)") : QObject::tr("'%1'").arg(config.securityName);
+    QString level;
+    switch (config.securityLevel) {
+    case SNMP_SECURITY_LEVEL_AUTH_PRIV: level = QObject::tr("authentication and privacy"); break;
+    case SNMP_SECURITY_LEVEL_AUTH_NOPRIV: level = QObject::tr("authentication without privacy"); break;
+    default: level = QObject::tr("no authentication or privacy"); break;
+    }
+    QString where = config.address;
+    if (!config.port.isEmpty()) where += QStringLiteral(":") + config.port;
+    QString text = QObject::tr("Timeout: no response from the device (%1, SNMPv3, user %2, %3). "
+        "The device sent no report at all, so the exact cause cannot be known. Most likely the address or port is wrong "
+        "or blocked by a firewall or access list, SNMPv3 is not enabled on the device, or the user does not exist there "
+        "(many devices silently ignore unknown users).")
+        .arg(where, user, level);
+    if (!config.contextName.isEmpty())
+        text += QObject::tr(" The SNMPv3 context name '%1' from Preferences is also in use; if the device does not "
+                            "know it, clear it.").arg(config.contextName);
+    text += QObject::tr(" If the device had recognised the user but rejected the passwords, it would normally answer "
+                        "with a report, which this application explains.");
+    return text;
 }
 
 bool IsSnmpErrorStatusCode(int code)

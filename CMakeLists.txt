@@ -79,6 +79,7 @@ install(FILES app/icons/ionicons/LICENSE.txt
 install(FILES NOTICE.md DESTINATION .)
 install(FILES
     docs/portable-package-readme.txt
+    docs/getting-started.md
     docs/release-candidate-validation.md
     docs/release-notes-1.0.0-rc1.md
     docs/security.md

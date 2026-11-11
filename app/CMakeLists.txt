@@ -20,6 +20,7 @@ set(SNMPB_APP_SOURCES
     productidentity.cpp
     logsnmpb.cpp
     markerwidget.cpp
+    selectedoidfield.cpp
     mibeditor.cpp
     mibhighlighter.cpp
     miblibrary.cpp
@@ -132,6 +133,7 @@ set(SNMPB_APP_HEADERS
     productidentity.h
     logsnmpb.h
     markerwidget.h
+    selectedoidfield.h
     mibeditor.h
     mibhighlighter.h
     miblibrary.h
@@ -230,6 +232,14 @@ if(WIN32)
     list(APPEND SNMPB_APP_SOURCES snmpb.rc)
 endif()
 
+# macOS: the application icon is copied into the bundle's Resources folder and
+# named in Info.plist. Windows takes its icon from snmpb.rc.
+if(APPLE)
+    set(SNMPB_MACOS_ICON "${CMAKE_CURRENT_SOURCE_DIR}/images/snmpb.icns")
+    set_source_files_properties("${SNMPB_MACOS_ICON}" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+    list(APPEND SNMPB_APP_SOURCES "${SNMPB_MACOS_ICON}")
+endif()
+
 add_executable(snmpb
     ${SNMPB_APP_SOURCES}
     ${SNMPB_APP_HEADERS}
@@ -249,6 +259,7 @@ set_target_properties(snmpb PROPERTIES
     WIN32_EXECUTABLE ON
     MACOSX_BUNDLE ON
     MACOSX_BUNDLE_BUNDLE_NAME "MIB Navigator"
+    MACOSX_BUNDLE_ICON_FILE "snmpb.icns"
 )
 if(APPLE)
     set_target_properties(snmpb PROPERTIES OUTPUT_NAME "MIB Navigator")
@@ -1277,8 +1288,24 @@ if(BUILD_TESTING)
         "QT_QPA_PLATFORM=offscreen" $<TARGET_FILE:snmpb_appearance_test>)
     set_tests_properties(snmpb.appearance PROPERTIES TIMEOUT 30)
 
+    add_executable(snmpb_markerwidget_test markerwidget.cpp markerwidget.h markerwidget_test.cpp)
+    set_target_properties(snmpb_markerwidget_test PROPERTIES AUTOMOC ON)
+    target_link_libraries(snmpb_markerwidget_test PRIVATE Qt6::Widgets)
+    add_test(NAME snmpb.markerwidget COMMAND ${CMAKE_COMMAND} -E env
+        "QT_QPA_PLATFORM=offscreen" $<TARGET_FILE:snmpb_markerwidget_test>)
+    set_tests_properties(snmpb.markerwidget PROPERTIES TIMEOUT 30)
+
+    add_executable(snmpb_selectedoidfield_test selectedoidfield.cpp selectedoidfield.h selectedoidfield_test.cpp)
+    set_target_properties(snmpb_selectedoidfield_test PROPERTIES AUTOMOC ON)
+    target_link_libraries(snmpb_selectedoidfield_test PRIVATE Qt6::Widgets)
+    add_test(NAME snmpb.selectedoidfield COMMAND ${CMAKE_COMMAND} -E env
+        "QT_QPA_PLATFORM=offscreen" $<TARGET_FILE:snmpb_selectedoidfield_test>)
+    set_tests_properties(snmpb.selectedoidfield PROPERTIES TIMEOUT 30)
+
     snmpb_configure_qt_test_runtime(
         snmpb.appearance
+        snmpb.markerwidget
+        snmpb.selectedoidfield
         snmpb.query-results
         snmpb.credentials-dialog
         snmpb.snmpv3-credentials

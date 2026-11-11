@@ -45,6 +45,8 @@
 #include <QTableWidget>
 #include <QHeaderView>
 #include <QSplitter>
+#include <QDesktopServices>
+#include <QUrl>
 #include <QElapsedTimer>
 #include <QHeaderView>
 #include <QLineEdit>
@@ -65,6 +67,7 @@
 #include "watchservice.h"
 #include <QStandardPaths>
 #include "collectionsearchpanel.h"
+#include "selectedoidfield.h"
 #include "requestlog.h"
 #include "requestlogpanel.h"
 #include "profiledetector.h"
@@ -442,13 +445,16 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     auto *collectionSearch = new QLineEdit(queryTools);
     collectionSearch->setObjectName(QStringLiteral("CollectionSearch"));
     collectionSearch->setPlaceholderText(tr("Search MIBs by name or OID…"));
-    collectionSearch->setToolTip(tr("Type a numeric OID and press Enter to select it in the tree. Anything else, or an OID the "
-                                    "active tree does not have, searches every MIB file in the collection and shows which "
-                                    "module and which profiles contain it."));
+    collectionSearch->setToolTip(tr("Shows the OID of the object selected in the tree. Click here and type to search: a numeric OID "
+                                    "and Enter selects it in the tree. Anything else, or an OID the active tree does not have, "
+                                    "searches every MIB file in the collection and shows which module and which profiles contain it."));
     collectionSearch->setClearButtonEnabled(true);
     collectionSearch->setAccessibleName(tr("Search MIBs by name or OID"));
     collectionSearch->setMinimumWidth(140);
     queryToolsLayout->addWidget(collectionSearch, 1);
+    // The same field also shows the OID of whatever is selected in the tree.
+    auto *selectedOidField = new SelectedOidField(collectionSearch);
+    connect(w.MIBTree, &MibModelView::CurrentObjectChanged, selectedOidField, &SelectedOidField::showOid);
     auto *inspectorTools = new QHBoxLayout;
     inspectorTools->setContentsMargins(10, 6, 10, 6); inspectorTools->addStretch();
     auto *copyInspectorOid = new QToolButton(w.NodeInfoLayout);
@@ -1177,6 +1183,15 @@ void Snmpb::BindToGUI(QMainWindow* mw)
         diagnosticsWindow->activateWindow();
     });
     w.helpMenu->insertAction(w.helpMenu->actions().value(0, nullptr), showDiagnostics);
+    // The guide is also in the package (getting-started.md); the online copy is the one that stays current.
+    auto *showGuide = new QAction(tr("&Getting Started Guide"), mw);
+    showGuide->setObjectName(QStringLiteral("HelpGettingStarted"));
+    showGuide->setShortcut(QKeySequence::HelpContents);
+    connect(showGuide, &QAction::triggered, mw, []() {
+        QDesktopServices::openUrl(QUrl(QStringLiteral(
+            "https://github.com/Token-Ring-Joe/mib-navigator/blob/main/docs/getting-started.md")));
+    });
+    w.helpMenu->insertAction(w.helpMenu->actions().value(0, nullptr), showGuide);
 
     // Problems describes the active MIB environment. Its bottom tab is conditional; the badge
     // and View menu can also open it when the report contains only notes.

@@ -11,6 +11,13 @@
 // Returns an empty string when the PDU is an ordinary response.
 QString ExplainSnmpReport(const Pdu &pdu, const QString &securityName);
 
+struct SnmpRequestConfig;
+
+// A request that got no answer at all. For SNMPv3 this says what the request used (user, security
+// level, context) and the likely causes, and is honest that a silent device gives no way to tell
+// them apart. Returns an empty string for SNMPv1 and SNMPv2c, which keep the short generic text.
+QString ExplainSnmpTimeout(const SnmpRequestConfig &config);
+
 // SNMP++ returns a positive code for two different things: the device's own SNMP error-status
 // (tooBig = 1 ... inconsistentName = 18) and its own SNMPv3 USM failures (1400 and up), which
 // happen on this side of the wire. Only the first is an error the device reported.

@@ -1,4 +1,5 @@
 #include "snmpreport.h"
+#include "snmprequestconfig.h"
 
 #include <QCoreApplication>
 #include <iostream>
@@ -89,5 +90,29 @@ int main(int argc, char **argv)
     }
     ok &= check(ExplainSnmpErrorStatus(99).contains("99") && !ExplainSnmpErrorStatus(0).isEmpty(),
                 "an unknown error-status still gives text");
+    // Context reports (snmpTargetMIB)
+    ok &= check(ExplainSnmpReport(reportWith("1.3.6.1.6.3.12.1.5.0"), user).contains("snmpUnknownContexts") &&
+                ExplainSnmpReport(reportWith("1.3.6.1.6.3.12.1.5.0"), user).contains("Preferences"),
+                "an unknown context points at the context name in Preferences");
+    ok &= check(ExplainSnmpReport(reportWith("1.3.6.1.6.3.12.1.4.0"), user).contains("snmpUnavailableContexts"),
+                "an unavailable context is named");
+
+    // SNMPv3 timeout: says what was used and what is likely, never claims a certain cause.
+    SnmpRequestConfig v3; v3.version = SnmpRequestVersion::V3; v3.address = "10.1.1.5"; v3.port = "161";
+    v3.securityName = "lab"; v3.securityLevel = SNMP_SECURITY_LEVEL_AUTH_PRIV;
+    const QString timeout = ExplainSnmpTimeout(v3);
+    ok &= check(timeout.startsWith("Timeout: no response from the device") && timeout.contains("10.1.1.5:161") &&
+                timeout.contains("'lab'") && timeout.contains("authentication and privacy") &&
+                timeout.contains("cannot be known") && timeout.contains("firewall") &&
+                timeout.contains("silently ignore unknown users") && !timeout.contains("context name"),
+                "a v3 timeout names the target, user and level and the likely causes");
+    v3.securityLevel = SNMP_SECURITY_LEVEL_AUTH_NOPRIV;
+    ok &= check(ExplainSnmpTimeout(v3).contains("authentication without privacy"), "authNoPriv is described");
+    v3.securityLevel = SNMP_SECURITY_LEVEL_NOAUTH_NOPRIV; v3.contextName = "vrf-red"; v3.port.clear();
+    const QString noAuth = ExplainSnmpTimeout(v3);
+    ok &= check(noAuth.contains("no authentication or privacy") && noAuth.contains("'vrf-red'") &&
+                noAuth.contains("(10.1.1.5,"), "a context name is mentioned only when one is set; a missing port is left out");
+    SnmpRequestConfig v2c; v2c.version = SnmpRequestVersion::V2c;
+    ok &= check(ExplainSnmpTimeout(v2c).isEmpty(), "SNMPv1/v2c timeouts keep the short generic text");
     return ok ? 0 : 1;
 }

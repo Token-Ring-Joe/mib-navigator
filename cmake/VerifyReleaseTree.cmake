@@ -18,6 +18,7 @@ set(required_files
     "portable-package-readme.txt"
     "release-candidate-validation.md"
     "release-notes-1.0.0-rc1.md"
+    "getting-started.md"
     "security.md"
     "settings-schema.md"
     "maintenance-five-validation.md"

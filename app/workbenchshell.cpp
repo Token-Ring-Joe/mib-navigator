@@ -283,15 +283,18 @@ void WorkbenchShell::buildViewMenu(QMainWindow *window)
     inspectorAction->setText(tr("Inspector"));
     inspectorAction->setShortcut(QKeySequence("Ctrl+Alt+I"));
     view->addAction(inspectorAction);
-    auto *panelAction = add("WorkbenchToggleBottom", tr("Show panel"), [this]() {
+    // One switch for the bottom panel, the same as the Operations button. Its pages (Output, Log,
+    // Problems) are chosen by clicking their tabs, so they have no View menu entries of their own.
+    auto *panelAction = add("WorkbenchToggleBottom", tr("Show Operations panel"), [this]() {
         setPanelExpanded(bottomPanel->isHidden());
     });
     panelAction->setShortcut(QKeySequence("Ctrl+J"));
-    view->addSeparator();
+    // Commands that open one specific page. They are not listed in any menu; automated checks use them.
     for (int i = 0; i < bottomTabs->count(); ++i) {
         auto *page = bottomTabs->widget(i);
-        add(QStringLiteral("ViewBottom%1").arg(bottomTitles.value(page)), bottomTitles.value(page),
-            [this, page]() { showBottomPage(page); });
+        auto *open = new QAction(bottomTitles.value(page), window);
+        open->setObjectName(QStringLiteral("ViewBottom%1").arg(bottomTitles.value(page)));
+        connect(open, &QAction::triggered, this, [this, page]() { showBottomPage(page); });
     }
 }
 
@@ -437,7 +440,7 @@ void WorkbenchShell::updatePanelControls()
     const bool expanded = !bottomPanel->isHidden();
     const QSignalBlocker blocked(panelButton);
     panelButton->setChecked(expanded);
-    const QString text = expanded ? tr("Hide panel") : tr("Show panel");
+    const QString text = expanded ? tr("Hide Operations panel") : tr("Show Operations panel");
     panelButton->setText(tr("Operations"));
     panelButton->setAccessibleName(tr("Operations panel"));
     panelButton->setToolTip(expanded ? tr("Hide Output, Log and MIB Problems") : tr("Show Output, Log and MIB Problems"));

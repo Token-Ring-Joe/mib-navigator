@@ -953,9 +953,20 @@ int main( int argc, char ** argv )
             if (workbenchDocuments) {
                 QAction *viewLibrary = mw.findChild<QAction *>("ViewMibLibrary");
                 QAction *viewOutput = mw.findChild<QAction *>("ViewResults");
-                check(viewLibrary && viewOutput && mw.findChild<QAction *>("ViewBottomOutput") &&
+                check(viewLibrary && viewOutput && mw.findChild<QAction *>("WorkbenchToggleBottom") &&
                       mw.findChild<QMenu *>("WorkbenchViewMenu"),
-                      "the View menu offers Results, Output and the MIB Library");
+                      "the View menu offers Results, the MIB Library and one Operations panel toggle");
+                {
+                    bool perTabEntry = false;
+                    if (auto *viewMenu = mw.findChild<QMenu *>("WorkbenchViewMenu"))
+                        for (const QAction *entry : viewMenu->actions())
+                            perTabEntry = perTabEntry || entry->objectName().startsWith("ViewBottom");
+                    check(!perTabEntry, "the View menu has no separate entry for each bottom panel tab");
+                    QAction *guide = mw.findChild<QAction *>("HelpGettingStarted");
+                    check(guide && mw.findChild<QMenu *>("helpMenu") &&
+                          mw.findChild<QMenu *>("helpMenu")->actions().contains(guide),
+                          "the Help menu links to the Getting Started guide");
+                }
                 if (viewLibrary && viewOutput) {
                     QDockWidget *inspectorDock = mw.findChild<QDockWidget *>("WorkbenchInspectorDock");
                     QDockWidget *bottomDock = mw.findChild<QDockWidget *>("WorkbenchBottomDock");
@@ -1819,6 +1830,10 @@ int main( int argc, char ** argv )
                                 QStringList cells;
                                 for (int column = 0; column < 7; ++column)
                                     cells << (results->item(row, column) ? results->item(row, column)->text() : QString());
+                                // Results shows Module and Object.Instance in separate columns; keep the logged
+                                // form "Module::object.instance" that the scenario expectations match.
+                                if (results->columnCount() > 9 && results->item(row, 9) && !results->item(row, 9)->text().isEmpty())
+                                    cells[0] = results->item(row, 9)->text() + QStringLiteral("::") + cells[0];
                                 smoke_output << "launch-smoke: LIVE-SINGLE " << label << " row " << cells.join(" | ") << Qt::endl;
                             }
                             if (singleLog && singleLog->entries().size() > before) {

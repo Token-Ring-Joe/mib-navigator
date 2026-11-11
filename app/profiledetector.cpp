@@ -19,7 +19,9 @@ DeviceIdentity ProfileDetector::read(ISnmpTransport &transport, const SnmpReques
     switch (answer.status) {
     case SnmpOperationStatus::Success: break;
     case SnmpOperationStatus::Timeout:
-        identity.error = QObject::tr("Timeout: no response from the device. Check the Target address and the credential.");
+        identity.error = ExplainSnmpTimeout(config);
+        if (identity.error.isEmpty())
+            identity.error = QObject::tr("Timeout: no response from the device. Check the Target address and the credential.");
         return identity;
     case SnmpOperationStatus::SnmpError:
         identity.error = QObject::tr("The device refused the request: %1")

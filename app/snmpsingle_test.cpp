@@ -267,6 +267,19 @@ void presentation()
     text = FormatSingleResult(run(timeout, SnmpRequestOperation::Get, varbinds({"a"})), unresolved(), false);
     check(text.paragraphs.size() == 1 && text.paragraphs.first().contains("Timeout: no response from the device") &&
               text.statusHtml.isEmpty(), "a timeout is shown in the Query pane and the status line");
+    // An SNMPv3 request that gets no answer explains itself; v2c keeps the short text above.
+    {
+        SnmpRequestConfig v3Timeout = config(SnmpRequestVersion::V3);
+        v3Timeout.securityName = "lab"; v3Timeout.securityLevel = SNMP_SECURITY_LEVEL_AUTH_PRIV;
+        ScriptedSnmpTransport silent(v3Timeout);
+        silent.append(failure(SnmpOperationStatus::Timeout, SNMP_CLASS_TIMEOUT));
+        const SnmpSingleResult silentResult = run(silent, SnmpRequestOperation::Get, varbinds({"a"}));
+        text = FormatSingleResult(silentResult, unresolved(), false);
+        check(silentResult.status == SnmpOperationStatus::Timeout && !silentResult.problem.isEmpty() &&
+                  text.paragraphs.size() == 1 && text.paragraphs.first().contains("SNMPv3, user 'lab'") &&
+                  text.paragraphs.first().contains("cannot be known"),
+              "an SNMPv3 timeout is explained in the Query pane");
+    }
     ScriptedSnmpTransport empty(config());
     SnmpTransportResult nothing; nothing.status = SnmpOperationStatus::Success; empty.append(nothing);
     text = FormatSingleResult(run(empty, SnmpRequestOperation::Get, varbinds({"a"})), unresolved(), false);

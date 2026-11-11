@@ -122,16 +122,22 @@ void QueryResultsPanel::configure(bool table, const QStringList &columns)
     // Keep the established hidden metadata columns for flat-query integrations.
     const QStringList names = table ? QStringList{tr("Index")} + columns + QStringList{tr("Instance")}
         : QStringList{tr("Object.Instance"), tr("Instance"), tr("OID"), tr("Syntax"), tr("Value"),
-                      tr("Received"), tr("Warnings"), tr("Time"), tr("Type")};
+                      tr("Received"), tr("Warnings"), tr("Time"), tr("Type"), tr("Module")};
     results->setColumnCount(names.size()); results->setHorizontalHeaderLabels(names);
     const auto &visibility = table ? tableVisibility : flatVisibility;
     for (int column = 0; column < names.size(); ++column) {
-        const bool defaultVisible = table ? column != names.size()-1 : column == 0 || column == 4 || column == 8;
+        const bool defaultVisible = table ? column != names.size()-1 : column == 0 || column == 4 || column == 8 || column == 9;
         results->setColumnHidden(column, !visibility.value(names[column], defaultVisible));
         results->horizontalHeader()->setSectionResizeMode(column, QHeaderView::Interactive);
-        results->setColumnWidth(column, column == 0 ? 280 : 190);
+        results->setColumnWidth(column, table ? (column == 0 ? 280 : 190) : column == 0 ? 220 : column == 9 ? 150 : 190);
     }
     results->horizontalHeader()->setStretchLastSection(false);
+    // Columns keep their logical numbers (other code reads them by number). Only the
+    // display order changes: in flat results the Module column is shown first.
+    auto *header = results->horizontalHeader();
+    for (int visual = 0; visual < names.size(); ++visual)
+        if (header->visualIndex(visual) != visual) header->moveSection(header->visualIndex(visual), visual);
+    if (!table && header->visualIndex(9) != 0) header->moveSection(header->visualIndex(9), 0);
     // No automatic reordering: the engine supplies numeric instance/arrival order.
     results->horizontalHeader()->setSortIndicator(-1, Qt::AscendingOrder);
     results->setSortingEnabled(true);
@@ -175,15 +181,23 @@ void QueryResultsPanel::appendValue(const QueryResultValue &value)
     if (tableMode) return;
     const bool sorting = results->isSortingEnabled(); results->setSortingEnabled(false);
     const int row = results->rowCount(); results->insertRow(row);
-    const QString object = value.object + (value.instance.isEmpty() ? QString() : QStringLiteral(".") + value.instance);
+    // "IF-MIB::ifInOctets" is shown as Module "IF-MIB" and Object "ifInOctets.2". The full name stays
+    // in the row's search text and tooltip, so filtering by either part still works.
+    const qsizetype separator = value.object.indexOf(QStringLiteral("::"));
+    const QString module = separator > 0 ? value.object.left(separator) : QString();
+    const QString name = separator > 0 ? value.object.mid(separator + 2) : value.object;
+    const QString object = name + (value.instance.isEmpty() ? QString() : QStringLiteral(".") + value.instance);
     const QStringList cells{object, value.instance, value.oid, value.syntax,
         !value.problem.isEmpty() ? value.problem : display->currentIndex() == 0 ? value.interpreted : value.raw,
-        value.received, value.warnings, value.time, value.type};
+        value.received, value.warnings, value.time, value.type, module};
     for (int column = 0; column < cells.size(); ++column) {
         auto *item = valueItem(value, cells[column], column == 0);
         if (column == 1 || column == 2 || column == 4 || column == 5)
             item->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-        if (column == 4) item->setData(SortRole, value.raw);
+        if (column == 4) {
+            item->setData(SortRole, value.raw);
+            if (value.problem.isEmpty()) item->setData(AppearanceColors::LinkInkRole, true);
+        }
         results->setItem(row, column, item);
     }
     results->setRowHidden(row, !matchesFilter(row));
@@ -342,18 +356,22 @@ QString QueryResultsPanel::oidAt(int row, int column) const
 QList<QStringList> QueryResultsPanel::csvRecords() const
 {
     QList<QStringList> records; if (!results->rowCount()) return records;
+    // Export the columns in the order they are displayed.
+    QList<int> shown;
+    for (int visual = 0; visual < results->columnCount(); ++visual) {
+        const int column = results->horizontalHeader()->logicalIndex(visual);
+        if (column >= 0 && !results->isColumnHidden(column)) shown << column;
+    }
     QStringList header;
-    for (int column = 0; column < results->columnCount(); ++column)
-        if (!results->isColumnHidden(column)) header << results->horizontalHeaderItem(column)->text();
+    for (const int column : shown) header << results->horizontalHeaderItem(column)->text();
     records << header;
     for (int row = 0; row < results->rowCount(); ++row) {
         if (results->isRowHidden(row)) continue;
         QStringList record;
-        for (int column = 0; column < results->columnCount(); ++column)
-            if (!results->isColumnHidden(column)) {
-                const auto *item = results->item(row, column);
-                record << (item && !item->data(MissingRole).toBool() ? item->text() : QString());
-            }
+        for (const int column : shown) {
+            const auto *item = results->item(row, column);
+            record << (item && !item->data(MissingRole).toBool() ? item->text() : QString());
+        }
         records << record;
     }
     return records;
