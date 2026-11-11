@@ -858,10 +858,6 @@
     <addaction name="actionVerifyMIB"/>
     <addaction name="actionExtractMIBfromRFC"/>
    </widget>
-   <widget class="QMenu" name="snmpMenu">
-    <property name="title"><string>&amp;SNMP</string></property>
-    <addaction name="actionMultipleVarbinds"/>
-   </widget>
    <widget class="QMenu" name="settingsMenu">
     <property name="title"><string>Se&amp;ttings</string></property>
     <addaction name="actionCredentials"/>
@@ -882,7 +878,6 @@
    <addaction name="editMenu"/>
    <addaction name="WorkbenchViewMenu"/>
    <addaction name="mibMenu"/>
-   <addaction name="snmpMenu"/>
    <addaction name="settingsMenu"/>
    <addaction name="helpMenu"/>
   </widget>
@@ -1047,14 +1042,6 @@
    </property>
    <property name="shortcut">
     <string>F3</string>
-   </property>
-  </action>
-  <action name="actionMultipleVarbinds">
-   <property name="text">
-    <string>&amp;Multiple Varbinds...</string>
-   </property>
-   <property name="shortcut">
-    <string>Ctrl+M</string>
    </property>
   </action>
   <action name="actionStop">

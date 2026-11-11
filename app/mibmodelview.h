@@ -39,7 +39,6 @@ signals:
     void TableViewFromOid(const QString &oid);
     void TableRowSelectFromOid(const QString &oid);
     void GetTableInstancesFromOid(const QString &oid);
-    void VarbindsFromOid(const QString &oid);
     void MacroFromOid(const QString &oid);
     void QueryTableAvailabilityChanged(bool available);
     void CurrentObjectChanged(const QString &oid);

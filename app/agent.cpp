@@ -66,13 +66,6 @@
 
 #define TRAP_TIMER_MSEC 100
 
-typedef struct
-{
-    Vb vb;
-    int syntax;
-    QString val;
-} vb_data;
-
 namespace {
 QTableWidget *structuredResults(Snmpb *snmpb)
 {
@@ -134,7 +127,6 @@ void appendStructuredResult(Snmpb *snmpb, const MibResolvedObject &resolved, con
 
 }
 
-Q_DECLARE_METATYPE(vb_data);
 
 // C Callback functions for snmp++
 void callback_trap(int reason, Snmp *, Pdu &pdu, SnmpTarget &target, void *cd)
@@ -413,37 +405,14 @@ void Agent::Init(void)
             s->MainUI()->MIBTree, &MibModelView::QueryTableFromCurrent);
     connect(s->MainUI()->MIBTree, &MibModelView::QueryTableAvailabilityChanged,
             s->MainUI()->QueryTable, &QPushButton::setEnabled);
-    connect( s->MainUI()->MIBTree, SIGNAL( VarbindsFromOid(const QString&) ),
-             this, SLOT( VarbindsFrom(const QString&) ) );
     connect( this, SIGNAL( StartWalk(bool) ), 
              s->MainUI()->MIBTree, SLOT ( SetWalkInProgress(bool) ) );
     connect( s->MainUI()->actionStop, SIGNAL( triggered() ),
              this, SLOT( Stop() ) );
-    connect( s->MainUI()->actionMultipleVarbinds, SIGNAL( triggered() ),
-             this, SLOT( Varbinds() ) );
 
     // The connection bar (Target, Credential, MIB Profile) supplies the request settings;
     // it announces itself through SetConnectionBar().
     UpdateTableQueryAvailability();
-
-    vbui = new Ui_Varbinds();
-    vbd = new QDialog(s->MainUI()->MIBTree); 
-    vbui->setupUi(vbd);
-    connect( vbui->NewOp, SIGNAL( clicked() ), this, SLOT( VarbindsNew() ));
-    connect( vbui->EditOp, SIGNAL( clicked() ), this, SLOT( VarbindsEdit() ));
-    connect( vbui->DeleteOp, SIGNAL( clicked() ), this, SLOT( VarbindsDelete() ));
-    connect( vbui->DeleteAllOp, SIGNAL( clicked() ), this, SLOT( VarbindsDeleteAll() ));
-    connect( vbui->MoveUpOp, SIGNAL( clicked() ), this, SLOT( VarbindsMoveUp() ));
-    connect( vbui->MoveDownOp, SIGNAL( clicked() ), this, SLOT( VarbindsMoveDown() ));
-    connect( vbui->QuitOp, SIGNAL( clicked() ), this, SLOT( VarbindsQuit() ));
-    connect( vbui->GetOp, SIGNAL( clicked() ), this, SLOT( VarbindsGet() ));
-    connect( vbui->GetNextOp, SIGNAL( clicked() ), this, SLOT( VarbindsGetNext() ));
-    connect( vbui->GetBulkOp, SIGNAL( clicked() ), this, SLOT( VarbindsGetBulk() ));
-    connect( vbui->SetOp, SIGNAL( clicked() ), this, SLOT( VarbindsSet() ));
-    connect( vbui->VarbindsList, SIGNAL( itemSelectionChanged() ), 
-             this, SLOT( VarbindsSelected() ));
-    connect( vbui->VarbindsList, SIGNAL( itemDoubleClicked(QTreeWidgetItem*, int) ), 
-             this, SLOT( VarbindsEdit() ));
 
     connect(&timer, SIGNAL(timeout()), this, SLOT(TimerExpired()));
     
@@ -564,8 +533,6 @@ Agent::~Agent()
     macroRunner = nullptr;
     delete snmp;
     snmp = nullptr;
-    delete vbui; // Generated Ui wrapper; the dialog owns its widgets.
-    vbui = nullptr;
     Snmp::socket_cleanup();
 }
 
@@ -1363,7 +1330,9 @@ void Agent::PresentTableResult(const SnmpTableResult &result)
     if (result.status == SnmpOperationStatus::Cancelled)
         ending = tr("<font color=red>Operation cancelled</font><br>");
     else if (result.status == SnmpOperationStatus::Timeout)
-        ending = tr("<font color=red>Timeout: the device stopped answering, so the table may be incomplete.</font><br>");
+        ending = result.problem.isEmpty()
+            ? tr("<font color=red>Timeout: the device stopped answering, so the table may be incomplete.</font><br>")
+            : QString();   // an SNMPv3 timeout with nothing received explains itself below
     else if (result.status == SnmpOperationStatus::SnmpError && result.problem.isEmpty())
         ending = tr("<font color=red>SNMP error %1: the device refused to continue, so the table may be incomplete.</font><br>")
                      .arg(result.snmpErrorStatus);
@@ -1386,291 +1355,6 @@ void Agent::PresentTableResult(const SnmpTableResult &result)
     emit StartWalk(false);
 }
 
-QString Agent::GetValueString(MibSelection &ms, Vb* vb)
-{
-    if (!ms.GetValue().isEmpty())
-    {
-        const Oid oid(ms.GetSemanticOid().toLatin1().constData());
-        return RenderMibValue(ResolveMibObject(ms.GetEnvironment(),oid),*vb);
-    }
-
-    return "";
-}
-
-void Agent::Varbinds(void)
-{
-    vbui->GetBulkOp->setEnabled(!(connectionBar && connectionBar->credentialProtocol() == 0));
-    vbd->exec(); 
-}
-
-void Agent::VarbindsFrom(const QString& oid)
-{
-    // Do a background run of the mib selection dialog
-    MibSelection ms(s, vbd, tr("New VarBind"), MIBSELECTION_NONE);
-
-    ms.bgrun(oid);
-
-    Vb *vb = ms.GetVarbind();
-    if (vb)
-    {
-        QStringList sl;
-        sl << ms.GetName() << ms.GetOid() 
-           << ms.GetSyntaxName() << GetValueString(ms, vb);
-
-        vb_data data;
-        data.vb = *vb;
-        data.syntax = ms.GetSyntax();
-        data.val = ms.GetValue();
-        QTreeWidgetItem *qtwi = new QTreeWidgetItem(sl);
-        QVariant qv;
-        qv.setValue(data);
-        qtwi->setData(0, Qt::UserRole, qv);
-        vbui->VarbindsList->addTopLevelItem(qtwi);
-        
-        vbui->VarbindsList->setCurrentItem(qtwi); 
-
-        vbui->SNMPOps->setEnabled(true);
-        vbui->GetBulkOp->setEnabled(!(connectionBar && connectionBar->credentialProtocol() == 0));
-    }
-
-    vbd->exec(); 
-}
-
-void Agent::VarbindsNew(void)
-{
-    // Create and run the mib selection dialog
-    MibSelection ms(s, vbd, tr("New VarBind"), MIBSELECTION_SET|MIBSELECTION_VALUE);
-
-    if (ms.run())
-    {
-        Vb *vb = ms.GetVarbind();
-        if (vb)
-        {
-            QStringList sl;
-            sl << ms.GetName() << ms.GetOid() 
-               << ms.GetSyntaxName() << GetValueString(ms, vb);
-
-            vb_data data;
-            data.vb = *vb;
-            data.syntax = ms.GetSyntax();
-            data.val = ms.GetValue();
-            QTreeWidgetItem *qtwi = new QTreeWidgetItem(sl);
-            QVariant qv;
-            qv.setValue(data);
-            qtwi->setData(0, Qt::UserRole, qv);
-            vbui->VarbindsList->addTopLevelItem(qtwi);
-
-            vbui->SNMPOps->setEnabled(true);
-            vbui->GetBulkOp->setEnabled(!(connectionBar && connectionBar->credentialProtocol() == 0));
-        }
-    }
-}
-
-void Agent::VarbindsEdit(void)
-{
-    QTreeWidget *vbl = vbui->VarbindsList;
-    QList<QTreeWidgetItem *> items = vbl->selectedItems();
-    if (items.size() != 1)
-    {
-        QMessageBox::critical( NULL, tr("Edit VarBind"),
-                tr("Please select only one VarBind"),
-                QMessageBox::Ok);
-        return;
-    }
-
-    // Create and run the mib selection dialog
-    MibSelection ms(s, vbd, tr("Edit VarBind"), MIBSELECTION_SET|MIBSELECTION_VALUE);
-
-    vb_data data = items[0]->data(0, Qt::UserRole).value<vb_data>();
-
-    if (ms.run(items[0]->text(1), data.syntax, data.val))
-    {
-        Vb *vb = ms.GetVarbind();
-        if (vb)
-        {
-            items[0]->setText(0, ms.GetName());
-            items[0]->setText(1, ms.GetOid());
-            items[0]->setText(2, ms.GetSyntaxName());
-            items[0]->setText(3, GetValueString(ms, vb));
- 
-            data.vb = *vb;
-            data.syntax = ms.GetSyntax();
-            data.val = ms.GetValue();
-            QVariant qv;
-            qv.setValue(data);
-            items[0]->setData(0, Qt::UserRole, qv);
-        }
-    }
-}
-
-void Agent::VarbindsDelete(void)
-{
-    QTreeWidget *vbl = vbui->VarbindsList;
-    QList<QTreeWidgetItem *> items = vbl->selectedItems();
-
-    QTreeWidgetItem *next = vbl->itemBelow(items[items.size()-1]);
-    if (!next)
-        next = vbl->itemAbove(items[items.size()-1]);
-
-    for (int i = 0; i < items.size(); i++)
-        delete vbl->takeTopLevelItem(vbl->indexOfTopLevelItem(items[i]));
-
-    if (next)
-        vbl->setCurrentItem(next); 
-
-    if (vbui->VarbindsList->topLevelItemCount() == 0)
-        vbui->SNMPOps->setEnabled(false);
-}
-
-void Agent::VarbindsDeleteAll(void)
-{
-    vbui->VarbindsList->clear();
-
-    if (vbui->VarbindsList->topLevelItemCount() == 0)
-        vbui->SNMPOps->setEnabled(false);
-}
-
-// External C function
-bool CompareItemPositions(QTreeWidgetItem *i1, QTreeWidgetItem *i2)
-{
-    return (i1->treeWidget()->indexOfTopLevelItem(i1) < 
-            i1->treeWidget()->indexOfTopLevelItem(i2));
-}
-
-void Agent::VarbindsMoveUp(void)
-{
-    QTreeWidget *vbl = vbui->VarbindsList;
-    QList<QTreeWidgetItem *> items = vbl->selectedItems();
-    bool cleared = false;
-
-    std::sort(items.begin(), items.end(), CompareItemPositions);
-
-    for (int i = 0; i < items.size(); i++)
-    {
-        int idx = vbl->indexOfTopLevelItem(items[i]);
-        int previdx = vbl->indexOfTopLevelItem(vbl->itemAbove(items[i]));
-
-        if (previdx >= 0)
-        {
-            if (!cleared)
-            {
-                vbl->clearSelection();
-                cleared = true;
-            }
-
-            QTreeWidgetItem *item = vbl->takeTopLevelItem(idx);
-
-            vbl->insertTopLevelItem(previdx, item);
-            item->setSelected(true);
-        }
-        else
-            break;
-    }
-}
-
-void Agent::VarbindsMoveDown(void)
-{
-    QTreeWidget *vbl = vbui->VarbindsList;
-    QList<QTreeWidgetItem *> items = vbl->selectedItems();
-    bool cleared = false;
-
-    std::sort(items.begin(), items.end(), CompareItemPositions);
-
-    for (int i = items.size()-1; i >= 0; i--)
-    {
-        int idx = vbl->indexOfTopLevelItem(items[i]);
-        int nextidx = vbl->indexOfTopLevelItem(vbl->itemBelow(items[i]));
-
-        if (nextidx > 0)
-        {
-            if (!cleared)
-            {
-                vbl->clearSelection();
-                cleared = true;
-            }
-
-            QTreeWidgetItem *item = vbl->takeTopLevelItem(idx);
-
-            vbl->insertTopLevelItem(nextidx, item);
-            item->setSelected(true);
-        }
-        else
-            break;
-    }
-}
-
-void Agent::VarbindsQuit(void)
-{
-    vbd->accept();
-}
-
-void Agent::VarbindsBuildList(void)
-{
-    QTreeWidget *vbl = vbui->VarbindsList;
-
-    vblist.clear();
-
-    for(int i = 0; i < vbl->topLevelItemCount(); i++)
-        vblist += vbl->topLevelItem(i)->data(0, Qt::UserRole).value<vb_data>().vb; 
-}
-
-void Agent::VarbindsGet(void)
-{
-    // Build the vblist
-    VarbindsBuildList();
-
-    // Do the operation 
-    Get("", true);
-}
-
-void Agent::VarbindsGetNext(void)
-{
-    // Build the vblist
-    VarbindsBuildList();
-
-    // Do the operation 
-    GetNext("", true);
-}
-
-void Agent::VarbindsGetBulk(void)
-{
-    // Build the vblist
-    VarbindsBuildList();
-
-    // Do the operation 
-    GetBulk("", true);
-}
-
-void Agent::VarbindsSet(void)
-{
-    // Build the vblist
-    VarbindsBuildList();
-
-    // Do the operation 
-    Set("", true);
-}
-
-// Controls buttons to gray out
-void Agent::VarbindsSelected(void)
-{
-    QList<QTreeWidgetItem *> items = vbui->VarbindsList->selectedItems();
-
-    if (items.isEmpty())
-    {
-        vbui->EditOp->setEnabled(false);
-        vbui->DeleteOp->setEnabled(false);
-        vbui->MoveUpOp->setEnabled(false);
-        vbui->MoveDownOp->setEnabled(false);
-    }
-    else
-    {
-        vbui->EditOp->setEnabled(true);
-        vbui->DeleteOp->setEnabled(true);
-        vbui->MoveUpOp->setEnabled(true);
-        vbui->MoveDownOp->setEnabled(true);
-    }
-}
-
 void Agent::PresentInstanceResult(const SnmpInstanceResult &result)
 {
     auto rowContext = std::move(pendingTableRowContext);
@@ -1683,7 +1367,7 @@ void Agent::PresentInstanceResult(const SnmpInstanceResult &result)
     QString outcome;
     if (result.status == SnmpOperationStatus::Cancelled)
         outcome = tr("<font color=red>Operation cancelled</font>");
-    else if (result.status == SnmpOperationStatus::Timeout)
+    else if (result.status == SnmpOperationStatus::Timeout && result.problem.isEmpty())
         outcome = tr("<font color=red>Timeout: the device did not answer.</font>");
     else if (!result.problem.isEmpty())
         outcome = tr("<font color=red>%1</font>").arg(result.problem.toHtmlEscaped());

@@ -225,7 +225,6 @@ set(SNMPB_APP_FORMS
     preferences.ui
     replace.ui
     usmprofile.ui
-    varbinds.ui
 )
 
 if(WIN32)

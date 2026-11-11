@@ -469,6 +469,35 @@ void csv()
 }
 }
 
+void snmpv3Timeouts()
+{
+    SnmpRequestConfig v3 = config(SnmpRequestVersion::V3);
+    v3.securityName = "lab"; v3.securityLevel = SNMP_SECURITY_LEVEL_AUTH_PRIV;
+    // A table read that never gets an answer explains the likely causes.
+    FakeSnmpAgent silent(v3);
+    silent.setFailure([](int, SnmpTransportResult *r) { r->status = SnmpOperationStatus::Timeout; return true; });
+    auto result = read(silent, plan(2));
+    check(result.status == SnmpOperationStatus::Timeout && result.problem.contains("SNMPv3, user 'lab'") &&
+          result.problem.contains("cannot be known"), "table: a silent SNMPv3 device is explained");
+    // The same for a single row, and for a device that answered and then went quiet.
+    auto rowPlan = plan(2); rowPlan.instance = "1";
+    FakeSnmpAgent silentRow(v3);
+    silentRow.setFailure([](int, SnmpTransportResult *r) { r->status = SnmpOperationStatus::Timeout; return true; });
+    check(read(silentRow, rowPlan).problem.contains("SNMPv3, user 'lab'"), "row: a silent SNMPv3 device is explained");
+    auto widePlan = plan(12); widePlan.instance = "7";
+    FakeSnmpAgent quietLater(v3);
+    for (int c = 1; c <= 12; ++c) put(quietLater, c, "7", c);
+    quietLater.setFailure([](int n, SnmpTransportResult *r) {
+        if (n != 2) return false;
+        r->status = SnmpOperationStatus::Timeout; return true;
+    });
+    check(read(quietLater, widePlan).problem.isEmpty(), "row: a device that answered first keeps the plain timeout");
+    // SNMPv2c keeps the plain message.
+    FakeSnmpAgent v2Silent(config());
+    v2Silent.setFailure([](int, SnmpTransportResult *r) { r->status = SnmpOperationStatus::Timeout; return true; });
+    check(read(v2Silent, plan(2)).problem.isEmpty(), "table: an SNMPv2c timeout keeps the plain message");
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication application(argc, argv);
@@ -482,6 +511,7 @@ int main(int argc, char **argv)
     misbehavingAgents();
     snmpv3Report();
     localSnmpv3Failures();
+    snmpv3Timeouts();
     cancellation();
     randomizedAgainstTruth();
     instanceDecoding();

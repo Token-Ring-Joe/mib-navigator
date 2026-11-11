@@ -895,23 +895,21 @@ int main( int argc, char ** argv )
                     titles << text.remove('&');
                 }
                 check(uniqueMnemonics, "top-level menus have distinct keyboard mnemonics");
-                check(titles == QStringList{"File", "Edit", "View", "MIB", "SNMP", "Settings", "Help"},
-                      "main menu order is File, Edit, View, MIB, SNMP, Settings, Help");
+                check(titles == QStringList{"File", "Edit", "View", "MIB", "Settings", "Help"},
+                      "main menu order is File, Edit, View, MIB, Settings, Help");
                 check(ui->editMenu->actions().contains(ui->actionFind) &&
                       ui->editMenu->actions().contains(ui->actionReplace) &&
                       ui->editMenu->actions().contains(ui->actionGotoLine) &&
                       ui->mibMenu->actions().contains(ui->actionVerifyMIB) &&
                       ui->settingsMenu->actions().contains(ui->actionCredentials) &&
-                      ui->snmpMenu->actions().contains(ui->actionMultipleVarbinds) &&
-                      !ui->snmpMenu->actions().contains(ui->actionStop) &&
+                      !ui->mibMenu->actions().contains(ui->actionStop) &&
                       mw.actions().contains(ui->actionStop) && ui->actionStop->shortcut() == QKeySequence("Esc") &&
                       ui->mibMenu->actions().contains(ui->actionExtractMIBfromRFC) &&
                       ui->settingsMenu->actions().contains(ui->actionPreferences),
                       "editing, MIB, SNMP and Settings commands belong to their intended menus");
                 check(ui->actionFind->shortcut() == QKeySequence("Ctrl+F") &&
                       ui->actionReplace->shortcut() == QKeySequence("Ctrl+H") &&
-                      ui->actionVerifyMIB->shortcut() == QKeySequence("Ctrl+R") &&
-                      ui->actionMultipleVarbinds->shortcut() == QKeySequence("Ctrl+M"),
+                      ui->actionVerifyMIB->shortcut() == QKeySequence("Ctrl+R"),
                       "menu reorganization preserves existing command shortcuts");
             }
             {

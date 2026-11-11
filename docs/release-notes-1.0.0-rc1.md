@@ -31,9 +31,10 @@ source has completed Windows/macOS CI or owner desktop acceptance.
   filter recovery messages and safer restored window/splitter geometry.
 
 Graphs/Qwt, Discovery and saved-device/Device Manager features are retired.
-Existing `agents.conf` is left untouched and is not migrated. Query Macros milestone 1 provides offline definition editing and storage;
-execution remains later work. See [the milestone record](query-macros-milestone-1.md); the temporary Multiple Varbinds
-workflow remains until a tested replacement is accepted.
+Existing `agents.conf` is left untouched and is not migrated. Query Macros (definitions, scalar and exact-instance reads, and table groups with
+all, fixed or chosen rows) replace the old Multiple Varbinds dialog, which is retired
+together with its SNMP menu and Ctrl+M shortcut. See [milestone 4](query-macros-milestone-4.md).
+Single-object Set is unchanged.
 
 The maintenance follow-up adds shared integer/octet DISPLAY-HINT presentation,
 ASCII/UTF-8 and standard textual-convention warnings, complete Counter64 range

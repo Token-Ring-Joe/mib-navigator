@@ -102,6 +102,8 @@ SnmpOperationStatus readRow(const SnmpRequestContext &context, const SnmpTablePl
             result.snmpErrorStatus = response.snmpErrorStatus;
             if (status == SnmpOperationStatus::TransportFailure && response.transportStatus)
                 result.problem = ExplainSnmpTransportFailure(response.transportStatus, context.config().securityName);
+            else if (status == SnmpOperationStatus::Timeout && result.requests == 1)
+                result.problem = ExplainSnmpTimeout(context.config());   // nothing answered yet
             break;
         }
         result.problem = ExplainSnmpReport(response.pdu, context.config().securityName);
@@ -254,6 +256,8 @@ SnmpOperationStatus Walker::refill(QList<int> need)
             result.snmpErrorStatus = response.snmpErrorStatus;
             if (response.status == SnmpOperationStatus::TransportFailure && response.transportStatus != 0)
                 fail(ExplainSnmpTransportFailure(response.transportStatus, context.config().securityName));
+            else if (response.status == SnmpOperationStatus::Timeout && result.requests == 1)
+                fail(ExplainSnmpTimeout(context.config()));   // nothing answered yet
             return response.status;
         }
 

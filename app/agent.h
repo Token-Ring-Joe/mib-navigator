@@ -34,7 +34,6 @@
 #include "snmpinstanceasyncrunner.h"
 #include "snmpwalkasyncrunner.h"
 #include "snmpsingleasyncrunner.h"
-#include "ui_varbinds.h"
 #include "snmp_pp/snmp_pp.h"
 
 class ConnectionBar;
@@ -97,8 +96,6 @@ private:
     void finishLog(const QString &resultHtml, int objectCount);
     quint64 startLog(const QString &name, const SnmpRequestConfig &config, const QString &oid);
     mutable ConnectionError lastConnectionError = ConnectionError::None;
-    QString GetValueString(MibSelection &ms, Vb* vb);
-    void VarbindsBuildList(void);
     void QueryTableFrom(const QString &oid, bool selectInstance);
     void StartTableQuery(const SnmpRequestContext &context, const SnmpTablePlan &plan, const QString &oid);
     void PresentTableResult(const SnmpTableResult &result);
@@ -128,25 +125,11 @@ public slots:
     void Stop(void);
     void TableViewFrom(const QString& oid);
     void TableRowSelectFrom(const QString& oid);
-    void Varbinds(void);
-    void VarbindsFrom(const QString& oid);
     void StopTimer(void);
     void Shutdown();
 
 protected slots:
     void TimerExpired(void);    
-    void VarbindsNew(void);
-    void VarbindsEdit(void);
-    void VarbindsDelete(void);
-    void VarbindsDeleteAll(void);
-    void VarbindsMoveUp(void);
-    void VarbindsMoveDown(void);
-    void VarbindsQuit(void);
-    void VarbindsGet(void);
-    void VarbindsGetNext(void);
-    void VarbindsGetBulk(void);
-    void VarbindsSet(void);
-    void VarbindsSelected(void);
 
 signals:
     void StartWalk(bool);
@@ -187,8 +170,6 @@ private:
     QString pendingInstanceOid;
     int pendingInstanceOperation = 0;
 
-    Ui_Varbinds *vbui = nullptr;
-    QDialog *vbd;
 };
 
 #endif /* AGENT_H */

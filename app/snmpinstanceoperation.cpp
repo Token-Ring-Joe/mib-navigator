@@ -67,6 +67,8 @@ SnmpInstanceResult SnmpInstanceOperation::execute(
                 if (response.status == SnmpOperationStatus::TransportFailure && response.transportStatus != 0)
                     result.problem = ExplainSnmpTransportFailure(response.transportStatus,
                                                                  requestContext.config().securityName);
+                else if (response.status == SnmpOperationStatus::Timeout && result.requests == 1)
+                    result.problem = ExplainSnmpTimeout(requestContext.config());   // nothing answered yet
                 return result;
             }
             const QString report = ExplainSnmpReport(response.pdu, requestContext.config().securityName);

@@ -56,6 +56,9 @@ does not authorize a commit, push, tag or publication.
    runs and grouped Results; table groups with all/prompt/fixed instances; then
    regressions, old Multiple Varbinds retirement and release validation.
    Estimate: **6–10 focused development days**, plus owner review/platform CI.
+   **Update 2026-11-11:** milestone 3 accepted by the owner ("It works"); milestone 4
+   implemented the same day: the Multiple Varbinds dialog, its SNMP menu and Ctrl+M are
+   retired ([milestone 4](query-macros-milestone-4.md)). Awaiting owner review.
    See [the agreed design](query-macros-v1-design.md). Single-object SET stays.
 6. **Global SNMPv3 context name — implemented 2026-11-07.** Preferences,
    persistence and captured UTF-8 request semantics are present. Per-query context
@@ -231,6 +234,19 @@ does not authorize a commit, push, tag or publication.
     as `getting-started.md`. The per-tab commands remain as unlisted actions so
     automated checks can open a page. Awaiting owner review.
 
+25. **Stability sweep, 2026-11-11 (item 10 of the release list).** Debug build under the
+    address sanitizer: 74/74 pass with leak detection off (the documented parser residuals);
+    strict leak checks with detection on pass for the new widgets and the changed Results,
+    macro, table and report code (6/6). The Qt difference between CI (6.10.3) and the VM
+    (6.11.2) is intentional and stays: CI cannot install 6.11.x with its current installer
+    action, 6.10 is the project minimum, so CI covers the oldest supported Qt and the VM the
+    newest; revisit when the installer supports 6.11.x. A headless startup against a copy of
+    the owner's real Extreme collection (1,263 files, 69 MB) completed in 24 s with a 240 MB
+    peak and no crash, but the smoke harness checks its own small fixtures, so this is not
+    evidence about how the Library and profiles handle the collection. Not done: a purpose-built
+    headless real-collection check (index counts, profile contents), and parser/scanner leak
+    work (item 12), which stays reserved for deliberate, compatibility-tested changes.
+
 ## Optional or conditional decisions, not scheduled commitments
 
 - **Compiled/persisted MIB data and Environment cache policy (step 15):** pursue
@@ -305,8 +321,9 @@ does not authorize a commit, push, tag or publication.
     a v3-specific timeout message (target, user, security level, likely causes, honest
     about what cannot be known) for Get/Get Next/Get Bulk/Set, for a Walk that never
     gets an answer, and for Detect; and the snmpUnknownContexts /
-    snmpUnavailableContexts reports. Table and instance-list timeouts still use their
-    short messages. Say
+    snmpUnavailableContexts reports. **Update 2026-11-11:** table, table-row and
+    instance-list requests that get no answer at all now give the same SNMPv3 explanation (a
+    device that answered first keeps the plain timeout). Say
     what was observed and what could not be known; do not guess when an agent
     sends no report. Test with a scripted transport.
   - *Missing-import message (rescoped by the owner, 2026-11-11):* diagnose only; do

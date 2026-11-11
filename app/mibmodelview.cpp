@@ -307,7 +307,6 @@ void MibModelView::contextMenuEvent(QContextMenuEvent *event)
     QAction *macroAction = menu.addAction(tr("Add to Selected Macro"));
     macroAction->setObjectName("QueryTreeAddMacro");
     macroAction->setEnabled(kind == NodeScalar || kind == NodeColumn || kind == NodeTable || kind == NodeRow);
-    QAction *varbindAction = menu.addAction(tr("Multiple Varbinds..."));
     menu.addSeparator();
     QAction *findAction = menu.addAction(tr("Find..."));
 
@@ -317,7 +316,6 @@ void MibModelView::contextMenuEvent(QContextMenuEvent *event)
     watchAction->setEnabled(leaf && queryPrerequisitesAvailable);
     setAction->setEnabled(leaf);
     tableMenu->setEnabled(queryTableAvailable() && !walkInProgress);
-    varbindAction->setEnabled(leaf);
 
     QAction *chosen = menu.exec(event->globalPos());
     if (!chosen) return;
@@ -339,7 +337,6 @@ void MibModelView::contextMenuEvent(QContextMenuEvent *event)
     else if (chosen == tableAction) emit TableViewFromOid(oid);
     else if (chosen == tableRowAction) emit TableRowSelectFromOid(oid);
     else if (chosen == macroAction) emit MacroFromOid(oid);
-    else if (chosen == varbindAction) emit VarbindsFromOid(oid);
     else if (chosen == findAction) {
         FindFromNode();
     }

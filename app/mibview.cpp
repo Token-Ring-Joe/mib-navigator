@@ -377,8 +377,6 @@ MibView::MibView (QWidget * parent) : BasicMibView(parent)
     connect(stopAct, SIGNAL(triggered()), this, SLOT(StopNode()));
     tableviewAct = new QAction(tr("Table View"), this);
     connect(tableviewAct, SIGNAL(triggered()), this, SLOT(TableViewFromNode()));
-    varbindsAct = new QAction(tr("Multiple Varbinds..."), this);
-    connect(varbindsAct, SIGNAL(triggered()), this, SLOT(VarbindsFromNode()));
 
     walkinprogress = false;
     agentisv1 = true; 
@@ -538,18 +536,6 @@ void MibView::TableViewFromNode(void)
     emit TableViewFromOid(((MibNode*)start)->GetOid());
 }
 
-void MibView::VarbindsFromNode(void)
-{
-    QTreeWidgetItem *start = NULL;
-    
-    // Could it be null ?
-    if ((start = currentItem()) == NULL)
-        return;
-    
-    QString oid(((MibNode*)start)->GetOid());
-    emit VarbindsFromOid(oid);
-}
-
 void MibView::SelectedNode( QTreeWidgetItem * item, QTreeWidgetItem *)
 {
     MibNode *node = (MibNode*)item;
@@ -646,11 +632,6 @@ void MibView::contextMenuEvent ( QContextMenuEvent *event)
         tableviewAct->setEnabled(true);
     else
         tableviewAct->setEnabled(false);
-    menu.addAction(varbindsAct);
-    if ((kind == MibNode::MIBNODE_COLUMN) || (kind == MibNode::MIBNODE_SCALAR))
-        varbindsAct->setEnabled(true);
-    else
-        varbindsAct->setEnabled(false);
     menu.addSeparator();
 
     menu.addAction(findAct);

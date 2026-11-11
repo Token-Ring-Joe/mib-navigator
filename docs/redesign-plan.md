@@ -166,7 +166,7 @@ vendor names or enterprise numbers. Mapping comes from the MIB collection.
 ### Target layout
 
 ```text
-File  Edit  View  MIB  SNMP  Settings  Help
+File  Edit  View  MIB  Settings  Help
 Target [...]  Credential [...]  MIB Profile [...] [Detect]   (activity) [Show panel]
 [Query] [MIBs] [Traps]
 Query: OID navigation and collection search; MIB tree | [Results] [Watch] [Macros] [Search when open] | Inspector

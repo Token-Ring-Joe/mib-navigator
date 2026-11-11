@@ -1640,7 +1640,6 @@ void Snmpb::TabSelected(void)
         connect( MainUI()->actionFindNext, SIGNAL( triggered() ),
                 w.MIBTree, SLOT( ExecuteFindNext() ) );
     }
-    MainUI()->actionMultipleVarbinds->setEnabled(true);
     if (currentTab == mibLibrary) {
         QElapsedTimer activationTimer; activationTimer.start();
         mibLibrary->activate();
