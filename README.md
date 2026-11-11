@@ -11,6 +11,24 @@ modern interface around it.
 > validation. Linux is validated locally; Windows and macOS are built and tested
 > by GitHub Actions.
 
+## Download
+
+Release-candidate builds are produced by GitHub Actions. Open the latest
+successful run and download the artifact for your platform from the
+**Artifacts** section at the bottom of the run page (a GitHub login is
+required).
+
+[Latest successful build](https://github.com/Token-Ring-Joe/mib-navigator/actions/workflows/build.yml?query=branch%3Amodernize%2Fqt6-cmake+is%3Asuccess)
+
+| Platform | Artifact name |
+|---|---|
+| Windows | `MIB-Navigator-1.0.0-rc1-windows-latest` |
+| macOS | `MIB-Navigator-1.0.0-rc1-macos-latest` |
+| Linux | `MIB-Navigator-1.0.0-rc1-ubuntu-latest` |
+
+These builds are unsigned, so Windows SmartScreen and macOS Gatekeeper will
+warn on first launch. Artifacts expire after 90 days.
+
 ## What it does
 
 - **Tolerant MIB parsing.** A patched libsmi loads vendor MIBs that stricter
