@@ -21,6 +21,7 @@ public:
     void selectMacro(const QString &id);
     bool addObject(QueryMacroEntry entry);
     void showError(const QString &message);
+    void showNote(const QString &message);
     void setQueryBusy(bool busy);
 signals:
     void runRequested(const QueryMacroDefinition &definition);
@@ -44,6 +45,7 @@ private:
     QPushButton *saveButton, *newButton, *duplicateButton, *deleteButton, *macroUp, *macroDown;
     QPushButton *addButton, *exactButton, *editButton, *duplicateEntryButton, *removeButton, *entryUp, *entryDown;
     QString localError;
+    QString localNote;   // what the last add did; shown until the definitions change again
     QPushButton *runButton;
     bool queryBusy = false;
 };

@@ -35,6 +35,14 @@ does not authorize a commit, push, tag or publication.
    trademark responsibilities, translations, version/RC labeling and native
    artifacts. Decide whether signing/notarization is required (currently absent).
    Tagging, publishing and pushes to `origin` or `nas` require owner instruction.
+   **Owner decision 2026-11-11: use the free options only.** Ship unsigned builds (no
+   paid Windows or Apple signing, so SmartScreen and Gatekeeper warnings stay and are
+   documented), plain archives from CI (zip on Windows and macOS, tar.gz on Linux), free
+   hosting through GitHub Releases, and Qt under its free (LGPL) terms with dynamic
+   linking and the notices already in NOTICE.md. Revisit signing only if the warnings
+   become a real obstacle. Still to do: a release workflow that attaches the archives to
+   a GitHub Release when a tag is pushed (the tag and the Release need owner
+   instruction), the naming/trademark check, and version labels.
 
 ## Planned features and refinements
 
@@ -278,6 +286,13 @@ does not authorize a commit, push, tag or publication.
     exports must not include credentials. Owner request (2026-11-11): the user
     chooses which columns to export (for example only Object and Value, without
     Module and Type); consider reusing the Results column-visibility setting.
+    Owner request (2026-11-11): from a Query Macro run, export **every result group
+    (objects and values plus each table) into one file**. Results show one group per
+    tab; the owner finds that fine but wants one export of all of them. Options to
+    decide: one CSV with a titled section per group (groups have different columns, so
+    sections are separated by a blank line and a title row), a JSON file with one
+    entry per group, or a spreadsheet (.xlsx would need a library). The per-group
+    column choice above should apply to each group.
   - *Walk-backed simulator:* answer GET/GETNEXT/GETBULK from a saved walk; needs a
     decision because saved-walk import is currently out of scope. **Status:
     completely deferred** (owner, 2026-11-11). If ever built, it would likely be a

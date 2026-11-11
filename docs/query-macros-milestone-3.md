@@ -57,3 +57,42 @@ The shared `SnmpTableAsyncRunner` and `SnmpInstanceAsyncRunner` now accept a new
 request as soon as the previous result was delivered (the pattern the single-read
 runner already used); previously a second request could be refused while the first
 thread was still exiting.
+
+## Owner feedback, 2026-11-11
+
+The owner reported three problems while testing:
+
+1. A table could not be added to an existing macro (it worked in a new macro).
+   They used the right-click command in the MIB tree. Nothing changed and no
+   message appeared.
+2. After adding a non-table object to that macro, only the non-table was shown.
+3. With several tables in one macro, only one table was ever shown.
+
+### What was found
+
+The first problem could **not** be reproduced from the code. The panel's tests
+already add a table to a macro that holds other entries, through the real
+object picker and the real tree command. The likely cause is silent feedback:
+adding a table the macro already holds (same row, same columns) merged into the
+existing entry with no change and no message, which looks exactly like a failed
+add. This is a hypothesis, not a confirmed cause. If it happens again with a
+table that is *not* already in the macro, please report the macro's entries and
+the status line.
+
+Problems 2 and 3 were a display issue. A macro run makes one result group for
+the objects and values and one more for each table, but Results showed only one
+group at a time through a small drop-down that was easy to miss.
+
+### What changed
+
+- Adding an object to a macro always says what happened in the macro's status
+  line: "Added … as a new entry", "Added N column(s) to the existing … table
+  group", or "… is already in … with those columns. Nothing was added."
+  Repeating an identical add no longer marks the macro as changed.
+- Results shows one **tab per group** (objects and values, then each table)
+  whenever a macro run has more than one group. The old drop-down is kept
+  hidden as the list the tabs mirror.
+
+Tests: `snmpb.query-macros-panel` (new messages) and `snmpb.query-results`
+(tabs follow the group list, clicking a tab shows that group, ordinary queries
+show no tabs). Awaiting owner review.

@@ -10,6 +10,7 @@
 #include <QEventLoop>
 #include <QElapsedTimer>
 #include <QHeaderView>
+#include <QTabBar>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
@@ -201,6 +202,18 @@ int main(int argc, char **argv)
         grid.rows = {first, second};
         panel.updateGroups({reads, grid}, "Table delivered");
         auto *groups = panel.findChild<QComboBox *>("ResultsGroup");
+        auto *tabs = panel.findChild<QTabBar *>("ResultsGroupTabs");
+        check(tabs && tabs->count() == 2 && !tabs->isHidden() && groups->isHidden() &&
+              tabs->tabText(0) == groups->itemText(0) && tabs->tabText(1) == groups->itemText(1),
+              "a macro with several groups shows one tab per group, so every group is visible");
+        if (tabs) {
+            tabs->setCurrentIndex(1);
+            check(groups->currentIndex() == 1 && panel.isTableResult(), "clicking a group tab shows that group");
+            tabs->setCurrentIndex(0);
+            check(groups->currentIndex() == 0 && !panel.isTableResult(), "clicking the first tab returns to the first group");
+            groups->setCurrentIndex(1);
+            check(tabs->currentIndex() == 1, "the tabs follow the group list when the group changes another way");
+        }
         groups->setCurrentIndex(1);
         check(panel.isTableResult() && table->rowCount() == 2 && table->columnCount() == 4 &&
               table->horizontalHeaderItem(1)->text() == "ifDescr" && table->item(1, 2)->data(QueryResultsPanel::MissingRole).toBool(),
@@ -230,6 +243,8 @@ int main(int argc, char **argv)
     check(panel.minimumSizeHint().width() <= 1024 && selector->minimumSizeHint().width() < 400,
         "long saved captions and captured names cannot force a wide main window");
     panel.beginQuery("Get after macro", "1.3.6.1");
+    check(panel.findChild<QTabBar *>("ResultsGroupTabs")->isHidden() && panel.findChild<QTabBar *>("ResultsGroupTabs")->count() == 0,
+        "an ordinary query shows no group tabs");
     check(selector->isHidden() && panel.findChild<QLabel *>("MacroRunContext")->isHidden() && table->rowCount() == 0,
         "ordinary queries retire grouped presentation without retaining old macro state");
     MibProblem problem; problem.module = "Vendor-MIB"; problem.file = QString::fromUtf8("/mibs/réseau.mib");

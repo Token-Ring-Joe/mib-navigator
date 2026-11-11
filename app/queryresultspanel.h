@@ -8,6 +8,7 @@
 #include <QWidget>
 
 class QComboBox;
+class QTabBar;
 class QHBoxLayout;
 class QLabel;
 class QLineEdit;
@@ -72,7 +73,8 @@ private:
     QTableWidget *results;
     QLabel *summary;
     QLabel *groupContext, *groupStatus;
-    QComboBox *groupSelector;
+    QComboBox *groupSelector;   // holds the group list; the tabs below are what the user sees
+    QTabBar *groupTabs;
     QList<QueryResultGroup> groups;
     QLineEdit *filter;
     QComboBox *display;

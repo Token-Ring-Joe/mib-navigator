@@ -168,7 +168,7 @@ QueryMacrosPanel::QueryMacrosPanel(QueryMacroService *s, ObjectPicker p, ObjectL
     });
     auto *reload = button(tr("Reload"), "QueryMacroReload", storage); storage->addStretch();
     saveButton->setToolTip(tr("Save all macro definitions and their order."));
-    connect(s, &QueryMacroService::changed, this, [this] { localError.clear(); refresh(); });
+    connect(s, &QueryMacroService::changed, this, [this] { localError.clear(); localNote.clear(); refresh(); });
     connect(s, &QObject::destroyed, this, [this] { refresh(); });
     connect(macros, &QListWidget::currentRowChanged, this, [this] { refresh(false); });
     connect(entries, &QTableWidget::itemSelectionChanged, this, &QueryMacrosPanel::updateEntryButtons);
@@ -200,6 +200,7 @@ void QueryMacrosPanel::selectMacro(const QString &id) {
     for (int i = 0; i < macros->count(); ++i) if (macros->item(i)->data(Qt::UserRole).toString() == id) { macros->setCurrentRow(i); return; }
 }
 void QueryMacrosPanel::showError(const QString &message) { localError = message; refresh(); }
+void QueryMacrosPanel::showNote(const QString &message) { localNote = message; refresh(); }
 void QueryMacrosPanel::refresh(bool rebuildList)
 {
     const QString id = selectedMacroId(), entryId = selectedEntryId();
@@ -241,6 +242,7 @@ void QueryMacrosPanel::refresh(bool rebuildList)
     runButton->setEnabled(!queryBusy && current && !current->entries.isEmpty());
     QString message = localError;
     if (message.isEmpty() && service) message = service->error();
+    if (message.isEmpty()) message = localNote;
     if (message.isEmpty()) message = service && service->dirty() ? tr("Unsaved changes — Save keeps all definitions and their order.") :
         macros->count() ? tr("All changes saved.") : tr("No macros yet. Choose New, then add MIB objects or exact numeric instances.");
     if (!editable) message += tr(" Existing files are preserved. Repair or move the file, then Reload.");
@@ -259,12 +261,23 @@ bool QueryMacrosPanel::addObject(QueryMacroEntry entry)
     QString error; if (!ValidateQueryMacroEntry(entry, &error)) { showError(error); return false; }
     QString id = selectedMacroId(); if (id.isEmpty()) { id = service->create(); selectMacro(id); }
     const auto macro = service->definition(id); if (!macro) { showError(tr("No editable macro is available; the collection may have reached its limit.")); return false; }
+    const QString subject = entry.label.isEmpty() ? entry.oid : entry.label;
     if (entry.kind == QueryMacroKind::Table) for (auto existing : macro->entries) {
         if (existing.kind != QueryMacroKind::Table || existing.oid != entry.oid) continue;
-        for (const auto &column : entry.columns) if (!existing.columns.contains(column)) existing.columns.append(column);
-        return service->putEntry(id, existing); // Same row only; AUGMENTS proof belongs to run planning.
+        int added = 0;
+        for (const auto &column : entry.columns) if (!existing.columns.contains(column)) { existing.columns.append(column); ++added; }
+        // Never a silent no-op: say what the macro already held, so a repeated add is not mistaken for a failure.
+        if (!added) {
+            showNote(tr("%1 is already in \"%2\" with those columns. Nothing was added.").arg(subject, macro->name));
+            return true;
+        }
+        const bool ok = service->putEntry(id, existing); // Same row only; AUGMENTS proof belongs to run planning.
+        if (ok) showNote(tr("Added %n column(s) to the existing %1 table group in \"%2\".", nullptr, added).arg(subject, macro->name));
+        return ok;
     }
-    return service->putEntry(id, entry);
+    const bool ok = service->putEntry(id, entry);
+    if (ok) showNote(tr("Added %1 to \"%2\" as a new entry.").arg(subject, macro->name));
+    return ok;
 }
 void QueryMacrosPanel::pickObject() {
     if (!picker || !service) return;

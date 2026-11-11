@@ -70,6 +70,22 @@ int main(int argc, char **argv)
     click(*panel, "QueryMacroAddObject");
     check(panel->selectedMacroId() == first, "object picker retains its originating macro across selection changes"); duringPick = {}; choice->columns = {"1.3.6.1.2.1.2.2.1.8"}; click(*panel, "QueryMacroAddObject");
     check(service->definition(first)->entries.size() == 4 && service->definition(first)->entries.last().columns.size() == 2, "same-row picks merge columns without duplicate table groups");
+    check(panel->findChild<QLabel *>("QueryMacroStatus")->text().contains("Added 1 column"), "merging a new column says so");
+    // Adding a table the macro already holds, with the same columns, must say so instead of looking like a failure.
+    click(*panel, "QueryMacroAddObject");
+    check(service->definition(first)->entries.size() == 4 && service->definition(first)->entries.last().columns.size() == 2 &&
+          panel->findChild<QLabel *>("QueryMacroStatus")->text().contains("already in") &&
+          panel->findChild<QLabel *>("QueryMacroStatus")->text().contains("Nothing was added"),
+          "adding a table that is already in the macro explains that nothing changed");
+    // A different table is a new entry and the panel says so.
+    {
+        auto other = table; other.id = QueryMacroNewId(); other.oid = "1.3.6.1.2.1.4.20.1"; other.columns = {"1.3.6.1.2.1.4.20.1.2"}; other.label = "IP-MIB::ipAddrEntry";
+        const auto savedChoice = choice; choice = other; click(*panel, "QueryMacroAddObject");
+        check(service->definition(first)->entries.size() == 5 &&
+              panel->findChild<QLabel *>("QueryMacroStatus")->text().contains("as a new entry"),
+              "a second, different table becomes its own entry and the panel says so");
+        service->removeEntry(first, other.id); choice = savedChoice;
+    }
     rows->selectRow(3);
     QTimer::singleShot(0, &window, [&] {
         auto *d = dialog(); check(d != nullptr, "table editor opens"); if (!d) return;

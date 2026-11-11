@@ -5,6 +5,7 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QComboBox>
+#include <QTabBar>
 #include <QFontDatabase>
 #include <QHeaderView>
 #include <QHBoxLayout>
@@ -77,6 +78,19 @@ QueryResultsPanel::QueryResultsPanel(QWidget *parent) : QWidget(parent)
     groupSelector->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     groupSelector->setMinimumContentsLength(16);
     groupSelector->setAccessibleName(tr("Result group")); groupSelector->hide(); layout->addWidget(groupSelector);
+    // A macro with several groups (objects and values, then one grid per table) shows one group at a
+    // time. A row of tabs makes every group visible and one click away; the combo box stays as the list
+    // the tabs mirror.
+    groupTabs = new QTabBar(this); groupTabs->setObjectName("ResultsGroupTabs");
+    groupTabs->setExpanding(false); groupTabs->setUsesScrollButtons(true); groupTabs->setElideMode(Qt::ElideRight);
+    groupTabs->setDrawBase(true); groupTabs->setAccessibleName(tr("Result group")); groupTabs->hide(); layout->addWidget(groupTabs);
+    connect(groupTabs, &QTabBar::currentChanged, this, [this](int index) {
+        if (index >= 0 && index != groupSelector->currentIndex()) groupSelector->setCurrentIndex(index);
+    });
+    connect(groupSelector, &QComboBox::currentIndexChanged, this, [this](int index) {
+        const QSignalBlocker blocker(groupTabs);
+        if (index >= 0 && index < groupTabs->count()) groupTabs->setCurrentIndex(index);
+    });
     groupStatus = new QLabel(this); groupStatus->setObjectName("ResultsGroupStatus");
     groupStatus->setTextFormat(Qt::PlainText); groupStatus->setWordWrap(true);
     groupStatus->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred); groupStatus->hide(); layout->addWidget(groupStatus);
@@ -146,6 +160,8 @@ void QueryResultsPanel::configure(bool table, const QStringList &columns)
 void QueryResultsPanel::beginQuery(const QString &object, const QString &oid)
 {
     groups.clear(); groupSelector->hide(); groupContext->hide(); groupStatus->hide();
+    { const QSignalBlocker blocker(groupTabs); while (groupTabs->count()) groupTabs->removeTab(0); }
+    groupTabs->hide();
     queryObject = object; queryOid = oid; finishedMs = -1; elapsed.start();
     configure(false); filter->clear(); warnings = 0; emit warningsChanged(0);
     if (auto *status = findChild<QLabel *>("StructuredQueryStatus")) { status->clear(); status->hide(); }
@@ -245,6 +261,7 @@ void QueryResultsPanel::beginGroups(const QString &name, const QString &captured
 {
     beginQuery(name, {});
     { const QSignalBlocker blocker(groupSelector); groupSelector->clear(); }
+    { const QSignalBlocker blocker(groupTabs); while (groupTabs->count()) groupTabs->removeTab(0); }
     groupContext->setText(captured); groupContext->setToolTip(captured); groupContext->show();
 }
 void QueryResultsPanel::updateGroups(const QList<QueryResultGroup> &incoming, const QString &status, bool failed)
@@ -263,8 +280,16 @@ void QueryResultsPanel::updateGroups(const QList<QueryResultGroup> &incoming, co
         }
         const int index = groupSelector->findData(selected);
         groupSelector->setCurrentIndex(index >= 0 ? index : 0);
+        const QSignalBlocker tabsBlocked(groupTabs);
+        while (groupTabs->count()) groupTabs->removeTab(0);
+        for (const auto &group : groups) {
+            groupTabs->addTab(group.name);
+            groupTabs->setTabToolTip(groupTabs->count() - 1, group.name);
+        }
+        groupTabs->setCurrentIndex(groupSelector->currentIndex());
     }
-    groupSelector->setVisible(!groups.isEmpty());
+    groupSelector->setVisible(false);
+    groupTabs->setVisible(groups.size() > 1);
     if (auto *label = findChild<QLabel *>("StructuredQueryStatus")) {
         label->setProperty("failed", failed); label->setText(status); label->show();
     }
