@@ -3,6 +3,7 @@ name: Cross-platform build
 on:
   push:
     branches: [main, modernize/qt6-cmake]
+    tags: ['v*']
   pull_request:
 
 jobs:
@@ -51,3 +52,29 @@ jobs:
           name: MIB-Navigator-1.0.0-rc1-${{ matrix.os }}
           path: build-ci/packages/MIB-Navigator-1.0.0-rc1-*
           if-no-files-found: error
+
+  # Publishes the archives from a tag push (for example v1.0.0-rc.1) as a GitHub
+  # Release. A tag containing "-rc", "-beta" or "-alpha" is marked pre-release.
+  # Only runs after every platform built and passed its tests.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-files
+          merge-multiple: true
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          flags=""
+          case "$TAG" in *-rc*|*-beta*|*-alpha*) flags="--prerelease" ;; esac
+          ls -l release-files
+          gh release create "$TAG" release-files/* --repo "${{ github.repository }}" \
+            --title "MIB Navigator $TAG" $flags \
+            --notes "Unsigned builds for Windows, macOS and Linux. See docs/getting-started.md for first launch steps (SmartScreen and Gatekeeper warn on unsigned apps)."

@@ -132,6 +132,6 @@ This is a release candidate (1.0.0-rc1).
   and saved-walk browsing were retired from SnmpB.
 - Translations are not complete; the interface is English.
 
-Project page: <https://github.com/Token-Ring-Joe/mib-navigator>. When you report a
-problem, include your platform, the version from **Help > About**, and the exact
+Project page: <https://github.com/Token-Ring-Joe/mib-navigator>. To report a
+problem, open an issue on the project page and include your platform, the version from **Help > About**, and the exact
 message. Do not share credentials or confidential MIBs.

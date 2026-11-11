@@ -13,21 +13,14 @@ modern interface around it.
 
 ## Download
 
-Release-candidate builds are produced by GitHub Actions. Open the latest
-successful run and download the artifact for your platform from the
-**Artifacts** section at the bottom of the run page (a GitHub login is
-required).
-
-[Latest successful build](https://github.com/Token-Ring-Joe/mib-navigator/actions/workflows/build.yml?query=branch%3Amodernize%2Fqt6-cmake+is%3Asuccess)
-
-| Platform | Artifact name |
-|---|---|
-| Windows | `MIB-Navigator-1.0.0-rc1-windows-latest` |
-| macOS | `MIB-Navigator-1.0.0-rc1-macos-latest` |
-| Linux | `MIB-Navigator-1.0.0-rc1-ubuntu-latest` |
+Release-candidate builds for Windows, macOS and Linux are on the
+[Releases page](https://github.com/Token-Ring-Joe/mib-navigator/releases). No
+GitHub login is needed to download them.
 
 These builds are unsigned, so Windows SmartScreen and macOS Gatekeeper will
-warn on first launch. Artifacts expire after 90 days.
+warn on first launch; [Getting started](docs/getting-started.md) explains how
+to continue. Bug reports and questions go in
+[Issues](https://github.com/Token-Ring-Joe/mib-navigator/issues).
 
 ## What it does
 
