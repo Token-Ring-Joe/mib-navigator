@@ -17,10 +17,78 @@ Release-candidate builds for Windows, macOS and Linux are on the
 [Releases page](https://github.com/Token-Ring-Joe/mib-navigator/releases). No
 GitHub login is needed to download them.
 
-These builds are unsigned, so Windows SmartScreen and macOS Gatekeeper will
-warn on first launch; [Getting started](docs/getting-started.md) explains how
-to continue. Bug reports and questions go in
+Bug reports and questions go in
 [Issues](https://github.com/Token-Ring-Joe/mib-navigator/issues).
+
+## Installation
+
+Download the archive for your platform from the
+[Releases page](https://github.com/Token-Ring-Joe/mib-navigator/releases), unpack
+it anywhere, and run the program. There is no installer and nothing is written
+outside the folder you unpack, apart from your settings and the application
+data folder.
+
+| Platform | Archive |
+|---|---|
+| Windows (x64) | `MIB-Navigator-<version>-windows-x64.zip` |
+| macOS (Apple Silicon, arm64) | `MIB-Navigator-<version>-macos-arm64.tar.gz` |
+| Linux (x86_64) | `MIB-Navigator-<version>-linux-x86_64.tar.gz` |
+
+The builds are unsigned, so Windows and macOS warn on first launch. This is
+expected.
+
+### Windows
+
+1. Unzip the archive (right-click, **Extract All**).
+2. Open the extracted folder, then `bin`, and run `mib-navigator.exe`.
+3. If SmartScreen says "Windows protected your PC", choose **More info**, then
+   **Run anyway**.
+
+Qt and the other libraries are included.
+
+### macOS
+
+Apple Silicon (M1 or newer) only. Intel Macs are not supported by this build.
+
+1. Unpack the archive by double-clicking it, or in Terminal:
+   `tar xzf MIB-Navigator-<version>-macos-arm64.tar.gz`
+2. Drag `MIB Navigator.app` to **Applications** (optional).
+3. Right-click the app, choose **Open**, then **Open** again in the warning
+   dialog. After that it starts normally.
+
+If macOS says the app is damaged, it has been quarantined by the download. Clear
+that flag and try again:
+
+```bash
+xattr -dr com.apple.quarantine "MIB Navigator.app"
+```
+
+Qt is included.
+
+### Linux
+
+```bash
+tar xzf MIB-Navigator-<version>-linux-x86_64.tar.gz
+cd MIB-Navigator-<version>-linux-x86_64/bin
+./mib-navigator
+```
+
+Unlike the other platforms, the Linux archive does **not** include Qt. It needs
+Qt 6.10 or newer (Core, Widgets, Network, Svg) and the usual desktop libraries
+installed on your system. Check what is missing with:
+
+```bash
+ldd ./mib-navigator | grep "not found"
+```
+
+If your distribution's Qt 6 packages are older than 6.10, install a newer Qt from
+the [Qt online installer](https://www.qt.io/download-qt-installer) and point the
+program at it, for example
+`LD_LIBRARY_PATH=$HOME/Qt/6.10.0/gcc_64/lib ./mib-navigator`, or
+[build from source](#building).
+
+After the first start, add your MIBs and pick a profile as described in
+[Getting started](docs/getting-started.md).
 
 ## What it does
 
