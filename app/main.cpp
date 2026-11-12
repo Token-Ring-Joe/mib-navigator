@@ -617,13 +617,14 @@ int main( int argc, char ** argv )
                   "the MIB tree and its filter are a permanent left pane beside the middle tabs");
             check(workbenchDocuments && outputPage && queryDocuments &&
                   !workbenchDocuments->tabBar()->isHidden() && !workbenchDocuments->tabsClosable() &&
-                  workbenchDocuments->count() == 3 && workbenchDocuments->tabText(0) == "Query" &&
+                  workbenchDocuments->count() == 4 && workbenchDocuments->tabText(0) == "Query" &&
                   workbenchDocuments->tabText(1) == "MIBs" && workbenchDocuments->tabText(2) == "Traps" &&
+                  workbenchDocuments->tabText(3) == "Log" &&
                   queryDocuments->count() == 3 && queryDocuments->tabText(1) == "Watch" && queryDocuments->tabText(2) == "Macros" &&
                   queryDocuments->widget(0) == resultsPage && !queryDocuments->tabBar()->isHidden() &&
                   outputPage->isAncestorOf(snmpb.MainUI()->Query) &&
                   outputPage->isAncestorOf(mw.findChild<QPushButton *>("OutputClear")),
-                  "permanent Query, MIBs and Traps tabs; Query contains Results, Watch and Macros");
+                  "permanent Query, MIBs, Traps and Log tabs; Query contains Results, Watch and Macros");
             if (smoke_macros) {
                 auto *panel = mw.findChild<QueryMacrosPanel *>("QueryMacrosPanel");
                 auto *service = snmpb.findChild<QueryMacroService *>("QueryMacroService");
@@ -697,12 +698,14 @@ int main( int argc, char ** argv )
                     mw.findChild<QAction *>("ViewResults")->trigger();
                 }
             }
-            check(bottomTabs && resultsPage && bottomTabs->count() == 3 &&
+            check(bottomTabs && resultsPage && bottomTabs->count() == 2 &&
                   bottomTabs->tabText(0) == "Output" && bottomTabs->widget(0) == outputPage &&
                   resultsPage->isAncestorOf(mw.findChild<QTableWidget *>("StructuredQueryResults")) &&
-                  bottomTabs->tabText(1) == "Log" &&
-                  workbenchDocuments->widget(2) == snmpb.MainUI()->TrapsTab,
-                  "shared panel contains Output and Log, with Problems restricted to MIBs; Traps is a workspace");
+                  bottomTabs->tabText(1).startsWith("Problems") &&
+                  workbenchDocuments->widget(2) == snmpb.MainUI()->TrapsTab &&
+                  workbenchDocuments->tabText(3) == "Log" &&
+                  workbenchDocuments->widget(3) == mw.findChild<QWidget *>("WorkbenchLogPage"),
+                  "bottom panel contains Output and Problems (Problems restricted to MIBs); Traps and Log are workspaces");
             {
                 // Problems belongs to MIBs; Library, Profiles and Editor are peers within MIBs.
                 QTabWidget *libraryTabs = snmpb.MibLibraryObj()->findChild<QTabWidget *>("MibLibraryTabs");
@@ -710,7 +713,7 @@ int main( int argc, char ** argv )
                 QLabel *problemHeading = mw.findChild<QLabel *>("WorkbenchProblemHeading");
                 check(libraryTabs && problemsPage && libraryTabs->count() == 3 && libraryTabs->tabText(2) == "Editor" &&
                       libraryTabs->widget(2) == snmpb.MainUI()->EditorTab && bottomTabs &&
-                      bottomTabs->widget(2) == problemsPage && libraryTabs->indexOf(problemsPage) < 0 &&
+                      bottomTabs->widget(1) == problemsPage && libraryTabs->indexOf(problemsPage) < 0 &&
                       problemHeading && problemHeading->text().startsWith("Problems loading ") &&
                       problemHeading->text() != "Problems loading the active MIB profile",
                       "Problems is a bottom tab headed with the active profile's name");
@@ -979,7 +982,7 @@ int main( int argc, char ** argv )
                         smokeLibraryTabsY = libraryTabs->tabBar()->mapTo(&mw, QPoint()).y();
                     mw.grab().save(QDir(smoke_config_dir).filePath("mibs-workspace.png"));
                     QWidget *queryRow = mw.findChild<QWidget *>("QueryToolBar");
-                    check(workbenchDocuments->count() == 3 &&
+                    check(workbenchDocuments->count() == 4 &&
                           workbenchDocuments->currentWidget() == snmpb.MibLibraryObj() &&
                           workbenchDocuments->tabText(1) == "MIBs",
                           "View > MIB Library selects the permanent MIBs workspace");
@@ -988,7 +991,7 @@ int main( int argc, char ** argv )
                           mw.findChild<QWidget *>("ConnectionBar")->isVisibleTo(&mw),
                           "MIBs fills the workspace; Query tools hide and shared panel state is preserved");
                     viewLibrary->trigger();
-                    check(workbenchDocuments->count() == 3, "workspace navigation does not duplicate tabs");
+                    check(workbenchDocuments->count() == 4, "workspace navigation does not duplicate tabs");
                     viewOutput->trigger();
                     QCoreApplication::processEvents();
                     check(workbenchDocuments->currentIndex() == 0 &&

@@ -1,4 +1,4 @@
-# MIB Navigator 1.0.0-rc2 release notes
+# MIB Navigator release notes (current release candidate)
 
 Current redesign checkpoint: 2026-11-07. The application is in final usability
 and release validation. The RC label does not imply that the current uncommitted

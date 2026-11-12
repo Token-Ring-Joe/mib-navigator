@@ -6,8 +6,8 @@ establish the contents or validation status of a new platform package.
 
 | Component | Source/toolchain version | Repository material | Current Linux archive |
 |---|---|---|---|
-| MIB Navigator, derived from SnmpB | 1.0.0-rc2 | GPL-2.0-or-later; `license.txt`, source notices and `NOTICE.md` | executable and GPL text |
-| Qt | VM 6.11.2; project minimum 6.10; CI configured for 6.10.3 | external system/SDK Qt; module licensing depends on the selected distribution | dynamically linked Core, Gui, Widgets, Network and Svg; system runtime/plugins required |
+| MIB Navigator, derived from SnmpB | current release (Help > About) | GPL-2.0-or-later; `license.txt`, source notices and `NOTICE.md` | executable and GPL text |
+| Qt | VM 6.11.2; project minimum 6.10; release archives bundle 6.10.3 (CI) | external system/SDK Qt; module licensing depends on the selected distribution | dynamically linked Core, Gui, Widgets, Network and Svg; system runtime/plugins required |
 | libsmi | 0.5.0, locally patched | `libsmi/COPYING` | static application dependency; license included |
 | SNMP++ | 3.3.10 | `snmp++/LICENSE` and source notices | static application dependency; notice included |
 | LibTomCrypt | 1.17 | `libtomcrypt/LICENSE` | static application dependency; license included |
@@ -23,6 +23,28 @@ checks establish operation on the validated VM; they do not establish compatibil
 with older glibc/libstdc++ versions or every Linux distribution. Exact linked files,
 package versions, hashes and packaged license files are retained with the latest
 [maintenance validation](maintenance-five-validation.md).
+
+### Binaries bundled in the release archives (verified 2026-11-12 against 1.0.0-rc2)
+
+| Archive | Qt | Bundled |
+|---|---|---|
+| Windows x64 | 6.10.3 (MSVC 2022), dynamic | Qt6 Core, Gui, Widgets, Network, Svg; plugins for platform (windows, offscreen), styles, TLS (Schannel), network information, SVG icons and image formats (SVG, JPEG, ICO, GIF), generic touch input |
+| macOS arm64 | 6.10.3 (Apple clang), dynamic | QtCore, QtDBus, QtGui, QtNetwork, QtSvg, QtWidgets frameworks; plugins for platform (cocoa), styles, TLS, network information, SVG icons and image formats |
+| Linux x86_64 | uses system Qt 6.10 or newer | none bundled |
+
+Three further DLLs ship in the Windows archive, copied by Qt's deployment tool. They are
+not Qt and not covered by Qt's licence inventories:
+
+| File | What it is | Terms |
+|---|---|---|
+| `D3Dcompiler_47.dll` | Microsoft Direct3D shader compiler | Microsoft redistributable; not open source |
+| `opengl32sw.dll` | Mesa llvmpipe software OpenGL fallback | MIT (Mesa) |
+| `icuuc.dll` | ICU common library forwarder stub | ICU / Unicode licence |
+
+Qt itself carries smaller third-party libraries (for example under MIT, BSD-3-Clause and
+Zlib terms); they are itemised in the Qt inventories that the Windows and macOS
+archives install under `share/snmpb/licenses/Qt/`. The LGPL-3.0 and GPL-3.0 texts install
+beside them, and `NOTICE.md` explains the linking and where to get Qt's source.
 
 Windows and macOS deployment uses Qt's native deployment tooling. Each new native
 artifact requires its own dependency/plugin inventory and CI/desktop validation.

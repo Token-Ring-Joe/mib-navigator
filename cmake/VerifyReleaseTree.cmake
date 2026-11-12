@@ -11,13 +11,15 @@ set(required_files
     "share/snmpb/licenses/libsmi/COPYING"
     "share/snmpb/licenses/LibTomCrypt/LICENSE"
     "share/snmpb/licenses/SNMP++/LICENSE"
+    "share/snmpb/licenses/Qt/LGPL-3.0.txt"
+    "share/snmpb/licenses/Qt/GPL-3.0.txt"
     "share/snmpb/licenses/icons/open-iconic/LICENSE.txt"
     "share/snmpb/licenses/icons/devicons/LICENSE.txt"
     "share/snmpb/licenses/icons/feathericons/LICENSE.txt"
     "share/snmpb/licenses/icons/ionicons/LICENSE.txt"
     "portable-package-readme.txt"
     "release-candidate-validation.md"
-    "release-notes-1.0.0-rc2.md"
+    "release-notes.md"
     "getting-started.md"
     "security.md"
     "settings-schema.md"
@@ -58,6 +60,14 @@ else()
         "share/snmpb/pibs/COPS-PR-SPPI"
     )
     set(mib_root "share/snmpb")
+endif()
+
+# The archives that bundle Qt (Windows, macOS) must also carry Qt's own licence inventories.
+if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows" OR CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
+    file(GLOB qt_inventories "${root}/share/snmpb/licenses/Qt/qtbase-*.spdx")
+    if(NOT qt_inventories)
+        message(FATAL_ERROR "A Qt-bundling release must include the Qt licence inventories (share/snmpb/licenses/Qt/qtbase-*.spdx)")
+    endif()
 endif()
 
 foreach(relative_path IN LISTS required_files)

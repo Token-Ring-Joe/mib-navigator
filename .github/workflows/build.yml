@@ -46,11 +46,15 @@ jobs:
         run: cpack --config build-ci/CPackConfig.cmake -C Release -B build-ci/packages
       - name: Verify extracted release-candidate archive
         run: cmake -DSNMPB_PACKAGE_DIR="${{ github.workspace }}/build-ci/packages" -DSNMPB_EXTRACT_DIR="${{ github.workspace }}/build-ci/extracted-package" -P cmake/VerifyReleaseArchive.cmake
+      - name: Read release label
+        id: label
+        shell: bash
+        run: echo "label=$(cmake -P cmake/PrintReleaseLabel.cmake)" >> "$GITHUB_OUTPUT"
       - name: Upload release-candidate artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MIB-Navigator-1.0.0-rc2-${{ matrix.os }}
-          path: build-ci/packages/MIB-Navigator-1.0.0-rc2-*
+          name: MIB-Navigator-${{ steps.label.outputs.label }}-${{ matrix.os }}
+          path: build-ci/packages/MIB-Navigator-${{ steps.label.outputs.label }}-*
           if-no-files-found: error
 
   # Publishes the archives from a tag push (for example v1.0.0-rc.2) as a GitHub
@@ -63,6 +67,18 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+      - name: Check the tag matches the release label
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          label=$(cmake -P cmake/PrintReleaseLabel.cmake)
+          # v1.0.0-rc.2 and 1.0.0-rc2 are the same release: drop the "v" and the dot after -rc/-beta/-alpha
+          expected=$(echo "${TAG#v}" | sed -E 's/-(rc|beta|alpha)\./-\1/')
+          if [ "$expected" != "$label" ]; then
+            echo "Tag $TAG does not match the release label $label (cmake/ReleaseLabel.cmake). Fix the label or the tag." >&2
+            exit 1
+          fi
       - uses: actions/download-artifact@v4
         with:
           path: release-files

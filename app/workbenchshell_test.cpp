@@ -113,6 +113,9 @@ int main(int argc, char **argv)
     auto *watchContent = new QLineEdit(pages.watch);
     watchContent->setObjectName("watchContent"); pages.watch->setProperty("workbenchFocusTarget", QStringLiteral("watchContent"));
     editorContent->setObjectName("editorContent"); pages.editor->setProperty("workbenchFocusTarget", QStringLiteral("editorContent"));
+    pages.log = new QWidget;
+    auto *logContent = new QLineEdit(pages.log);
+    logContent->setObjectName("logContent"); pages.log->setProperty("workbenchFocusTarget", QStringLiteral("logContent"));
     pages.search = new QWidget(&window);
     auto *treePane = new QWidget(oldTreeTab);
     auto *tree = new QTreeView(treePane);
@@ -122,7 +125,6 @@ int main(int argc, char **argv)
     window.setCentralWidget(root);
     WorkbenchShell::BottomPages bottom;
     bottom.output = new QWidget;
-    bottom.log = new QWidget;
     bottom.problems = new QWidget;
     auto *inspector = new QWidget;
     auto *inspectorContent = new QLineEdit(inspector); inspectorContent->setObjectName("inspectorContent"); inspector->setProperty("workbenchFocusTarget", QStringLiteral("inspectorContent"));
@@ -140,16 +142,17 @@ int main(int argc, char **argv)
     auto *bottomTabs = window.findChild<QTabWidget *>("WorkbenchBottomTabs");
     auto *button = window.findChild<QToolButton *>("WorkbenchPanelToggle");
     auto *status = window.findChild<QLabel *>("WorkbenchActivityStatus");
-    check(documents->count() == 3 && documents->tabText(0) == "Query" &&
-          documents->tabText(1) == "MIBs" && documents->tabText(2) == "Traps" && !documents->tabsClosable() &&
+    check(documents->count() == 4 && documents->tabText(0) == "Query" &&
+          documents->tabText(1) == "MIBs" && documents->tabText(2) == "Traps" &&
+          documents->tabText(3) == "Log" && documents->widget(3) == pages.log && !documents->tabsClosable() &&
           !documents->tabBar()->isHidden(), "permanent top-level workspace tabs");
     check(query && query->count() == 3 && query->widget(0) == pages.results &&
           query->widget(1) == pages.watch && query->widget(2) == pages.macros && !query->tabBar()->isHidden(), "Query contains Results, Watch and Macros");
     check(shell.treeSplitter()->count() == 2 && shell.treeSplitter()->widget(0) == treePane &&
           shell.treeSplitter()->widget(1) == query, "tree and Results belong to Query");
-    check(bottomTabs && bottomTabs->count() == 3 && bottomTabs->widget(0) == bottom.output &&
-          bottomTabs->widget(1) == bottom.log && bottomTabs->widget(2) == bottom.problems &&
-          !bottomTabs->isTabVisible(2), "shared panel pages and conditional Problems");
+    check(bottomTabs && bottomTabs->count() == 2 && bottomTabs->widget(0) == bottom.output &&
+          bottomTabs->widget(1) == bottom.problems && !bottomTabs->isTabVisible(1) &&
+          bottomTabs->indexOf(pages.log) < 0, "bottom panel holds Output and conditional Problems; Log is a workspace");
     check(shell.bottomDock()->isHidden() && button && !button->isChecked() &&
           button->text() == "Operations", "panel starts collapsed with a visible toggle");
     check(shell.header()->isAncestorOf(header) && !shell.header()->isMovable() &&
@@ -169,7 +172,7 @@ int main(int argc, char **argv)
               shell.inspectorDock()->isHidden() && !queryRow->isVisibleTo(&window), "Editor is nested under MIBs");
         shell.openDocument(pages.traps);
         shell.openDocument(pages.watch);
-        check(documents->currentIndex() == 0 && query->currentWidget() == pages.watch && documents->count() == 3 &&
+        check(documents->currentIndex() == 0 && query->currentWidget() == pages.watch && documents->count() == 4 &&
               shell.bottomDock()->isHidden() && header->isVisibleTo(&window),
               "workspace navigation keeps header and collapsed panel state");
         shell.showResults();
@@ -193,7 +196,7 @@ int main(int argc, char **argv)
     shell.closeDocument(pages.library);
     shell.closeDocument(pages.watch);
     shell.closeDocument(pages.macros);
-    check(query->count() == 3 && documents->count() == 3, "permanent pages cannot close");
+    check(query->count() == 3 && documents->count() == 4, "permanent pages cannot close");
     if (auto *macrosAction = window.findChild<QAction *>("ViewMacros")) macrosAction->trigger();
     check(query->currentWidget() == pages.macros && documents->currentIndex() == 0, "View opens the existing Query-local Macros page");
     shell.openDocument(pages.search);
@@ -221,7 +224,7 @@ int main(int argc, char **argv)
     for (QWidget *page : {pages.traps, pages.watch, pages.results, pages.editor}) {
         shell.openDocument(page);
         const bool inMibs = documents->currentWidget() == pages.library;
-        check(!shell.bottomDock()->isHidden() && bottomTabs->isTabVisible(2) == inMibs &&
+        check(!shell.bottomDock()->isHidden() && bottomTabs->isTabVisible(1) == inMibs &&
               bottomTabs->currentWidget() == (inMibs ? bottom.problems : bottom.output),
               "Problems is MIB-only and each workspace restores its own panel selection");
     }
@@ -232,17 +235,17 @@ int main(int argc, char **argv)
     check(shell.bottomDock()->isHidden() && bottomTabs->currentWidget() == bottom.problems,
           "new results and errors leave a collapsed panel collapsed");
     shell.showResults();
-    shell.showBottomPage(bottom.log);
+    shell.showBottomPage(bottom.output);
     shell.setPanelExpanded(false);
     shell.savePresentationState();
-    check(QSettings().value("workbench/panel-tab").toString() == "log" &&
+    check(QSettings().value("workbench/panel-tab").toString() == "output" &&
           !QSettings().value("workbench/panel-visible").toBool() &&
           QSettings().value("workbench/panel-height").toInt() >= 130 && expandedHeight >= 130,
           "panel selection, collapsed state and useful height persist");
     shell.showBottomPage(bottom.output);
     shell.restorePresentationState();
     check(documents->currentIndex() == 0 && shell.bottomDock()->isHidden() &&
-          bottomTabs->currentWidget() == bottom.log, "restore uses stable panel ID and starts on Query");
+          bottomTabs->currentWidget() == bottom.output, "restore uses stable panel ID and starts on Query");
     shell.showBottomPage(bottom.output);
     shell.savePresentationState();
     check(QSettings().value("workbench/panel-tab").toString() == "output",
@@ -269,7 +272,7 @@ int main(int argc, char **argv)
     check(shell.bottomDock()->height() >= 130, "invalid persisted height is bounded");
     shell.setBottomPageVisible(bottom.problems, false);
     shell.showBottomPage(bottom.problems);
-    check(bottomTabs->isTabVisible(2), "explicit View Problems works even with no current problems");
+    check(bottomTabs->isTabVisible(1), "explicit View Problems works even with no current problems");
     shell.setBottomPageVisible(bottom.problems, false);
     check(bottomTabs->currentWidget() != bottom.problems, "hidden Problems releases selection");
     {
@@ -285,24 +288,24 @@ int main(int argc, char **argv)
           QSettings().value("workbench/mib-panel-tab").toString() == "problems",
           "normal save migrates a pending Problems preference to the MIB-specific key");
     shell.setBottomPageVisible(bottom.problems, true);
-    check(documents->currentIndex() == 0 && !bottomTabs->isTabVisible(2) &&
+    check(documents->currentIndex() == 0 && !bottomTabs->isTabVisible(1) &&
           bottomTabs->currentWidget() == bottom.output && shell.bottomDock()->isHidden(),
           "initial report cannot expose Problems in Query or expand the panel");
     shell.openDocument(pages.editor);
-    check(bottomTabs->currentWidget() == bottom.problems && bottomTabs->isTabVisible(2) &&
+    check(bottomTabs->currentWidget() == bottom.problems && bottomTabs->isTabVisible(1) &&
           shell.bottomDock()->isHidden(), "entering MIBs restores its saved Problems selection");
     shell.showResults();
-    shell.showBottomPage(bottom.log);
+    shell.showBottomPage(bottom.output);
     shell.savePresentationState();
     shell.restorePresentationState();
-    check(bottomTabs->currentWidget() == bottom.log && !bottomTabs->isTabVisible(2),
-          "restart restores Query Log without exposing MIB Problems");
+    check(bottomTabs->currentWidget() == bottom.output && !bottomTabs->isTabVisible(1),
+          "restart restores the Query panel page without exposing MIB Problems");
     shell.openDocument(pages.library);
     check(bottomTabs->currentWidget() == bottom.problems,
-          "MIB Problems selection survives saving and restarting from Query Log");
+          "MIB Problems selection survives saving and restarting from Query");
     shell.setBottomPageVisible(bottom.problems, false);
     shell.restorePresentationState();
-    shell.showBottomPage(bottom.log);
+    shell.showBottomPage(bottom.output);
     shell.setBottomPageVisible(bottom.problems, true);
     shell.openDocument(pages.library);
     check(bottomTabs->currentWidget() != bottom.problems,
@@ -317,7 +320,7 @@ int main(int argc, char **argv)
     shell.openDocument(pages.traps);
     shell.setPanelExpanded(false);
     shell.setBottomPageVisible(bottom.problems, true);
-    check(documents->currentWidget() == pages.traps && !bottomTabs->isTabVisible(2) &&
+    check(documents->currentWidget() == pages.traps && !bottomTabs->isTabVisible(1) &&
           shell.bottomDock()->isHidden(), "background reports cannot expose Problems in Traps");
     shell.showBottomPage(bottom.problems);
     check(documents->currentWidget() == pages.library && mibTabs->currentWidget() == pages.editor &&
@@ -338,7 +341,7 @@ int main(int argc, char **argv)
     check(window.corner(Qt::BottomRightCorner) == Qt::BottomDockWidgetArea && !shell.header()->isHidden(),
           "restore repairs old dock corner state");
     QSettings().setValue("workbench/panel-tab", "results");
-    shell.showBottomPage(bottom.log);
+    shell.showBottomPage(bottom.output);
     shell.restorePresentationState();
     check(query->currentWidget() == pages.results && bottomTabs->currentWidget() == bottom.output &&
           QSettings().value("workbench/panel-tab").toString() == "results",
@@ -387,16 +390,29 @@ int main(int argc, char **argv)
     QKeyEvent workKey(QEvent::KeyPress, Qt::Key_1, Qt::ControlModifier);
     QApplication::sendEvent(&window, &workKey);
     check(QApplication::focusWidget() == trapContent, "Ctrl+1 reaches the active work area");
+    // The Log is a top-level workspace: View > Log opens it, Ctrl+1 reaches it, and it is not
+    // a bottom-panel page, so a retired "log" panel selection falls back to Output.
+    if (auto *viewLog = window.findChild<QAction *>("ViewLog")) viewLog->trigger();
+    check(documents->currentWidget() == pages.log && shell.isFullPage() && shell.inspectorDock()->isHidden() &&
+          !bottomTabs->isTabVisible(1), "View > Log opens the Log workspace without Problems or the Inspector");
+    QApplication::sendEvent(&window, &workKey);
+    check(QApplication::focusWidget() == logContent, "Ctrl+1 reaches the Log workspace");
+    QSettings().setValue("workbench/panel-tab", "log");
+    QSettings().setValue("workbench/mib-panel-tab", "log");
+    shell.restorePresentationState();
+    check(documents->currentIndex() == 0 && bottomTabs->currentWidget() == bottom.output,
+          "a retired Log panel selection restores to Output");
+    shell.showResults();
     shell.showResults();
     shell.treeSplitter()->setSizes({250, 650});
     const QList<int> savedSizes = shell.treeSplitter()->sizes();
-    shell.inspectorDock()->hide(); shell.showBottomPage(bottom.log);
+    shell.inspectorDock()->hide(); shell.showBottomPage(bottom.output);
     shell.setPanelExpanded(false); shell.savePresentationState();
     shell.treeSplitter()->setSizes({550, 350}); shell.inspectorDock()->show();
     shell.restorePresentationState();
     check(shell.treeSplitter()->sizes() == savedSizes && shell.inspectorDock()->isHidden() &&
-          shell.bottomDock()->isHidden() && bottomTabs->currentWidget() == bottom.log,
-          "splitter, Inspector and collapsed Log round-trip together");
+          shell.bottomDock()->isHidden() && bottomTabs->currentWidget() == bottom.output,
+          "splitter, Inspector and collapsed panel round-trip together");
     shell.treeSplitter()->setOrientation(Qt::Vertical);
     QSettings().setValue("workbench/tree-splitter", shell.treeSplitter()->saveState());
     shell.restorePresentationState();

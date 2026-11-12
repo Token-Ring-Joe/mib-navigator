@@ -119,7 +119,7 @@ WorkbenchShell::WorkbenchShell(QMainWindow *window, QWidget *,
     queryLayout->addWidget(contentSplitter, 1);
 
     const QList<std::pair<QWidget *, QString>> top{{queryPage, tr("Query")},
-        {pages.library, tr("MIBs")}, {pages.traps, tr("Traps")}};
+        {pages.library, tr("MIBs")}, {pages.traps, tr("Traps")}, {pages.log, tr("Log")}};
     for (const auto &[page, title] : top) {
         if (!page) continue;
         workspaceTabs->addTab(page, title);
@@ -156,8 +156,8 @@ WorkbenchShell::WorkbenchShell(QMainWindow *window, QWidget *,
     bottomTabs->setObjectName(QStringLiteral("WorkbenchBottomTabs"));
     bottomTabs->setDocumentMode(true);
     const QList<std::pair<QWidget *, QString>> lower{{bottom.output, tr("Output")},
-        {bottom.log, tr("Log")}, {bottom.problems, tr("Problems")}};
-    const QStringList ids{QStringLiteral("output"), QStringLiteral("log"), QStringLiteral("problems")};
+        {bottom.problems, tr("Problems")}};
+    const QStringList ids{QStringLiteral("output"), QStringLiteral("problems")};
     for (qsizetype i = 0; i < lower.size(); ++i) {
         const auto &[page, title] = lower[i];
         if (!page) continue;
@@ -186,7 +186,7 @@ WorkbenchShell::WorkbenchShell(QMainWindow *window, QWidget *,
     panelButton = new QToolButton(controls);
     panelButton->setObjectName(QStringLiteral("WorkbenchPanelToggle"));
     panelButton->setCheckable(true);
-    panelButton->setToolTip(tr("Show or hide Output, Log and MIB Problems. Operations keep running while hidden."));
+    panelButton->setToolTip(tr("Show or hide Output and MIB Problems. Operations keep running while hidden."));
     controlsLayout->addWidget(panelButton);
     if (connectionRow) connectionRow->addWidget(controls);
     else headerBar->addWidget(controls);
@@ -273,6 +273,8 @@ void WorkbenchShell::buildViewMenu(QMainWindow *window)
     add("ViewMibEditor", tr("MIB Editor"), [this]() { openDocument(workbenchPages.editor); });
     if (workbenchPages.traps)
         add("ViewTraps", tr("Traps"), [this]() { openDocument(workbenchPages.traps); });
+    if (workbenchPages.log)
+        add("ViewLog", tr("Log"), [this]() { openDocument(workbenchPages.log); });
     if (workbenchPages.watch)
         add("ViewWatch", tr("Watch"), [this]() { openDocument(workbenchPages.watch); });
     if (workbenchPages.macros)
@@ -283,7 +285,7 @@ void WorkbenchShell::buildViewMenu(QMainWindow *window)
     inspectorAction->setText(tr("Inspector"));
     inspectorAction->setShortcut(QKeySequence("Ctrl+Alt+I"));
     view->addAction(inspectorAction);
-    // One switch for the bottom panel, the same as the Operations button. Its pages (Output, Log,
+    // One switch for the bottom panel, the same as the Operations button. Its pages (Output and
     // Problems) are chosen by clicking their tabs, so they have no View menu entries of their own.
     auto *panelAction = add("WorkbenchToggleBottom", tr("Show Operations panel"), [this]() {
         setPanelExpanded(bottomPanel->isHidden());
@@ -443,7 +445,7 @@ void WorkbenchShell::updatePanelControls()
     const QString text = expanded ? tr("Hide Operations panel") : tr("Show Operations panel");
     panelButton->setText(tr("Operations"));
     panelButton->setAccessibleName(tr("Operations panel"));
-    panelButton->setToolTip(expanded ? tr("Hide Output, Log and MIB Problems") : tr("Show Output, Log and MIB Problems"));
+    panelButton->setToolTip(expanded ? tr("Hide Output and MIB Problems") : tr("Show Output and MIB Problems"));
     if (auto *action = mainWindow->findChild<QAction *>("WorkbenchToggleBottom")) action->setText(text);
 }
 
@@ -473,11 +475,11 @@ void WorkbenchShell::restorePresentationState()
     panelHeight = qBound(130, settings.value(panelHeightKey, 300).toInt(), 10000);
     pendingPanelId.clear();
     // Keep old settings until normal save. The former shared Problems selection
-    // becomes a MIB-only preference; Query starts on its own Output/Log selection.
+    // becomes a MIB-only preference; Query starts on Output.
     const auto validId = [](QString id) {
-        if (id == QStringLiteral("results")) id = QStringLiteral("output");
-        return id == QStringLiteral("output") || id == QStringLiteral("log") ||
-               id == QStringLiteral("problems") ? id : QStringLiteral("output");
+        // "results" and "log" are retired panel pages: the Log is now its own workspace.
+        return id == QStringLiteral("output") || id == QStringLiteral("problems")
+            ? id : QStringLiteral("output");
     };
     const QString legacy = validId(settings.value(panelTabKey, QStringLiteral("output")).toString());
     sharedPanelId = legacy == QStringLiteral("problems") ? QStringLiteral("output") : legacy;

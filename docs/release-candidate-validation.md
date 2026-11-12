@@ -1,4 +1,4 @@
-# MIB Navigator 1.0.0-rc2 validation
+# MIB Navigator release-candidate validation
 
 Current redesign guidance: 2026-11-08. The authoritative development direction
 is `docs/redesign-plan.md`; current Linux evidence and exact validation artifacts
@@ -104,7 +104,6 @@ must remain visible. Parser shutdown may wait for a running uninterruptible pars
 Credential storage limitations remain documented in `security.md`. Translation
 and native platform/desktop integration need their established release review.
 
-The numeric CMake project version remains `1.0.0`; the release label is
-`1.0.0-rc2`. Do not promote, commit, push, tag or publish without the owner's
+The release label is defined once, in `cmake/ReleaseLabel.cmake`. Do not promote, commit, push, tag or publish without the owner's
 instruction. Qt licensing/notices and release-owner name/trademark clearance
 remain distribution responsibilities.

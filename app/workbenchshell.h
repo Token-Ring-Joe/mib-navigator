@@ -29,13 +29,13 @@ public:
         QWidget *editor = nullptr;
         QWidget *search = nullptr;
         QWidget *traps = nullptr;
+        QWidget *log = nullptr; // request Log: a permanent top-level workspace
         QWidget *watch = nullptr; // permanent local Query tab
         QWidget *macros = nullptr; // offline definitions; execution is owned outside the widget
     };
     struct BottomPages {
         QWidget *output = nullptr;
-        QWidget *log = nullptr;
-        QWidget *problems = nullptr;
+        QWidget *problems = nullptr; // shown only while the MIBs workspace is active
     };
 
     WorkbenchShell(QMainWindow *window, QWidget *centralRoot, QGridLayout *centralLayout,

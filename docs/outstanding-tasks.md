@@ -260,6 +260,22 @@ does not authorize a commit, push, tag or publication.
     files with a MIB extension but no module definition get a "Probably not a MIB" note. A
     `v*` tag now publishes a GitHub Release (pre-release for `-rc`) from the CI archives.
 
+27. **Release and distribution pass, 2026-11-12.** Owner rulings: no Intel Mac build; bundled-Qt
+    or AppImage Linux build deferred; trap history stays unstored; compact density deferred
+    until after GA and user feedback; legacy tree/dialog code is not removed yet; provider-pin
+    editor not scheduled. Implemented: `v1.0.0-rc.2` published (Copy as Command including
+    **With keys (lab use)**, which writes RFC 3414 master keys `-3m`/`-3M`); the release label
+    now lives in one file, `cmake/ReleaseLabel.cmake`, read by CMake, packaging, the archive
+    verification scripts and the workflow, and a tag that does not match the label fails the
+    release job; release notes are the stable `docs/release-notes.md`; **Log** is a top-level
+    workspace (Query | MIBs | Traps | Log) and the bottom panel keeps Output and Problems (a
+    saved "log" panel selection falls back to Output); Qt/LGPL: LGPL-3.0 and GPL-3.0 texts ship
+    under `share/snmpb/licenses/Qt/`, `NOTICE.md` has a Qt section (dynamic linking, where to
+    replace Qt, source location), the macOS archive now looks for the Qt SPDX inventories like
+    Windows (verification requires them on both), and `third-party-dependencies.md` lists the
+    bundled Qt modules and the three non-Qt Windows DLLs. Owner USPTO search found no exact
+    "MIB Navigator" mark (not a clearance; still the owner's item).
+
 ## Optional or conditional decisions, not scheduled commitments
 
 - **Compiled/persisted MIB data and Environment cache policy (step 15):** pursue
@@ -389,3 +405,21 @@ widget leak checks 5/5 passed. Release install/dependency and installed workflow
 passed. Source hashes match that run; this approval/inventory update changes
 only documentation. Rebuilding after the commit will update About's build revision;
 the existing installed artifact correctly retains its pre-commit build identity.
+
+    **Acceptance evidence, 2026-11-12.** *Real device (owner-authorized, Gets only):* one SNMPv3
+    authPriv Get of `sysName.0` through the application's own `SnmpPlusTransport` succeeded on
+    172.16.50.32 and .34; .31 and .33 did not answer (timeout, as before). The harness read the
+    credentials from the environment only and was deleted; nothing was stored. It needs the
+    default `v3MP::I` the application creates at startup, which a bare harness must create too.
+    *Real collection (owner's 1263-file, 69 MB Extreme Networks + Standards collection, tested on a
+    byte-exact copy; the copy and the original were verified byte-identical after the runs):* the
+    window is shown in 4.8 s on a cold start (index of 1262 files built in 3.4 s) and 1.8 s on a
+    restart; the `auto:Extreme Networks/Fabric Engine` profile resolves 396 modules from 453
+    roots with 0 unresolved dependencies and loads with 0 errors, 38 warnings and 1564 notes
+    (libsmi tolerates `START-MIB` re-registering an OID). **Finding:** the profile's runtime
+    environment needs about 65 s in the background (parse of 396 vendor modules, 4-core VM,
+    Release build) on every start; the window and Standards stay responsive meanwhile but the
+    Fabric Engine tree is not usable until it finishes. This is the measured evidence item
+    "Compiled/persisted MIB data and Environment cache policy (step 15)" was waiting for;
+    decision needed before 1.0.0 final. The runtime also writes its staged files to
+    `~/.cache/SnmpB` regardless of the settings location.

@@ -1,0 +1,43 @@
+name: Bug report
+description: Something does not work, crashes, or gives a wrong result.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting this. **Do not paste passwords, community strings, SNMPv3 passphrases or confidential MIBs.** Replace them with placeholders.
+  - type: input
+    id: version
+    attributes:
+      label: MIB Navigator version
+      description: Shown in Help > About, for example 1.0.0-rc2.
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Windows
+        - macOS (Apple Silicon)
+        - Linux
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what you saw instead. Include the exact message if there is one.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Which MIB profile, SNMP version and operation (Get, Walk, Table, ...) were involved?
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: A MIB file that fails to load (only if you may share it), the Problems entry text, or a Log entry, with credentials removed.

@@ -7,7 +7,7 @@ MIB Navigator keeps what made [SnmpB](https://sourceforge.net/projects/snmpb/)
 useful, namely its tolerance of real-world and imperfect vendor MIBs, and adds a
 modern interface around it.
 
-> **Status: 1.0.0-rc2.** The project is in final usability and release
+> **Status: release candidate.** The project is in final usability and release
 > validation. Linux is validated locally; Windows and macOS are built and tested
 > by GitHub Actions.
 
@@ -173,7 +173,7 @@ for the full workflow.
   querying a device
 - [Redesign plan](docs/redesign-plan.md): product direction and build order
   (authoritative)
-- [Release notes for 1.0.0-rc2](docs/release-notes-1.0.0-rc2.md)
+- [Release notes](docs/release-notes.md)
 - [Outstanding tasks](docs/outstanding-tasks.md)
 - [Query Macros design](docs/query-macros-v1-design.md) and
   [current checkpoint](docs/query-macros-milestone-2.md)

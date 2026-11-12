@@ -121,9 +121,16 @@ selected MIB profile. For a mix of vendors, make a Custom profile that holds
 the MIBs of all of them. Receiving traps may need elevated rights or a port
 above 1024, depending on your system.
 
+## 8. Log
+
+The **Log** tab lists every request the application sent, with the target, the
+credential used, how it ended and how long it took, including each Watch poll. It
+never records passwords or community strings. **Output** and **Problems** stay in the
+Operations panel at the bottom of the window.
+
 ## Release status and known limits
 
-This is a release candidate (1.0.0-rc2).
+This is a release candidate. The exact version is shown in **Help > About**.
 
 - Windows and macOS are built and tested by automation; real-machine testing is
   limited so far, and the first Windows tests were basic functionality.

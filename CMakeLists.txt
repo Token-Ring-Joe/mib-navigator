@@ -1,12 +1,13 @@
 cmake_minimum_required(VERSION 3.22)
 
+# The version and release label come from one file; see cmake/ReleaseLabel.cmake.
+include(cmake/ReleaseLabel.cmake)
+
 project(SnmpBNext
-    VERSION 1.0.0
+    VERSION ${SNMPB_BASE_VERSION}
     LANGUAGES C CXX
 )
 
-set(SNMPB_RELEASE_LABEL "${PROJECT_VERSION}-rc2" CACHE STRING
-    "MIB Navigator display and package release label")
 configure_file(
     cmake/snmpb_version.h.in
     generated/snmpb_version.h
@@ -77,11 +78,16 @@ install(FILES app/icons/feathericons/LICENSE.txt
 install(FILES app/icons/ionicons/LICENSE.txt
     DESTINATION "${SNMPB_LICENSE_INSTALL_DIR}/icons/ionicons")
 install(FILES NOTICE.md DESTINATION .)
+# Qt is distributed under the LGPL-3.0 (with the GPL-3.0 it builds on). The texts ship with
+# every archive so the licence terms travel with the binaries; NOTICE.md explains how Qt is
+# linked and where its source is.
+install(FILES licenses/LGPL-3.0.txt licenses/GPL-3.0.txt
+    DESTINATION "${SNMPB_LICENSE_INSTALL_DIR}/Qt")
 install(FILES
     docs/portable-package-readme.txt
     docs/getting-started.md
     docs/release-candidate-validation.md
-    docs/release-notes-1.0.0-rc2.md
+    docs/release-notes.md
     docs/security.md
     docs/settings-schema.md
     docs/maintenance-five-validation.md
@@ -96,24 +102,22 @@ install(FILES
 # Qt binary SDKs provide machine-readable module license inventories. Stage
 # the inventories for runtime modules when the SDK supplies them, without
 # encoding a developer-specific Qt installation path.
-get_target_property(SNMPB_QT_CORE_LOCATION Qt6::Core IMPORTED_LOCATION_RELEASE)
-if(NOT SNMPB_QT_CORE_LOCATION)
-    get_target_property(SNMPB_QT_CORE_LOCATION Qt6::Core IMPORTED_LOCATION)
-endif()
-if(SNMPB_QT_CORE_LOCATION)
-    get_filename_component(SNMPB_QT_BIN_DIR "${SNMPB_QT_CORE_LOCATION}" DIRECTORY)
-    get_filename_component(SNMPB_QT_PREFIX "${SNMPB_QT_BIN_DIR}" DIRECTORY)
-    file(GLOB SNMPB_QT_LICENSE_INVENTORIES
-        "${SNMPB_QT_PREFIX}/sbom/qtbase-*.spdx"
-        "${SNMPB_QT_PREFIX}/sbom/qtbase-*.spdx.json"
-        "${SNMPB_QT_PREFIX}/sbom/qtsvg-*.spdx"
-        "${SNMPB_QT_PREFIX}/sbom/qtsvg-*.spdx.json"
+# The Qt installation prefix comes from the Qt6 package location (<prefix>/lib/cmake/Qt6),
+# which is the same on every platform; the library path differs (macOS frameworks sit three
+# directories deeper), so it is not used.
+get_filename_component(SNMPB_QT_PREFIX "${Qt6_DIR}/../../.." ABSOLUTE)
+file(GLOB SNMPB_QT_LICENSE_INVENTORIES
+    "${SNMPB_QT_PREFIX}/sbom/qtbase-*.spdx"
+    "${SNMPB_QT_PREFIX}/sbom/qtbase-*.spdx.json"
+    "${SNMPB_QT_PREFIX}/sbom/qtsvg-*.spdx"
+    "${SNMPB_QT_PREFIX}/sbom/qtsvg-*.spdx.json"
+)
+if(SNMPB_QT_LICENSE_INVENTORIES)
+    install(FILES ${SNMPB_QT_LICENSE_INVENTORIES}
+        DESTINATION "${SNMPB_LICENSE_INSTALL_DIR}/Qt"
     )
-    if(SNMPB_QT_LICENSE_INVENTORIES)
-        install(FILES ${SNMPB_QT_LICENSE_INVENTORIES}
-            DESTINATION "${SNMPB_LICENSE_INSTALL_DIR}/Qt"
-        )
-    endif()
+else()
+    message(STATUS "No Qt licence inventories (SPDX) found under ${SNMPB_QT_PREFIX}/sbom")
 endif()
 
 if(WIN32)

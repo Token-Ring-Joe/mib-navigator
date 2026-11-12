@@ -1320,7 +1320,7 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     documents.watch = watchPanel;
     documents.macros = macroPanel;
     documents.traps = w.TrapsTab;
-    bottomPages.log = requestLogPanel;
+    documents.log = requestLogPanel;
     bottomPages.problems = problemsPage;
     // The tree pane (heading, filter, tree) becomes the permanent left pane; the Tree tab that
     // used to hold it is left empty and is no longer shown.
