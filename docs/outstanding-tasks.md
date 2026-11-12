@@ -281,15 +281,16 @@ does not authorize a commit, push, tag or publication.
   - *Copy as command:* copy the equivalent `snmpget`/`snmpwalk`/`snmpset` line
     for an object or table using the current target, credential and OID. Two
     levels (owner design, 2026-11-11):
-    1. Secret-free command. The app knows the credential's security level
-       (noAuthNoPriv, authNoPriv, authPriv) and writes the matching syntax
-       (`-l`, `-u`, `-a`, `-x`) but leaves out `-A`/`-X`, so net-snmp prompts for
-       the passphrases (it prompts only at a terminal, and not when
-       `defAuthPassphrase`/`defPrivPassphrase` are set in `snmp.conf`). Passphrases
-       on a command line show in shell history and `ps`, so including them is an
-       explicit option only. v1/v2c: net-snmp does not prompt for the community,
-       so show a placeholder unless the user opts to include it.
-    Plan: do level 1 first; level 2 is deferred.
+    1. Secret-free command (built). Writes the matching syntax (`-l`, `-u`, `-a`,
+       `-x`) with the placeholders `-A '<authentication passphrase>'` and
+       `-X '<privacy passphrase>'`. Net-SNMP 5.9 does NOT prompt for passphrases;
+       without them it fails with "USM generic error" (verified 2026-11-12).
+       v1/v2c use a `<community>` placeholder.
+    1b. With keys, lab use (built, owner decision 2026-11-12). The tree submenu
+       "With keys (lab use)" writes `-3m`/`-3M` master keys (RFC 3414 hash of the
+       passphrase, no engine ID needed, works on any device) instead of the
+       placeholders, and the status bar warns that the command is secret-equivalent.
+       AES-192/256 keep the placeholder. Verified against a real switch (one Get).
     2. Optional later: a localized key generated for the current target
        (needs its engine ID, which is read from the device; tied to that engine
        and to the auth/priv protocols; never stored, to stay consistent with

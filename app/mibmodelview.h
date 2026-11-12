@@ -41,7 +41,7 @@ signals:
     void GetTableInstancesFromOid(const QString &oid);
     void MacroFromOid(const QString &oid);
     // kind: 0 Get, 1 Get Next, 2 Get Bulk, 3 Walk (SnmpCommandKind). The oid already carries .0 for a scalar Get.
-    void CopyCommandFromOid(const QString &oid, int kind);
+    void CopyCommandFromOid(const QString &oid, int kind, bool withKeys);
     void QueryTableAvailabilityChanged(bool available);
     void CurrentObjectChanged(const QString &oid);
 

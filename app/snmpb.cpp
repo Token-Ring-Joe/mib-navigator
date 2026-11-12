@@ -701,7 +701,7 @@ void Snmpb::BindToGUI(QMainWindow* mw)
             [startWatch](const QString &oid) { startWatch(oid, false, false); });
 
     // Copy as Command: the request as a Net-SNMP command line, never carrying a secret.
-    connect(w.MIBTree, &MibModelView::CopyCommandFromOid, this, [this, mw](const QString &oid, int kind) {
+    connect(w.MIBTree, &MibModelView::CopyCommandFromOid, this, [this, mw](const QString &oid, int kind, bool withKeys) {
         auto *bar = mw->findChild<ConnectionBar *>(QStringLiteral("ConnectionBar"));
         if (!bar || oid.isEmpty()) return;
         QSettings settings;
@@ -715,13 +715,14 @@ void Snmpb::BindToGUI(QMainWindow* mw)
                 .arg(problem != ConnectionError::None ? ConnectionModel::errorText(problem) : tr("no usable request settings")), 10000);
             return;
         }
-        const SnmpCommandText text = BuildSnmpCommand(config, static_cast<SnmpCommandKind>(kind), oid);
+        const SnmpCommandText text = BuildSnmpCommand(config, static_cast<SnmpCommandKind>(kind), oid, withKeys);
         if (text.command.isEmpty()) {
             mw->statusBar()->showMessage(text.note.isEmpty() ? tr("No command could be built for this request.") : text.note, 10000);
             return;
         }
         QGuiApplication::clipboard()->setText(text.command);
-        mw->statusBar()->showMessage(tr("Command copied. %1").arg(text.note), 15000);
+        mw->statusBar()->showMessage(text.carriesSecret ? tr("Command copied. Warning: %1").arg(text.note)
+                                                        : tr("Command copied. %1").arg(text.note), 20000);
     });
 
     auto *macroService = new QueryMacroService(QDir(watchRoot).filePath("query-macros-v1.json"), this);

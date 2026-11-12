@@ -31,6 +31,22 @@ int main()
     check(!priv.command.contains("SECRET"), "an SNMPv3 command never carries the real passphrases");
     check(priv.note.contains("placeholder"), "the note says to replace the passphrase placeholders");
 
+    // Lab option: RFC 3414 appendix A.3 master keys for "maplesyrup".
+    check(SnmpMasterKey("maplesyrup", SNMP_AUTHPROTOCOL_HMACMD5).toHex() == "9faf3283884e92834ebc9847d8edd963", "RFC 3414 MD5 master key");
+    check(SnmpMasterKey("maplesyrup", SNMP_AUTHPROTOCOL_HMACSHA).toHex() == "9fb5cc0381497b3793528939ff788d5d79145211", "RFC 3414 SHA master key");
+    check(SnmpMasterKey("", SNMP_AUTHPROTOCOL_HMACSHA).isEmpty() && SnmpMasterKey("x", SNMP_AUTHPROTOCOL_NONE).isEmpty(), "no key for empty passphrase or no protocol");
+    auto keyed = BuildSnmpCommand(v3(2, SNMP_AUTHPROTOCOL_HMACSHA, SNMP_PRIVPROTOCOL_AES128), SnmpCommandKind::Get, oid, true);
+    check(keyed.carriesSecret && keyed.command.contains(" -3m ") && keyed.command.contains(" -3M ") &&
+          !keyed.command.contains("SECRET") && !keyed.command.contains(" -A ") && !keyed.command.contains(" -X "),
+          "with keys: master keys replace the passphrases and the passphrases are still never written");
+    check(keyed.note.contains("password"), "the key note warns that the command is a secret");
+    check(!priv.carriesSecret, "default commands carry no secret");
+    auto aes256 = BuildSnmpCommand(v3(2, SNMP_AUTHPROTOCOL_HMACSHA, SNMP_PRIVPROTOCOL_AES256), SnmpCommandKind::Get, oid, true);
+    check(aes256.command.contains(" -3m ") && aes256.command.contains("-X '<privacy passphrase>'") && aes256.note.contains("placeholder"),
+          "AES-256 keeps the privacy placeholder and says so");
+    SnmpRequestConfig community; community.version = SnmpRequestVersion::V2c; community.address = "192.0.2.10";
+    check(!BuildSnmpCommand(community, SnmpCommandKind::Get, oid, true).carriesSecret, "keys never apply to v1/v2c");
+
     auto authOnly = BuildSnmpCommand(v3(1, SNMP_AUTHPROTOCOL_HMAC256SHA384, SNMP_PRIVPROTOCOL_NONE), SnmpCommandKind::Walk, "1.3.6.1.2.1.2");
     check(authOnly.command.startsWith("snmpwalk -v3 -l authNoPriv -u lab-user -a SHA-384 -A '<authentication passphrase>' ") &&
           !authOnly.command.contains(" -x ") && !authOnly.command.contains(" -X "),

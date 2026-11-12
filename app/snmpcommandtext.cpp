@@ -2,6 +2,8 @@
 
 #include "snmp_pp/usm_v3.h"
 
+#include <QByteArray>
+#include <QCryptographicHash>
 #include <QObject>
 #include <QRegularExpression>
 
@@ -41,7 +43,29 @@ QString privName(long protocol)
 }
 }
 
-SnmpCommandText BuildSnmpCommand(const SnmpRequestConfig &config, SnmpCommandKind kind, const QString &oid)
+QByteArray SnmpMasterKey(const QByteArray &passphrase, long authProtocol)
+{
+    QCryptographicHash::Algorithm algorithm;
+    switch (authProtocol) {
+    case SNMP_AUTHPROTOCOL_HMACMD5: algorithm = QCryptographicHash::Md5; break;
+    case SNMP_AUTHPROTOCOL_HMACSHA: algorithm = QCryptographicHash::Sha1; break;
+    case SNMP_AUTHPROTOCOL_HMAC128SHA224: algorithm = QCryptographicHash::Sha224; break;
+    case SNMP_AUTHPROTOCOL_HMAC192SHA256: algorithm = QCryptographicHash::Sha256; break;
+    case SNMP_AUTHPROTOCOL_HMAC256SHA384: algorithm = QCryptographicHash::Sha384; break;
+    case SNMP_AUTHPROTOCOL_HMAC384SHA512: algorithm = QCryptographicHash::Sha512; break;
+    default: return {};
+    }
+    if (passphrase.isEmpty()) return {};
+    constexpr int expansion = 1048576;
+    QByteArray buffer;
+    buffer.reserve(expansion);
+    while (buffer.size() < expansion) buffer.append(passphrase);
+    buffer.truncate(expansion);
+    return QCryptographicHash::hash(buffer, algorithm);
+}
+
+SnmpCommandText BuildSnmpCommand(const SnmpRequestConfig &config, SnmpCommandKind kind, const QString &oid,
+                                 bool includeKeys)
 {
     SnmpCommandText out;
     if (oid.trimmed().isEmpty() || config.address.trimmed().isEmpty()) return out;
@@ -74,24 +98,46 @@ SnmpCommandText BuildSnmpCommand(const SnmpRequestConfig &config, SnmpCommandKin
             if (!a.isEmpty()) words << QStringLiteral("-a") << a;
             else notes << QObject::tr("This authentication protocol has no Net-SNMP name; add -a yourself.");
         }
-        // Net-SNMP does not prompt: without -A/-X it fails with "USM generic error". The
-        // passphrases are therefore written as placeholders for the user to replace.
-        if (auth) words << QStringLiteral("-A") << quoted(QStringLiteral("<authentication passphrase>"));
+        // Net-SNMP does not prompt: without -A/-X (or -3m/-3M) it fails with "USM generic
+        // error". Secrets are therefore placeholders unless the lab key option is used.
+        QString authKey, privKey;
+        if (includeKeys && auth && config.usmCredential) {
+            authKey = QString::fromLatin1(SnmpMasterKey(config.usmCredential->authSecret.bytes(),
+                                                        config.usmCredential->authProtocol).toHex());
+            // AES-192/256 need a key longer than the hash gives; Net-SNMP only extends it for
+            // localized keys, so those keep the placeholder.
+            const long pp = config.usmCredential->privacyProtocol;
+            if (priv && (pp == SNMP_PRIVPROTOCOL_DES || pp == SNMP_PRIVPROTOCOL_AES128))
+                privKey = QString::fromLatin1(SnmpMasterKey(config.usmCredential->privacySecret.bytes(),
+                                                            config.usmCredential->authProtocol).toHex());
+        }
+        if (auth && !authKey.isEmpty()) words << QStringLiteral("-3m") << authKey;
+        else if (auth) words << QStringLiteral("-A") << quoted(QStringLiteral("<authentication passphrase>"));
         if (priv && config.usmCredential) {
             const QString p = privName(config.usmCredential->privacyProtocol);
             if (!p.isEmpty()) words << QStringLiteral("-x") << p;
             else notes << QObject::tr("This privacy protocol has no Net-SNMP name; add -x yourself.");
         }
-        if (priv) words << QStringLiteral("-X") << quoted(QStringLiteral("<privacy passphrase>"));
+        if (priv && !privKey.isEmpty()) words << QStringLiteral("-3M") << privKey;
+        else if (priv) words << QStringLiteral("-X") << quoted(QStringLiteral("<privacy passphrase>"));
+        out.carriesSecret = !authKey.isEmpty() || !privKey.isEmpty();
         if (!config.contextName.isEmpty()) words << QStringLiteral("-n") << quoted(config.contextName);
         if (!config.contextEngineId.isEmpty()) words << QStringLiteral("-E") << quoted(config.contextEngineId);
-        notes.prepend(auth ? QObject::tr("Replace %1 before you run it; passphrases are never copied.")
-                                 .arg(priv ? QObject::tr("the two passphrase placeholders")
-                                           : QObject::tr("the passphrase placeholder"))
-                           : QObject::tr("This security level needs no passphrase."));
+        const bool placeholders = (auth && authKey.isEmpty()) || (priv && privKey.isEmpty());
+        if (out.carriesSecret)
+            notes.prepend(QObject::tr("This command contains key material that logs in to this user; treat it like a password.")
+                          + (placeholders ? QObject::tr(" The remaining placeholder must still be replaced.") : QString()));
+        else
+            notes.prepend(auth ? QObject::tr("Replace %1 before you run it; passphrases are never copied.")
+                                     .arg(priv ? QObject::tr("the two passphrase placeholders")
+                                               : QObject::tr("the passphrase placeholder"))
+                               : QObject::tr("This security level needs no passphrase."));
+        if (includeKeys && auth && !out.carriesSecret)
+            notes << QObject::tr("No key could be derived (empty passphrase or unknown protocol).");
     } else {
         words << QStringLiteral("-c") << quoted(QStringLiteral("<community>"));
         notes << QObject::tr("Replace <community> with the community string; it is never copied.");
+        if (includeKeys) notes << QObject::tr("Keys apply to SNMPv3 only.");
     }
     if (config.timeout > 0) words << QStringLiteral("-t") << QString::number(config.timeout);
     if (config.retries > 0) words << QStringLiteral("-r") << QString::number(config.retries);
