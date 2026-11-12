@@ -6,8 +6,8 @@ if(NOT DEFINED SNMPB_PACKAGE_DIR OR NOT DEFINED SNMPB_EXTRACT_DIR)
 endif()
 
 file(GLOB archives
-    "${SNMPB_PACKAGE_DIR}/MIB-Navigator-1.0.0-rc1-*.zip"
-    "${SNMPB_PACKAGE_DIR}/MIB-Navigator-1.0.0-rc1-*.tar.gz"
+    "${SNMPB_PACKAGE_DIR}/MIB-Navigator-1.0.0-rc2-*.zip"
+    "${SNMPB_PACKAGE_DIR}/MIB-Navigator-1.0.0-rc2-*.tar.gz"
 )
 list(LENGTH archives archive_count)
 if(NOT archive_count EQUAL 1)
@@ -21,7 +21,7 @@ list(GET archives 0 archive)
 file(ARCHIVE_EXTRACT INPUT "${archive}" DESTINATION "${SNMPB_EXTRACT_DIR}")
 
 file(GLOB extracted_roots LIST_DIRECTORIES true "${SNMPB_EXTRACT_DIR}/*")
-list(FILTER extracted_roots INCLUDE REGEX "[/\\\\]MIB-Navigator-1\\.0\\.0-rc1-")
+list(FILTER extracted_roots INCLUDE REGEX "[/\\\\]MIB-Navigator-1\\.0\\.0-rc2-")
 list(LENGTH extracted_roots extracted_root_count)
 if(NOT extracted_root_count EQUAL 1)
     message(FATAL_ERROR

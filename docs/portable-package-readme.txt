@@ -1,4 +1,4 @@
-MIB Navigator 1.0.0-rc1 release-candidate archive
+MIB Navigator 1.0.0-rc2 release-candidate archive
 =====================================
 
 Extract the complete archive and keep its executable, runtime dependencies,
@@ -23,7 +23,7 @@ agents.conf is left untouched; credentials are entered through Settings.
 Bundled MIB/PIB seeds are in bin/mibs and bin/pibs on Windows,
 share/snmpb/mibs and share/snmpb/pibs on Linux, and the app bundle's Resources
 on macOS. License materials are under share/snmpb/licenses in the package.
-See release-notes-1.0.0-rc1.md, security.md and release-candidate-validation.md
+See release-notes-1.0.0-rc2.md, security.md and release-candidate-validation.md
 for capabilities, platform checks and known limitations.
 
 This release is intended for release-candidate evaluation. Back up existing

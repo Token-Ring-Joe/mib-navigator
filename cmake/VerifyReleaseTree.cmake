@@ -17,7 +17,7 @@ set(required_files
     "share/snmpb/licenses/icons/ionicons/LICENSE.txt"
     "portable-package-readme.txt"
     "release-candidate-validation.md"
-    "release-notes-1.0.0-rc1.md"
+    "release-notes-1.0.0-rc2.md"
     "getting-started.md"
     "security.md"
     "settings-schema.md"

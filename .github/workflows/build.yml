@@ -49,11 +49,11 @@ jobs:
       - name: Upload release-candidate artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MIB-Navigator-1.0.0-rc1-${{ matrix.os }}
-          path: build-ci/packages/MIB-Navigator-1.0.0-rc1-*
+          name: MIB-Navigator-1.0.0-rc2-${{ matrix.os }}
+          path: build-ci/packages/MIB-Navigator-1.0.0-rc2-*
           if-no-files-found: error
 
-  # Publishes the archives from a tag push (for example v1.0.0-rc.1) as a GitHub
+  # Publishes the archives from a tag push (for example v1.0.0-rc.2) as a GitHub
   # Release. A tag containing "-rc", "-beta" or "-alpha" is marked pre-release.
   # Only runs after every platform built and passed its tests.
   release:

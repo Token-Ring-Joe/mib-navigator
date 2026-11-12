@@ -6,7 +6,7 @@ establish the contents or validation status of a new platform package.
 
 | Component | Source/toolchain version | Repository material | Current Linux archive |
 |---|---|---|---|
-| MIB Navigator, derived from SnmpB | 1.0.0-rc1 | GPL-2.0-or-later; `license.txt`, source notices and `NOTICE.md` | executable and GPL text |
+| MIB Navigator, derived from SnmpB | 1.0.0-rc2 | GPL-2.0-or-later; `license.txt`, source notices and `NOTICE.md` | executable and GPL text |
 | Qt | VM 6.11.2; project minimum 6.10; CI configured for 6.10.3 | external system/SDK Qt; module licensing depends on the selected distribution | dynamically linked Core, Gui, Widgets, Network and Svg; system runtime/plugins required |
 | libsmi | 0.5.0, locally patched | `libsmi/COPYING` | static application dependency; license included |
 | SNMP++ | 3.3.10 | `snmp++/LICENSE` and source notices | static application dependency; notice included |

@@ -5,7 +5,7 @@ project(SnmpBNext
     LANGUAGES C CXX
 )
 
-set(SNMPB_RELEASE_LABEL "${PROJECT_VERSION}-rc1" CACHE STRING
+set(SNMPB_RELEASE_LABEL "${PROJECT_VERSION}-rc2" CACHE STRING
     "MIB Navigator display and package release label")
 configure_file(
     cmake/snmpb_version.h.in
@@ -81,7 +81,7 @@ install(FILES
     docs/portable-package-readme.txt
     docs/getting-started.md
     docs/release-candidate-validation.md
-    docs/release-notes-1.0.0-rc1.md
+    docs/release-notes-1.0.0-rc2.md
     docs/security.md
     docs/settings-schema.md
     docs/maintenance-five-validation.md

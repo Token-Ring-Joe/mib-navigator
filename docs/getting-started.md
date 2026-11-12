@@ -123,7 +123,7 @@ above 1024, depending on your system.
 
 ## Release status and known limits
 
-This is a release candidate (1.0.0-rc1).
+This is a release candidate (1.0.0-rc2).
 
 - Windows and macOS are built and tested by automation; real-machine testing is
   limited so far, and the first Windows tests were basic functionality.

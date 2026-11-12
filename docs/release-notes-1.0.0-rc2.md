@@ -1,8 +1,22 @@
-# MIB Navigator 1.0.0-rc1 release notes
+# MIB Navigator 1.0.0-rc2 release notes
 
 Current redesign checkpoint: 2026-11-07. The application is in final usability
 and release validation. The RC label does not imply that the current uncommitted
 source has completed Windows/macOS CI or owner desktop acceptance.
+
+## Changes since 1.0.0-rc1
+
+- **Copy as Command.** Right-click an object in the tree and copy the equivalent
+  Net-SNMP `snmpget`, `snmpgetnext`, `snmpbulkget` or `snmpwalk` command. SNMPv3
+  commands carry passphrase placeholders (Net-SNMP does not prompt for them).
+  **With keys (lab use)** writes RFC 3414 master keys instead; the result is
+  secret-equivalent, so the status bar warns.
+- **Open in Editor** from a Problems entry, and from a right-click on the Library
+  list (also Copy file path).
+- Problems explains a file with MIB extension that is not a MIB ("Probably not a MIB").
+- Watch polls are written to the request Log.
+- SNMPv3 traps and informs: every saved credential with the same user name is tried.
+- Installation instructions for Windows, macOS and Linux in the README.
 
 ## Highlights
 
