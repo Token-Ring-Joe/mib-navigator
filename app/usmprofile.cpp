@@ -53,6 +53,12 @@ bool USMProfileManager::RefreshRuntime()
     for (const auto &r : defaults)
         if (usm->add_usm_user(OctetStr(r.securityName.toLatin1().constData()), r.authProtocol,
                 r.privacyProtocol, secret(r.authSecret), secret(r.privacySecret)) != SNMPv3_USM_OK) return false;
+    // The user table keeps one entry per user name. Every saved variant is also registered so an
+    // incoming notification that fails with the first one is checked against all of them.
+    usm->clear_notification_variants();
+    for (const auto &r : securityRecords)
+        usm->add_notification_variant(OctetStr(r.securityName.toLatin1().constData()), r.authProtocol,
+                                      r.privacyProtocol, secret(r.authSecret), secret(r.privacySecret));
     registeredRecords = securityRecords; runtimeInitialized = true;
     return true;
 }

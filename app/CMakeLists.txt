@@ -86,6 +86,7 @@ set(SNMPB_APP_SOURCES
     snmpsingleoperation.cpp
     snmpsingleasyncrunner.cpp
     snmpquerytext.cpp
+    snmpcommandtext.cpp
     tablenodevalidation.cpp
     tabletraversal.cpp
     tableindex.cpp
@@ -198,6 +199,7 @@ set(SNMPB_APP_HEADERS
     snmpsingleoperation.h
     snmpsingleasyncrunner.h
     snmpquerytext.h
+    snmpcommandtext.h
     tablenodevalidation.h
     tabletraversal.h
     tableindex.h
@@ -735,6 +737,16 @@ if(BUILD_TESTING)
             $<TARGET_FILE:snmpb_mib_profile_folder_test>)
     else()
         add_test(NAME snmpb.mib-profile-folders COMMAND $<TARGET_FILE:snmpb_mib_profile_folder_test>)
+    endif()
+
+    add_executable(snmpb_command_text_test snmpcommandtext.cpp snmpcommandtext.h snmpcommandtext_test.cpp)
+    target_link_libraries(snmpb_command_text_test PRIVATE Qt6::Core snmpb_snmp_pp snmpb_libtomcrypt)
+    if(WIN32)
+        add_test(NAME snmpb.command-text COMMAND ${CMAKE_COMMAND} -E env
+            "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"
+            $<TARGET_FILE:snmpb_command_text_test>)
+    else()
+        add_test(NAME snmpb.command-text COMMAND $<TARGET_FILE:snmpb_command_text_test>)
     endif()
 
     add_executable(snmpb_snmp_report_test snmpreport.cpp snmpreport.h snmpreport_test.cpp)

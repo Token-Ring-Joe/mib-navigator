@@ -2,7 +2,9 @@
 #define MIBPROBLEMREPORT_H
 
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <QMap>
 #include <QPair>
 #include <QSet>
@@ -39,6 +41,21 @@ inline QString providerPath(const MibEffectivePlan &plan, const QString &identit
     for (const auto &file : plan.runtimeFiles)
         if (file.identities.contains(identity)) return file.canonicalPath;
     return {};
+}
+
+// True when the file contains no "<name> DEFINITIONS ::= BEGIN" module header outside comments. Some
+// vendors ship helper or bootstrap files with MIB extensions (.my, .mib) that are not MIBs; their
+// parser errors mean nothing for the real MIBs next to them. Only the first 2 MB are read, the
+// file is never changed, and an unreadable file is not called a non-MIB.
+inline bool lacksModuleDefinition(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) return false;
+    QString text = QString::fromLatin1(file.read(2 * 1024 * 1024));
+    static const QRegularExpression comment(QStringLiteral("--[^\\n]*"));
+    static const QRegularExpression header(QStringLiteral("\\bDEFINITIONS\\s*(IMPLICIT\\s+TAGS\\s*|EXPLICIT\\s+TAGS\\s*|AUTOMATIC\\s+TAGS\\s*)?::=\\s*BEGIN\\b"));
+    text.remove(comment);
+    return !header.match(text).hasMatch();
 }
 
 inline QString joinNames(const QStringList &names)
@@ -261,6 +278,21 @@ inline QList<MibProblem> MibBuildProblemReport(const MibProblemInput &input)
                 problem.effect = QObject::tr("A warning only. It does not stop the MIB from working.");
                 problems.append(problem);
             }
+        }
+        if (shownErrors > 0 && lacksModuleDefinition(path)) {
+            MibProblem problem;
+            problem.severity = MibProblemSeverity::Note;
+            problem.category = QObject::tr("Probably not a MIB");
+            problem.module = identity;
+            problem.file = path;
+            problem.why = QObject::tr("%1 has a MIB file extension but contains no module definition "
+                                      "(no \"... DEFINITIONS ::= BEGIN\"). It may be a helper or bootstrap "
+                                      "file that ships with the MIBs.").arg(fileLabel(path));
+            problem.effect = QObject::tr("Its parser errors do not affect the other MIBs. Nothing from this "
+                                         "file appears in the Tree.");
+            problem.suggestion = QObject::tr("If you do not need it, move it out of the product folder. "
+                                             "MIB Navigator never changes your files.");
+            problems.append(problem);
         }
         if (hiddenErrors > 0) {
             MibProblem problem;

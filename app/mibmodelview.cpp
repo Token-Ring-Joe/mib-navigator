@@ -304,6 +304,14 @@ void MibModelView::contextMenuEvent(QContextMenuEvent *event)
     QAction *tableAction = tableMenu->addAction(tr("All Instances"));
     QAction *tableRowAction = tableMenu->addAction(tr("Select Instance..."));
     tableRowAction->setObjectName("QueryTableSelectInstance");
+    QMenu *commandMenu = menu.addMenu(tr("Copy as Command"));
+    commandMenu->setObjectName("QueryTreeCopyCommand");
+    commandMenu->setToolTipsVisible(true);
+    commandMenu->setToolTip(tr("Copies a Net-SNMP command for this object. Passphrases and community strings are never copied."));
+    QAction *copyGet = commandMenu->addAction(tr("snmpget")); copyGet->setEnabled(kind == NodeScalar);
+    QAction *copyNext = commandMenu->addAction(tr("snmpgetnext"));
+    QAction *copyBulk = commandMenu->addAction(tr("snmpbulkget")); copyBulk->setEnabled(!agentIsV1);
+    QAction *copyWalk = commandMenu->addAction(tr("snmpwalk"));
     QAction *macroAction = menu.addAction(tr("Add to Selected Macro"));
     macroAction->setObjectName("QueryTreeAddMacro");
     macroAction->setEnabled(kind == NodeScalar || kind == NodeColumn || kind == NodeTable || kind == NodeRow);
@@ -333,6 +341,10 @@ void MibModelView::contextMenuEvent(QContextMenuEvent *event)
     else if (chosen == getBulkSelectAction) emit GetFromOidSelectInstance(oid, 2);
     else if (chosen == getBulkPromptAction) emit GetFromOidPromptInstance(oid, 2);
     else if (chosen == watchAction) emit WatchFromOid(oid, kind == NodeColumn);
+    else if (chosen == copyGet) emit CopyCommandFromOid(oid + QStringLiteral(".0"), 0);
+    else if (chosen == copyNext) emit CopyCommandFromOid(kind == NodeScalar ? oid + QStringLiteral(".0") : oid, 1);
+    else if (chosen == copyBulk) emit CopyCommandFromOid(kind == NodeScalar ? oid + QStringLiteral(".0") : oid, 2);
+    else if (chosen == copyWalk) emit CopyCommandFromOid(oid, 3);
     else if (chosen == setAction) emit SetFromOid(oid);
     else if (chosen == tableAction) emit TableViewFromOid(oid);
     else if (chosen == tableRowAction) emit TableRowSelectFromOid(oid);

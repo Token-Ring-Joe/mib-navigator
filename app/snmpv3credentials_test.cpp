@@ -89,9 +89,9 @@ private:
     std::atomic<bool> stopped{false}; QThread *thread;
 };
 
-QByteArray encode(v3MP *model, int level, int requestId)
+QByteArray encode(v3MP *model, int level, int requestId, int type = sNMP_PDU_GET)
 {
-    Pdu pdu; pdu.set_type(sNMP_PDU_GET); pdu.set_request_id(requestId);
+    Pdu pdu; pdu.set_type(type); pdu.set_request_id(requestId);
     pdu.set_security_level(level); pdu.set_context_engine_id(model->get_local_engine_id());
     Vb vb(Oid("1.3.6.1.2.1.1.1.0")); pdu += vb;
     SnmpMessage message; message.set_v3mp(model);
@@ -141,6 +141,38 @@ int runTests()
     check(!decode(changed.messageProcessingModel(), packetA), "wrong secret cannot authenticate the original packet");
     check(decode(firstModel, encode(firstModel, SNMP_SECURITY_LEVEL_AUTH_NOPRIV, 703)), "using another variant does not corrupt the first context");
     check(v3MP::I == &defaults, "private contexts never replace the notification context");
+    {
+        // A receiver whose user table holds only the first saved variant of "shared-user" (as the
+        // notification context does) must still accept a notification sent with another variant
+        // once every saved variant is registered, and keep rejecting a stranger.
+        int receiverStatus;
+        v3MP receiver(OctetStr("variant-receiver-engine"), 3, receiverStatus, false);
+        check(receiverStatus == SNMPv3_MP_OK, "variant receiver initializes");
+        receiver.get_usm()->set_discovery_mode();   // a notification receiver meets unknown engines
+        const auto secret = [](const CredentialSecret &s) { return OctetStr(
+            reinterpret_cast<const unsigned char *>(s.bytes().constData()), s.bytes().size()); };
+        const auto &ra = *a.usmCredential; const auto &rb = *b.usmCredential;
+        receiver.get_usm()->add_usm_user(OctetStr("shared-user"), ra.authProtocol, ra.privacyProtocol,
+                                         secret(ra.authSecret), secret(ra.privacySecret));
+        const QByteArray trapB = encode(secondModel, SNMP_SECURITY_LEVEL_AUTH_PRIV, 706, sNMP_PDU_TRAP);
+        check(!decode(&receiver, trapB), "a notification using the second variant fails with only the first registered");
+        receiver.get_usm()->add_notification_variant(OctetStr("shared-user"), ra.authProtocol, ra.privacyProtocol,
+                                                     secret(ra.authSecret), secret(ra.privacySecret));
+        receiver.get_usm()->add_notification_variant(OctetStr("shared-user"), rb.authProtocol, rb.privacyProtocol,
+                                                     secret(rb.authSecret), secret(rb.privacySecret));
+        check(decode(&receiver, trapB), "a notification using the second variant verifies once all variants are registered");
+        check(decode(&receiver, encode(secondModel, SNMP_SECURITY_LEVEL_AUTH_PRIV, 704, sNMP_PDU_TRAP)),
+              "the same variant keeps verifying afterwards");
+        receiver.get_usm()->clear_notification_variants();
+        receiver.get_usm()->add_notification_variant(OctetStr("shared-user"), ra.authProtocol, ra.privacyProtocol,
+                                                     secret(ra.authSecret), secret(ra.privacySecret));
+        check(!decode(&receiver, encode(secondModel, SNMP_SECURITY_LEVEL_AUTH_PRIV, 705, sNMP_PDU_TRAP)),
+              "a variant that is not registered cannot authenticate");
+        receiver.get_usm()->add_notification_variant(OctetStr("shared-user"), rb.authProtocol, rb.privacyProtocol,
+                                                     OctetStr("not-the-passphrase"), secret(rb.privacySecret));
+        check(!decode(&receiver, encode(secondModel, SNMP_SECURITY_LEVEL_AUTH_PRIV, 707, sNMP_PDU_TRAP)),
+              "a variant with the right protocols but the wrong passphrase cannot authenticate");
+    }
     {
         LoopbackAgent agentA(a, 111, false), agentB(b, 222, true);
         check(agentA.port && agentB.port, "synthetic v3 agents bind loopback ports");

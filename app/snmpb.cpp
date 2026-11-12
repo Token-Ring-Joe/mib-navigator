@@ -54,6 +54,7 @@
 #include <QToolButton>
 #include <qmenu.h>
 #include "snmpb.h"
+#include "snmpcommandtext.h"
 #include "mibmodule.h"
 #include "agent.h"
 #include "csvformat.h"
@@ -699,6 +700,30 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     connect(resultsPanel, &QueryResultsPanel::watchRequested, watchPanel,
             [startWatch](const QString &oid) { startWatch(oid, false, false); });
 
+    // Copy as Command: the request as a Net-SNMP command line, never carrying a secret.
+    connect(w.MIBTree, &MibModelView::CopyCommandFromOid, this, [this, mw](const QString &oid, int kind) {
+        auto *bar = mw->findChild<ConnectionBar *>(QStringLiteral("ConnectionBar"));
+        if (!bar || oid.isEmpty()) return;
+        QSettings settings;
+        AgentRequestSelection selection;
+        const ConnectionError problem = ConnectionModel::build(
+            bar->target(), bar->credentialKey(), communityCredentialService, UsmCredentials(),
+            PreferencesSettings::load(settings), &selection);
+        SnmpRequestConfig config;
+        if (problem != ConnectionError::None || !selection.requestConfig(&config)) {
+            mw->statusBar()->showMessage(tr("Choose a Target and Credential first: %1")
+                .arg(problem != ConnectionError::None ? ConnectionModel::errorText(problem) : tr("no usable request settings")), 10000);
+            return;
+        }
+        const SnmpCommandText text = BuildSnmpCommand(config, static_cast<SnmpCommandKind>(kind), oid);
+        if (text.command.isEmpty()) {
+            mw->statusBar()->showMessage(text.note.isEmpty() ? tr("No command could be built for this request.") : text.note, 10000);
+            return;
+        }
+        QGuiApplication::clipboard()->setText(text.command);
+        mw->statusBar()->showMessage(tr("Command copied. %1").arg(text.note), 15000);
+    });
+
     auto *macroService = new QueryMacroService(QDir(watchRoot).filePath("query-macros-v1.json"), this);
     macroService->setObjectName("QueryMacroService");
     // Unlike the legacy varbind chooser, this picker has no instance discovery path.
@@ -811,6 +836,24 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     // Log: every request and how it ended.
     auto *requestLog = new RequestLog(this);
     agent->SetRequestLog(requestLog);
+    // Every Watch poll is recorded in the request Log with the target and credential the row
+    // captured (never a secret), so a Watch failure is as visible as any other failed request.
+    connect(watchService, &WatchService::pollCompleted, requestLog, [this, watchService, requestLog](quint64 id) {
+        const WatchRow *row = watchService->row(id);
+        if (!row) return;
+        QString identity = tr("(deleted credential)");
+        for (const ConnectionCredentialChoice &choice :
+             ConnectionModel::credentialChoices(communityCredentialService, UsmCredentials()))
+            if (choice.key == row->spec.credentialKey) identity = choice.label;
+        const QString object = row->objectLabel == row->spec.oid
+            ? row->spec.oid : QStringLiteral("%1 (%2)").arg(row->objectLabel, row->spec.oid);
+        const quint64 logId = requestLog->begin(tr("Watch poll"), row->spec.target, identity, object);
+        if (row->status == tr("OK"))
+            requestLog->finish(logId, (row->received.isEmpty() ? row->value : row->received).toHtmlEscaped(), 1,
+                               RequestOutcome::Succeeded);
+        else
+            requestLog->finish(logId, QStringLiteral("<font color=red>%1</font>").arg(row->status.toHtmlEscaped()), 0);
+    });
     auto *requestLogPanel = new RequestLogPanel(requestLog, mw);
 
     // Detect: on click, ask the device what it is and pick the profile holding its MIBs. Nothing
@@ -935,11 +978,15 @@ void Snmpb::BindToGUI(QMainWindow* mw)
     copyProblems->setObjectName("WorkbenchProblemCopy");
     auto *exportProblems = new QPushButton(tr("Export CSV…"), problemsPage);
     exportProblems->setObjectName("WorkbenchProblemExport");
+    auto *openProblem = new QPushButton(tr("Open in Editor"), problemsPage);
+    openProblem->setObjectName("WorkbenchProblemOpen");
+    openProblem->setToolTip(tr("Open the file this problem is in, at the line the parser reported. Double-click a row does the same."));
+    openProblem->setEnabled(false);
     auto *visibleProblems = new QLabel(problemsPage);
     visibleProblems->setObjectName("WorkbenchProblemVisibleCount");
     auto *filterBar = new QHBoxLayout;
     filterBar->addWidget(problemFilter, 1); filterBar->addWidget(severityFilter);
-    filterBar->addWidget(visibleProblems); filterBar->addWidget(copyProblems); filterBar->addWidget(exportProblems);
+    filterBar->addWidget(visibleProblems); filterBar->addWidget(openProblem); filterBar->addWidget(copyProblems); filterBar->addWidget(exportProblems);
     auto *problemToolbar = new QHBoxLayout;
     problemToolbar->addWidget(problemHint, 1);
     problemToolbar->addWidget(showNotes, 0, Qt::AlignTop);
@@ -1104,23 +1151,57 @@ void Snmpb::BindToGUI(QMainWindow* mw)
                          .arg(problem.line > 0 ? QStringLiteral(" (line %1)").arg(problem.line) : QString());
         problemDetail->setPlainText(lines.join(QStringLiteral("\n")));
     });
-    connect(problemTable, &QTableWidget::cellDoubleClicked, mw,
-            [this, problemTable, problemList](int row, int) {
-        const QTableWidgetItem *first = problemTable->item(row, 0);
-        if (!first) return;
+    // Double-click, the button and the right-click menu all open the problem's file in the Editor.
+    const auto problemAtRow = [problemTable, problemList](int row) -> std::optional<MibProblem> {
+        const QTableWidgetItem *first = row >= 0 ? problemTable->item(row, 0) : nullptr;
+        if (!first) return std::nullopt;
         const int index = first->data(Qt::UserRole).toInt();
-        if (index < 0 || index >= problemList->size()) return;
-        const MibProblem problem = problemList->at(index);
-        if (problem.file.isEmpty() || !QFileInfo::exists(problem.file)) {
+        if (index < 0 || index >= problemList->size()) return std::nullopt;
+        return problemList->at(index);
+    };
+    const auto openProblemRow = [this, problemAtRow, mw](int row) {
+        const auto problem = problemAtRow(row);
+        if (!problem) return;
+        if (problem->file.isEmpty() || !QFileInfo::exists(problem->file)) {
             DiagnosticLogger::log("UI", QStringLiteral("Problems row opened without a file: %1 / %2")
-                                  .arg(problem.category, problem.module));
+                                  .arg(problem->category, problem->module));
+            mw->statusBar()->showMessage(problem->file.isEmpty()
+                ? tr("This problem is not tied to a file, so there is nothing to open.")
+                : tr("The file no longer exists: %1").arg(problem->file), 10000);
             return;
         }
         DiagnosticLogger::log("UI", QStringLiteral("Problems row opens %1 at line %2 (%3)")
-                              .arg(problem.file).arg(problem.line).arg(problem.category));
-        editor->MibFileOpen(problem.file);
-        editor->GoToLine(problem.line);
+                              .arg(problem->file).arg(problem->line).arg(problem->category));
+        editor->MibFileOpen(problem->file);
+        editor->GoToLine(problem->line);
         ShowEditorDocument();
+    };
+    connect(problemTable, &QTableWidget::cellDoubleClicked, mw,
+            [openProblemRow](int row, int) { openProblemRow(row); });
+    connect(openProblem, &QPushButton::clicked, mw, [problemTable, openProblemRow]() {
+        const auto rows = problemTable->selectionModel()->selectedRows();
+        if (!rows.isEmpty()) openProblemRow(rows.first().row());
+    });
+    connect(problemTable, &QTableWidget::itemSelectionChanged, openProblem, [problemTable, problemAtRow, openProblem]() {
+        const auto rows = problemTable->selectionModel()->selectedRows();
+        const auto problem = rows.isEmpty() ? std::nullopt : problemAtRow(rows.first().row());
+        openProblem->setEnabled(problem && !problem->file.isEmpty() && QFileInfo::exists(problem->file));
+    });
+    problemTable->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(problemTable, &QWidget::customContextMenuRequested, mw,
+            [problemTable, problemAtRow, openProblemRow](const QPoint &position) {
+        const int row = problemTable->rowAt(position.y());
+        const auto problem = problemAtRow(row);
+        if (!problem) return;
+        problemTable->selectRow(row);
+        QMenu menu(problemTable);
+        QAction *open = menu.addAction(QObject::tr("Open in Editor"));
+        open->setEnabled(!problem->file.isEmpty() && QFileInfo::exists(problem->file));
+        QAction *copyPath = menu.addAction(QObject::tr("Copy file path"));
+        copyPath->setEnabled(!problem->file.isEmpty());
+        QAction *chosen = menu.exec(problemTable->viewport()->mapToGlobal(position));
+        if (chosen == open) openProblemRow(row);
+        else if (chosen == copyPath) QGuiApplication::clipboard()->setText(problem->file);
     });
     connect(modules, &MibModule::profileRuntimeBuildStarted, problemState,
             [problemState](const QString &) { problemState->setText(QObject::tr("Building the MIB environment…")); });

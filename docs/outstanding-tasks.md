@@ -247,6 +247,19 @@ does not authorize a commit, push, tag or publication.
     headless real-collection check (index counts, profile contents), and parser/scanner leak
     work (item 12), which stays reserved for deliberate, compatibility-tested changes.
 
+26. **Post-RC1 batch, 2026-11-11.** Owner rulings: export is deferred (CSV first, JSON a
+    possible later choice); Watch columns/tables, parser cancellation and the walk-backed
+    simulator are deferred; translations stay English only; Issues are enabled; line-ending
+    identity stays raw SHA-256. Implemented, awaiting owner review: Watch polls are recorded in
+    the request Log (one entry per poll); incoming SNMPv3 notifications try every saved variant
+    of a user name (`USM::add_notification_variant`, authentication-digest match, documented
+    limitation in [USM credential management](usm-credential-management-v2.md)); **Copy as
+    Command** (tree right-click: snmpget, snmpgetnext, snmpbulkget, snmpwalk) writes the
+    SNMPv3 user, level and protocols with passphrase and community placeholders (Net-SNMP does not prompt, so it must be filled in) and never a real secret; Problems has an
+    Open in Editor button and right-click menu, and the Library list has a right-click menu;
+    files with a MIB extension but no module definition get a "Probably not a MIB" note. A
+    `v*` tag now publishes a GitHub Release (pre-release for `-rc`) from the CI archives.
+
 ## Optional or conditional decisions, not scheduled commitments
 
 - **Compiled/persisted MIB data and Environment cache policy (step 15):** pursue

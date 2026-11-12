@@ -332,6 +332,7 @@ void WatchService::applyResult(quint64 id, const PollResult &result)
         row.status = tr("OK");
     }
     emit rowChanged(id);
+    emit pollCompleted(id);
 }
 
 

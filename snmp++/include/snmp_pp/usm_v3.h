@@ -38,6 +38,9 @@
 #include "snmp_pp/octet.h"
 #include "snmp_pp/address.h"
 
+#include <mutex>
+#include <vector>
+
 #ifdef SNMP_PP_NAMESPACE
 namespace Snmp_pp {
 #endif
@@ -503,6 +506,25 @@ public:
    *           SNMPv3_USM_OK (user deleted or not in table)
    */
   int delete_localized_user(const OctetStr& user_name);
+
+  /**
+   * MIB Navigator extension: register an alternative credential for a security
+   * name. The usmUserNameTable holds one entry per name, so when several saved
+   * credentials share a user name, an incoming message from a device whose keys
+   * are not yet known can only be checked against the first one. When the
+   * authentication of an incoming message fails with the table's own entry,
+   * usmProcessMsg() localizes every registered variant of that name to the
+   * sender's engine ID and uses the first one whose digest verifies. Passwords
+   * are kept in memory only, as in the usmUserNameTable.
+   */
+  int add_notification_variant(const OctetStr& security_name,
+                               const long int  auth_protocol,
+                               const long int  priv_protocol,
+                               const OctetStr& auth_password,
+                               const OctetStr& priv_password);
+
+  /** Forget every variant registered with add_notification_variant(). */
+  void clear_notification_variants();
 
 
   /**
@@ -1068,6 +1090,30 @@ private:
 
 
  private:
+
+  struct NotificationVariant {
+    OctetStr securityName;
+    long int authProtocol;
+    long int privProtocol;
+    OctetStr authPassword;
+    OctetStr privPassword;
+  };
+  std::mutex notification_variants_lock;
+  std::vector<NotificationVariant> notification_variants;
+
+  /**
+   * Called by usmProcessMsg() before the digest of an incoming message is
+   * checked. When the user's own keys do not verify the digest, tries every
+   * registered variant for the security name and, on a match, replaces the
+   * protocols and keys of the (cloned) user. Returns true when the user was
+   * replaced.
+   */
+  bool select_notification_variant(struct UsmUser *user,
+                                   const OctetStr &engine_id,
+                                   long int securityLevel,
+                                   unsigned char *wholeMsg, int wholeMsgLength,
+                                   unsigned char *authParameters,
+                                   int authParamLength);
 
   OctetStr local_snmp_engine_id; ///< local snmp engine id
   const v3MP *v3mp;          ///< Pointer to the v3MP that created this object

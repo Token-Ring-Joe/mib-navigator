@@ -64,13 +64,21 @@ replace or clear the application's notification context. libsmi is untouched.
 The legacy default notification context keeps the first saved variant for each
 wire username. A successful v3 request additionally registers that credential's
 localized keys for the remote engine ID, so known devices with the same username
-can use different protocols/secrets. An unsolicited notification using another
-variant before any successful query in the current session uses the default and
-may fail authentication. Editing or deleting any variant clears learned notification
-keys, including variants outside the default entry; display-only renames preserve
-that state. Re-query devices to establish their variant mappings again after a
-security change. This is an explicit remaining limitation for new
-same-username notification variants; single-variant notification behavior remains.
+can use different protocols/secrets.
+
+Every saved variant is also registered with the vendored SNMP++ (`USM::add_notification_variant`).
+When an incoming message's digest does not verify with the table's own entry, the
+USM localizes each registered variant of that user name to the sender's engine ID
+and uses the first one whose authentication digest verifies, for that message only.
+A notification therefore authenticates whichever saved variant the device uses,
+even before any successful query. Variants are tried only after the table's own
+entry fails, so single-variant behaviour and cost are unchanged. Editing or deleting
+a variant re-registers the set and clears learned keys; display-only renames preserve
+state.
+
+Limitation: variants are told apart by their authentication digest. Two variants with
+the same authentication protocol and passphrase but different privacy settings are
+not distinguished, because decryption happens after authentication.
 
 ## Validation findings (2026-11-02)
 

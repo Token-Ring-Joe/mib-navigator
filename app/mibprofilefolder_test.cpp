@@ -307,5 +307,31 @@ int main(int argc, char **argv)
         ok &= check(plan.effectiveModules == QStringList{"ARUBAWIRED-MIB"},
                     "a profile with exact files only plans exactly as before");
     }
+    {
+        // A helper file with a MIB extension is called out; a real MIB with a parse error is not.
+        QTemporaryDir files; ok &= check(files.isValid(), "temporary directory for bootstrap-file notes");
+        const auto write = [&files](const char *name, const char *text) {
+            QFile file(files.filePath(name)); file.open(QIODevice::WriteOnly); file.write(text); return files.filePath(name);
+        };
+        const QString helper = write("def.my", "-- DEFINITIONS ::= BEGIN is only a comment here\nproduct = 5\n");
+        const QString real = write("real.my", "REAL-MIB DEFINITIONS ::= BEGIN\n x OBJECT IDENTIFIER ::= { iso 3 }\nEND\n");
+        ok &= check(MibProblemReportDetail::lacksModuleDefinition(helper), "a file without a module header is a probable non-MIB");
+        ok &= check(!MibProblemReportDetail::lacksModuleDefinition(real), "a file with a module header is a MIB");
+        ok &= check(!MibProblemReportDetail::lacksModuleDefinition(files.filePath("missing.my")),
+                    "an unreadable file is never called a non-MIB");
+        for (const QString &path : {helper, real}) {
+            MibProblemInput input;
+            MibDiagnosticRecord record; record.severity = 1; record.sourcePath = path; record.line = 2;
+            record.message = "syntax error, unexpected identifier"; input.parserDiagnostics = {record};
+            bool noted = false, parseError = false;
+            for (const MibProblem &problem : MibBuildProblemReport(input)) {
+                noted = noted || (problem.category == "Probably not a MIB" && problem.severity == MibProblemSeverity::Note &&
+                                  problem.file == path && problem.suggestion.contains("move it out"));
+                parseError = parseError || problem.category == "Parse error";
+            }
+            ok &= check(parseError, "the parser error itself is still reported");
+            ok &= check(noted == (path == helper), "the bootstrap-file note appears only for the file with no module");
+        }
+    }
     return ok ? 0 : 1;
 }

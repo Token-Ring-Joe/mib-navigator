@@ -97,6 +97,9 @@ signals:
     void rowAdded(quint64 id);
     void rowChanged(quint64 id);
     void rowRemoved(quint64 id);
+    // One poll finished (success or failure); the row already holds the outcome. Only polls, not
+    // edits such as pause or interval, so the request Log can record every poll.
+    void pollCompleted(quint64 id);
     void persistenceErrorChanged(const QString &error);
 
 private slots:

@@ -1169,6 +1169,101 @@ int USM::add_usm_user(const OctetStr& security_name,
 		      auth_password, priv_password);
 }
 
+int USM::add_notification_variant(const OctetStr& security_name,
+                                  const long int  auth_protocol,
+                                  const long int  priv_protocol,
+                                  const OctetStr& auth_password,
+                                  const OctetStr& priv_password)
+{
+  NotificationVariant v;
+  v.securityName = security_name;
+  v.authProtocol = auth_protocol;
+  v.privProtocol = priv_protocol;
+  v.authPassword = auth_password;
+  v.privPassword = priv_password;
+  std::lock_guard<std::mutex> guard(notification_variants_lock);
+  notification_variants.push_back(v);
+  return SNMPv3_USM_OK;
+}
+
+void USM::clear_notification_variants()
+{
+  std::lock_guard<std::mutex> guard(notification_variants_lock);
+  notification_variants.clear();
+}
+
+bool USM::select_notification_variant(struct UsmUser *user,
+                                      const OctetStr &engine_id,
+                                      long int securityLevel,
+                                      unsigned char *wholeMsg, int wholeMsgLength,
+                                      unsigned char *authParameters,
+                                      int authParamLength)
+{
+  if (!user || engine_id.len() == 0 ||
+      securityLevel <= SNMP_SECURITY_LEVEL_NOAUTH_NOPRIV)
+    return false;
+
+  // The table's own entry first: when it verifies there is nothing to do.
+  if (user->authProtocol != SNMP_AUTHPROTOCOL_NONE && user->authKey &&
+      (securityLevel != SNMP_SECURITY_LEVEL_AUTH_PRIV ||
+       user->privProtocol != SNMP_PRIVPROTOCOL_NONE) &&
+      auth_priv->auth_inc_msg(user->authProtocol, user->authKey, wholeMsg,
+                              wholeMsgLength, authParameters,
+                              authParamLength) == SNMPv3_USM_OK)
+    return false;
+
+  const OctetStr name(user->securityName, user->securityNameLength);
+  std::vector<NotificationVariant> candidates;
+  {
+    std::lock_guard<std::mutex> guard(notification_variants_lock);
+    for (const NotificationVariant &v : notification_variants)
+      if (v.securityName == name) candidates.push_back(v);
+  }
+
+  for (const NotificationVariant &v : candidates)
+  {
+    if (v.authProtocol == SNMP_AUTHPROTOCOL_NONE) continue;
+    if (securityLevel == SNMP_SECURITY_LEVEL_AUTH_PRIV &&
+        v.privProtocol == SNMP_PRIVPROTOCOL_NONE) continue;
+
+    unsigned char auth_key[SNMPv3_USM_MAX_KEY_LEN];
+    unsigned char priv_key[SNMPv3_USM_MAX_KEY_LEN];
+    unsigned int auth_key_len = sizeof(auth_key);
+    unsigned int priv_key_len = sizeof(priv_key);
+    if (build_localized_keys(engine_id, (int)v.authProtocol, (int)v.privProtocol,
+                             v.authPassword.data(), v.authPassword.len(),
+                             v.privPassword.data(), v.privPassword.len(),
+                             auth_key, &auth_key_len, priv_key,
+                             &priv_key_len) != SNMPv3_USM_OK)
+      continue;
+
+    if (auth_priv->auth_inc_msg((int)v.authProtocol, auth_key, wholeMsg,
+                                wholeMsgLength, authParameters,
+                                authParamLength) != SNMPv3_USM_OK)
+    {
+      memset(auth_key, 0, sizeof(auth_key));
+      memset(priv_key, 0, sizeof(priv_key));
+      continue;
+    }
+
+    // This variant verified the digest: use it for this message only.
+    if (user->authKey) { memset(user->authKey, 0, user->authKeyLength); delete [] user->authKey; }
+    if (user->privKey) { memset(user->privKey, 0, user->privKeyLength); delete [] user->privKey; }
+    user->authProtocol = v.authProtocol;
+    user->authKeyLength = auth_key_len;
+    user->authKey = new unsigned char[auth_key_len ? auth_key_len : 1];
+    memcpy(user->authKey, auth_key, auth_key_len);
+    user->privProtocol = v.privProtocol;
+    user->privKeyLength = priv_key_len;
+    user->privKey = new unsigned char[priv_key_len ? priv_key_len : 1];
+    memcpy(user->privKey, priv_key, priv_key_len);
+    memset(auth_key, 0, sizeof(auth_key));
+    memset(priv_key, 0, sizeof(priv_key));
+    return true;
+  }
+  return false;
+}
+
 int USM::delete_localized_user(const OctetStr& usmUserName)
 {
   return usm_user_table->delete_entries(usmUserName);
@@ -2368,6 +2463,11 @@ int USM::process_msg(
     }
     memset(user, 0, sizeof(UsmUser));
   }
+
+  if (usmUserNameLength)
+    select_notification_variant(user, security_engine_id, securityLevel, wholeMsg,
+                                wholeMsgLength, wholeMsg + authParametersPosition,
+                                authParamLength);
 
   if (((securityLevel > SNMP_SECURITY_LEVEL_NOAUTH_NOPRIV) &&
        (user->authProtocol == SNMP_AUTHPROTOCOL_NONE)) ||

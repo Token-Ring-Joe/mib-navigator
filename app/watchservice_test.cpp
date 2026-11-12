@@ -78,6 +78,8 @@ int main(int argc, char **argv)
     int addedCount = 0, removedCount = 0;
     QObject::connect(&service, &WatchService::rowAdded, [&](quint64) { ++addedCount; });
     QObject::connect(&service, &WatchService::rowRemoved, [&](quint64) { ++removedCount; });
+    QList<quint64> completedPolls;
+    QObject::connect(&service, &WatchService::pollCompleted, [&](quint64 polled) { completedPolls.append(polled); });
     const quint64 id = service.add(spec);
     ok &= check(id != 0 && addedCount == 1 && service.row(id) && service.ids() == QList<quint64>{id},
                 "a watch is added and announced");
@@ -94,6 +96,11 @@ int main(int argc, char **argv)
     ok &= check(service.waitForPolls(5000), "second poll completes");
     ok &= check(service.row(id)->change.change == "+5000" && service.row(id)->change.rate == "1.00 k/s",
                 "change and rate use the device's own clock (5000 in 5.00 s)");
+    ok &= check(completedPolls == QList<quint64>({id, id}),
+                "each finished poll is announced once for the request Log");
+    service.setInterval(id, 10);
+    ok &= check(completedPolls.size() == 2, "editing a row is not a poll");
+    service.setInterval(id, 5);
 
     // ---- the connection bar changes: the row keeps its own target --------------------------------
     barTarget = "203.0.113.99";

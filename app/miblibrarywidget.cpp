@@ -755,6 +755,20 @@ MibLibraryWidget::MibLibraryWidget(const QStringList &paths,
     });
     connect(openEditorButton, &QPushButton::clicked, this, &MibLibraryWidget::openCurrentModule);
     connect(table, &QTableWidget::cellDoubleClicked, this, [this](int, int) { openCurrentModule(); });
+    table->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(table, &QTableWidget::customContextMenuRequested, this, [this](const QPoint &position) {
+        const int row = table->rowAt(position.y());
+        if (row < 0 || row >= records.size()) return;
+        table->setCurrentCell(row, 1);
+        QMenu menu(table);
+        QAction *open = menu.addAction(tr("Open in Editor"));
+        open->setEnabled(!records[row].localPath.isEmpty());
+        QAction *copyPath = menu.addAction(tr("Copy file path"));
+        copyPath->setEnabled(!records[row].localPath.isEmpty());
+        QAction *chosen = menu.exec(table->viewport()->mapToGlobal(position));
+        if (chosen == open) openCurrentModule();
+        else if (chosen == copyPath) QGuiApplication::clipboard()->setText(records[row].localPath);
+    });
     connect(profileCombo, &QComboBox::currentIndexChanged, this, &MibLibraryWidget::profileChanged);
     connect(newProfile, &QPushButton::clicked, this, &MibLibraryWidget::createProfile);
     connect(duplicateProfileButton, &QPushButton::clicked, this, &MibLibraryWidget::duplicateProfile);
