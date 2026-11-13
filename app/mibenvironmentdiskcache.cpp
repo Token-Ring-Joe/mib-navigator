@@ -312,6 +312,7 @@ std::optional<MibEnvironmentDiskCache::Entry> MibEnvironmentDiskCache::load(
     if (!file.exists()) return std::nullopt;
     const auto reject = [&](const QString &reason) -> std::optional<Entry> {
         if (why) *why = reason;
+        file.close();   // Windows cannot delete a file that is still open.
         QFile::remove(path);
         return std::nullopt;
     };
