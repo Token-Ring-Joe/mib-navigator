@@ -63,7 +63,8 @@ else()
 endif()
 
 # The archives that bundle Qt (Windows, macOS) must also carry Qt's own licence inventories.
-if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows" OR CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
+# (SNMPB_REQUIRE_QT_INVENTORIES forces the rule on any host; the policy test uses it.)
+if(SNMPB_REQUIRE_QT_INVENTORIES OR CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows" OR CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin")
     file(GLOB qt_inventories "${root}/share/snmpb/licenses/Qt/qtbase-*.spdx")
     if(NOT qt_inventories)
         message(FATAL_ERROR "A Qt-bundling release must include the Qt licence inventories (share/snmpb/licenses/Qt/qtbase-*.spdx)")

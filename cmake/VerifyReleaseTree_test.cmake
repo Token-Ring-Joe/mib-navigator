@@ -21,6 +21,10 @@ foreach(token IN LISTS quoted)
         file(WRITE "${SNMPB_FIXTURE_DIR}/${path}" "inert fixture")
     endif()
 endforeach()
+# The Qt licence inventories are required by a glob, which the scrape above cannot see.
+file(MAKE_DIRECTORY "${SNMPB_FIXTURE_DIR}/share/snmpb/licenses/Qt")
+file(WRITE "${SNMPB_FIXTURE_DIR}/share/snmpb/licenses/Qt/qtbase-fixture.spdx" "inert fixture")
+file(WRITE "${SNMPB_FIXTURE_DIR}/share/snmpb/licenses/Qt/qtsvg-fixture.spdx" "inert fixture")
 function(check_policy expected)
     execute_process(COMMAND "${CMAKE_COMMAND}" "-DSNMPB_PACKAGE_ROOT=${SNMPB_FIXTURE_DIR}"
         -P "${verifier}" RESULT_VARIABLE result OUTPUT_VARIABLE out ERROR_VARIABLE err)
@@ -42,3 +46,23 @@ foreach(name IN ITEMS credential-identities.conf.v2.json CREDENTIAL-IDENTITIES.C
     file(REMOVE "${SNMPB_FIXTURE_DIR}/nested/${name}")
 endforeach()
 check_policy(clean)
+
+# The Qt-inventory rule, forced on so every host checks it: present passes, missing is rejected.
+execute_process(COMMAND "${CMAKE_COMMAND}" "-DSNMPB_PACKAGE_ROOT=${SNMPB_FIXTURE_DIR}" -DSNMPB_REQUIRE_QT_INVENTORIES=ON
+    -P "${verifier}" RESULT_VARIABLE with_result OUTPUT_VARIABLE with_out ERROR_VARIABLE with_err)
+if(NOT with_result EQUAL 0)
+    message(FATAL_ERROR "A tree with Qt inventories was rejected: ${with_out}${with_err}")
+endif()
+file(GLOB inventories "${SNMPB_FIXTURE_DIR}/share/snmpb/licenses/Qt/qtbase-*.spdx")
+file(REMOVE ${inventories})
+execute_process(COMMAND "${CMAKE_COMMAND}" "-DSNMPB_PACKAGE_ROOT=${SNMPB_FIXTURE_DIR}" -DSNMPB_REQUIRE_QT_INVENTORIES=ON
+    -P "${verifier}" RESULT_VARIABLE without_result OUTPUT_VARIABLE without_out ERROR_VARIABLE without_err)
+if(without_result EQUAL 0 OR NOT "${without_err}" MATCHES "Qt licence inventories")
+    message(FATAL_ERROR "A tree without Qt inventories was accepted: ${without_out}${without_err}")
+endif()
+# Without the forced rule a Linux-style tree needs none.
+execute_process(COMMAND "${CMAKE_COMMAND}" "-DSNMPB_PACKAGE_ROOT=${SNMPB_FIXTURE_DIR}"
+    -P "${verifier}" RESULT_VARIABLE linux_result OUTPUT_VARIABLE linux_out ERROR_VARIABLE linux_err)
+if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux" AND NOT linux_result EQUAL 0)
+    message(FATAL_ERROR "A Linux tree without Qt inventories was rejected: ${linux_out}${linux_err}")
+endif()
