@@ -28,6 +28,7 @@
 #include "mibeffectiveplan.h"
 #include "mibruntimeparser.h"
 #include "mibenvironment.h"
+#include "mibenvironmentdiskcache.h"
 #include "mibenvironmentmanager.h"
 #include <QMutex>
 #include "mibengine.h"
@@ -107,6 +108,7 @@ private:
     bool ParserCheckRunning() const { return dependencyCheckRunning || editorVerificationRunning; }
     void RestoreProfileRuntime();
     MibEnvironmentBuildResult BuildEnvironment(const MibEffectivePlan &plan);
+    MibEnvironmentBuildResult BuildEnvironmentFresh(const MibEffectivePlan &plan);
     QStringList LoadEffectivePlan(const MibEffectivePlan &plan,
                                   QList<MibExplicitRootLoadResult> *outcomes = nullptr);
     void InitLib(int restart);
@@ -135,6 +137,10 @@ private:
     MibEffectivePlan activeProfilePlan;
     bool hasActiveProfilePlan = false;
     MibEnvironmentPtr currentEnvironment;
+    // Saved copies of built Environments (null when disabled with SNMPB_DISABLE_ENVIRONMENT_CACHE).
+    // Declared before the manager so the manager's workers stop before it is destroyed.
+    std::unique_ptr<MibEnvironmentDiskCache> environmentDiskCache;
+    QString environmentParserIdentity;
     std::unique_ptr<MibEnvironmentManager> environmentManager;
     QHash<QString, MibEffectivePlan> requestedPlans;
     MibEffectivePlan latestRequestedPlan;

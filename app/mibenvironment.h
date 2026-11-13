@@ -173,7 +173,11 @@ struct MibEnvironmentTelemetry {
 };
 
 class MibEnvironmentExtractor;
+class MibEnvironmentDiskCache;
 
+// NOTE: when a field is added to this class or to any record above, also add it to the
+// serializer in mibenvironmentdiskcache.cpp (the saved-Environment cache) and to the field
+// comparison in mibenvironmentdiskcache_test.cpp, and bump MIB_ENVIRONMENT_SCHEMA_VERSION.
 class MibEnvironment final
 {
 public:
@@ -224,6 +228,7 @@ public:
 
 private:
     friend class MibEnvironmentExtractor;
+    friend class MibEnvironmentDiskCache;
     QString planSha256;
     QString parserId;
     QString authorityProfileId;

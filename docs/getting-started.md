@@ -60,6 +60,10 @@ the selected profile.
 - **Standards / MIB-II** is the default. There is no "all MIBs" profile, because
   loading everything is rarely what you want. Build a Custom profile if you do.
 
+The first time you select a large profile (hundreds of vendor MIBs) it can take a minute to
+load; the Tree fills in when it finishes and you can keep working meanwhile. MIB Navigator
+saves the result, so the next start is fast, until you change a MIB file in that profile.
+
 Choose one in the **MIB Profile** box at the top of the window. After you enter a
 target and credential, **Detect** reads the device's `sysObjectID` and suggests the
 profile whose MIBs describe that product. It contacts the device only when you

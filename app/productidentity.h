@@ -13,6 +13,11 @@ inline constexpr auto OriginalSourceUrl =
 inline constexpr auto LegacySettingsDomain = "snmpb.sourceforge.net";
 inline constexpr auto LegacySettingsApplication = "SnmpB";
 
+// Identifies this exact build. A clean (committed) build is stable across runs; a build with
+// local changes also carries its build time, so a development build never trusts an older
+// build's saved data.
+QString buildFingerprint();
+
 QString aboutHtml(const QString &version, const QString &dependencyVersions);
 }
 

@@ -161,6 +161,15 @@ MibProfileRuntimeConfiguration MibProfileRuntimeConfigurationBuilder::build(
     return configuration;
 }
 
+QString MibProfileRuntimeConfigurationBuilder::contentSha256(
+    const MibProfileRuntimeConfiguration &configuration)
+{
+    MibProfileRuntimeConfiguration copy = configuration;
+    copy.libraryGenerationValue = 0;
+    return QString::fromLatin1(QCryptographicHash::hash(canonicalBytes(copy),
+                                                         QCryptographicHash::Sha256).toHex());
+}
+
 QByteArray MibProfileRuntimeConfigurationBuilder::canonicalBytes(
     const MibProfileRuntimeConfiguration &configuration)
 {

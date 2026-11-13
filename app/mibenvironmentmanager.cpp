@@ -30,6 +30,9 @@ bool authorityMatches(const MibEnvironmentPtr &environment, const MibEffectivePl
 }
 }
 
+bool MibEnvironmentManager::authorizes(const MibEnvironmentPtr &environment, const MibEffectivePlan &plan)
+{ return authorityMatches(environment, plan); }
+
 MibEnvironmentManager::MibEnvironmentManager(Builder builder,QObject *parent,quint64 cacheBudget,QString parserIdentity)
     :QObject(parent),build(std::move(builder)),environmentCache(cacheBudget),parserId(std::move(parserIdentity)){}
 MibEnvironmentManager::~MibEnvironmentManager(){shutdown();}

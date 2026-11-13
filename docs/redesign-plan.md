@@ -448,7 +448,18 @@ into smaller steps, each with its own working build.
     for 799 files takes about 8 seconds in a Debug build over a network share, which is why it
     runs in the background; step 15 (persisting it) is not needed yet.
 15. **Persist compiled MIB data** (#9), only if measured search or startup
-    performance requires it.
+    performance requires it. *Done for Environments (2026-11-12), the measured need:* a profile of
+    396 vendor modules took about 65 s to build on every start. A built Environment is now saved
+    (`mibenvironmentdiskcache.*`, under `<app data>/SnmpB/mibs/environments`) and loaded on the next
+    start in about 1 s. The key hashes content only (plan, every provider file's SHA-256, the runtime
+    configuration without its per-process Library generation, Environment/plan/policy versions,
+    parser identity and the exact application build), so a changed file, profile, location, parser or
+    application can never find a stale copy. A copy is checksummed, must carry its own key, and is
+    vetted by the same authority check as a fresh build; any failure removes it and builds normally.
+    Writes are atomic and on a background thread; the folder keeps at most 16 copies and 1 GiB.
+    `RestoreProfileRuntime` (after an Editor Verify) still forces a fresh build. Set
+    `SNMPB_DISABLE_ENVIRONMENT_CACHE=1` to turn the cache off. The collection search index
+    (`mibcollectionservice`) is separate and already persisted.
 15a. **Automatic Profiles.** *Done (2026-10-31):* every `Vendor/Product` folder of the Library is a
     profile, named "Vendor / Product", with the stable id `auto:Vendor/Product`. Its members are the
     MIB files in that folder at any depth; it looks in the product folder first, then the vendor

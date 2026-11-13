@@ -66,6 +66,9 @@ public:
         const MibProfileRecord &profile, const MibDependencyIndex &library,
         QList<MibRuntimeCollectionReference> orderedCollections) const;
     static QByteArray canonicalBytes(const MibProfileRuntimeConfiguration &configuration);
+    // The configuration's hash without the per-process Library generation: equal for the same
+    // profile, roots and file contents in any session.
+    static QString contentSha256(const MibProfileRuntimeConfiguration &configuration);
 };
 
 struct MibRuntimePathEntry {
@@ -180,6 +183,8 @@ struct MibEffectivePlan {
     static constexpr int DependencyResolverPolicyVersion = 2;
     static constexpr int MaximumConvergencePasses = 8;
 
+    // Set for a rebuild that must re-parse the files (the saved-Environment cache is skipped).
+    bool bypassEnvironmentDiskCache = false;
     QString profileId;
     QString profileName;
     MibProfileType profileType = MibProfileType::Custom;

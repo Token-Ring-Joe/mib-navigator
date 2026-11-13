@@ -1,6 +1,15 @@
 #include "productidentity.h"
 #include "snmpb_build_info.h"
 
+QString ProductIdentity::buildFingerprint()
+{
+    QString text = QStringLiteral("%1|%2").arg(QString::fromLatin1(SNMPB_BUILD_REVISION),
+                                               QString::fromLatin1(SNMPB_BUILD_SOURCE_STATE));
+    if (text.contains(QStringLiteral("local changes")) || text.contains(QStringLiteral("unknown")))
+        text += QLatin1Char('|') + QString::fromLatin1(SNMPB_BUILD_UTC);
+    return text;
+}
+
 QString ProductIdentity::aboutHtml(const QString &version,
                                    const QString &dependencyVersions)
 {

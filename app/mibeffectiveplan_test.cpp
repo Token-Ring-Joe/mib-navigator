@@ -420,6 +420,14 @@ int main(int argc, char **argv)
     ok &= check(runtimeBuilder.build(automaticRuntimeProfile, newerIndex,
                     {productCollection, standardsCollection, pibCollection}).sha256() != automaticRuntime.sha256(),
                 "runtime hash changes with Library generation");
+    ok &= check(MibProfileRuntimeConfigurationBuilder::contentSha256(runtimeBuilder.build(
+                    automaticRuntimeProfile, newerIndex, {productCollection, standardsCollection, pibCollection})) ==
+                MibProfileRuntimeConfigurationBuilder::contentSha256(automaticRuntime),
+                "the content hash ignores the per-process Library generation (saved Environments rely on it)");
+    ok &= check(MibProfileRuntimeConfigurationBuilder::contentSha256(runtimeBuilder.build(
+                    changedRoots, index, {productCollection, standardsCollection, pibCollection})) !=
+                MibProfileRuntimeConfigurationBuilder::contentSha256(automaticRuntime),
+                "the content hash still changes with the explicit roots");
     const auto first = MibEffectivePlanResolver().resolve(automatic, index);
     const auto second = MibEffectivePlanResolver().resolve(automatic, index);
     ok &= check(first.sha256 == second.sha256 && MibEffectivePlanResolver::canonicalBytes(first) == MibEffectivePlanResolver::canonicalBytes(second), "same inputs are byte-identical");

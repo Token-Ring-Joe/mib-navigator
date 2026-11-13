@@ -423,3 +423,16 @@ the existing installed artifact correctly retains its pre-commit build identity.
     "Compiled/persisted MIB data and Environment cache policy (step 15)" was waiting for;
     decision needed before 1.0.0 final. The runtime also writes its staged files to
     `~/.cache/SnmpB` regardless of the settings location.
+
+    **Saved-Environment cache, 2026-11-12 (owner approved).** Implemented and verified on the
+    owner's collection (byte-exact copy): cold 65 s, restart 0.9 s load with identical results (396
+    modules, 0 errors, 38 warnings, 1564 notes, 42,315 nodes, 7.5 MB on disk); a damaged copy is
+    rejected, removed, rebuilt and re-saved; one edited MIB file makes the old copy unreachable;
+    reverting the edit finds the original copy again. See redesign plan step 15. **Still open:**
+    (a) an Editor Verify triggers `RestoreProfileRuntime`, which still re-parses the whole profile
+    (about 65 s for Fabric Engine) because it is deliberately uncached; whether it may use the
+    saved copy depends on whether anything needs the live parser restored, to be decided with a
+    GUI check; (b) after a restart the Fabric Engine tree is ready about 11 s after launch, of
+    which about 9 s is profile planning and catalog preparation before the environment is even
+    requested, the next performance target; (c) the first load of any new or changed profile
+    still takes the full build time.

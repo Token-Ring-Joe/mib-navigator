@@ -34,6 +34,7 @@
 #include <optional>
 
 #include "mibmodule.h"
+#include "productidentity.h"
 #include "mibenvironmentextractor.h"
 #include "mibenvironmentregistry.h"
 #include "mibproblemreport.h"
@@ -165,10 +166,17 @@ MibModule::MibModule(Snmpb *snmpb)
 
     connect( this, SIGNAL( StopAgentTimer() ), 
              s->AgentObj(), SLOT( StopTimer() ));
+    environmentParserIdentity=QStringLiteral("patched-libsmi-%1/engine-policy-1")
+        .arg(MibEngine::instance().libraryVersion());
+    if(qEnvironmentVariableIsEmpty("SNMPB_DISABLE_ENVIRONMENT_CACHE"))
+    {
+        environmentDiskCache=std::make_unique<MibEnvironmentDiskCache>(MibEnvironmentDiskCache::defaultDirectory());
+        environmentDiskCache->setLogger([](const QString &line){DiagnosticLogger::log("MIB",line);});
+    }
+    else DiagnosticLogger::log("MIB",QStringLiteral("saved Environment cache disabled by SNMPB_DISABLE_ENVIRONMENT_CACHE"));
     environmentManager=std::make_unique<MibEnvironmentManager>(
         [this](const MibEffectivePlan &plan){return BuildEnvironment(plan);},this,
-        MibEnvironmentCache::DefaultByteBudget,QStringLiteral("patched-libsmi-%1/engine-policy-1")
-            .arg(MibEngine::instance().libraryVersion()));
+        MibEnvironmentCache::DefaultByteBudget,environmentParserIdentity);
     connect(environmentManager.get(),&MibEnvironmentManager::buildStarted,this,
         [this](quint64,const QString &name){emit profileRuntimeBuildStarted(name);});
     connect(environmentManager.get(),&MibEnvironmentManager::buildCompleted,this,
@@ -856,14 +864,49 @@ void MibModule::RestoreProfileRuntime()
     if (ParserCheckRunning()) { deferredRuntimeRequest = true; return; }
     // A selection may still be building. Restoring the previous active plan
     // would silently undo the user's more recent selection.
-    const MibEffectivePlan restorePlan = !latestRequestedPlan.sha256.isEmpty()
+    MibEffectivePlan restorePlan = !latestRequestedPlan.sha256.isEmpty()
         ? latestRequestedPlan : activeProfilePlan;
+    // Restoring after an Editor Verify must re-parse (it exists to restore the parser), so it
+    // never reads the saved-Environment cache; the fresh result still refreshes the saved copy.
+    restorePlan.bypassEnvironmentDiskCache = true;
     if(environmentManager&&!restorePlan.sha256.isEmpty()){requestedPlans.insert(restorePlan.profileId,restorePlan);
         environmentManager->request(restorePlan,true);return;}
     ReadMibPaths();
 }
 
 MibEnvironmentBuildResult MibModule::BuildEnvironment(const MibEffectivePlan &plan)
+{
+    QString key;
+    if(environmentDiskCache&&plan.authorityError.isEmpty())
+        key=MibEnvironmentDiskCache::keyFor(plan,environmentParserIdentity,ProductIdentity::buildFingerprint());
+    if(!key.isEmpty()&&!plan.bypassEnvironmentDiskCache){
+        QElapsedTimer timer;timer.start();
+        QString why;
+        if(auto saved=environmentDiskCache->load(key,plan,&why)){
+            const bool libraryCurrent=[&]{QMutexLocker lock(&dependencyCommitMutex);
+                return dependencyIndex.ownsSnapshot(currentLibraryRoot(),plan.runtimeConfiguration.libraryGeneration());}();
+            if(libraryCurrent&&MibEnvironmentManager::authorizes(saved->environment,plan)){
+                DiagnosticLogger::log("MIB",tr("Environment loaded from saved copy profile=%1 modules=%2 nodes=%3 ms=%4")
+                    .arg(plan.profileId).arg(saved->environment->modules().size())
+                    .arg(saved->environment->nodes().size()).arg(timer.elapsed()));
+                MibEnvironmentBuildResult result;
+                result.environment=saved->environment;result.loadedModules=saved->loadedModules;
+                return result;
+            }
+            if(libraryCurrent){
+                environmentDiskCache->remove(key);
+                DiagnosticLogger::log("MIB",tr("Saved Environment did not match the plan and was removed profile=%1").arg(plan.profileId));
+            }
+        } else if(!why.isEmpty())
+            DiagnosticLogger::log("MIB",tr("Saved Environment rejected and removed profile=%1 reason=%2").arg(plan.profileId,why));
+    }
+    MibEnvironmentBuildResult result=BuildEnvironmentFresh(plan);
+    if(!key.isEmpty()&&result.error.isEmpty()&&result.environment&&result.environment->publishable())
+        environmentDiskCache->storeAsync(key,result.environment,result.loadedModules);
+    return result;
+}
+
+MibEnvironmentBuildResult MibModule::BuildEnvironmentFresh(const MibEffectivePlan &plan)
 {
     auto operation=MibEngine::instance().beginOperation(QStringLiteral("async-plan-build"));
     MibEnvironmentBuildResult result;

@@ -20,6 +20,9 @@ public:
         quint64 cacheBudget=MibEnvironmentCache::DefaultByteBudget,QString parserIdentity={});
     ~MibEnvironmentManager() override;
     quint64 request(const MibEffectivePlan &plan,bool bypassCache=false);
+    // True when `environment` is a usable build of exactly what `plan` asked for. Also used to
+    // vet an Environment loaded from the saved-Environment cache.
+    static bool authorizes(const MibEnvironmentPtr &environment, const MibEffectivePlan &plan);
     void shutdown();
     MibEnvironmentPtr active()const{return activeEnvironment;}
     quint64 buildCount()const{return builds;}

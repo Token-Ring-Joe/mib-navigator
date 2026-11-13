@@ -31,6 +31,7 @@ set(SNMPB_APP_SOURCES
     mibenvironmentextractor.cpp
     mibenvironmentregistry.cpp
     mibenvironmentcache.cpp
+    mibenvironmentdiskcache.cpp
     mibenvironmentmanager.cpp
     mibengine.cpp
     mibenginevalidation.cpp
@@ -430,6 +431,25 @@ if(BUILD_TESTING)
         mibdependencyindex.cpp mibdependencyindex.h
         mibeffectiveplan.cpp mibeffectiveplan.h mibeffectiveplan_test.cpp)
     target_link_libraries(snmpb_mib_effective_plan_test PRIVATE Qt6::Core snmpb_libsmi)
+
+    add_executable(snmpb_mib_environment_disk_cache_test
+        mibengine.cpp mibengine.h
+        mibruntimeparser.cpp mibruntimeparser.h
+        mibruntimestage.cpp mibruntimestage.h
+        mibenvironment.cpp mibenvironment.h
+        mibenvironmentextractor.cpp mibenvironmentextractor.h
+        mibenvironmentregistry.cpp mibenvironmentregistry.h
+        mibenvironmentdiskcache.cpp mibenvironmentdiskcache.h
+        mibcandidatefilter.cpp mibcandidatefilter.h
+        miblibrary.cpp miblibrary.h mibcollection.cpp mibcollection.h
+        mibprofile.cpp mibprofile.h
+        mibdependencyindex.cpp mibdependencyindex.h
+        mibeffectiveplan.cpp mibeffectiveplan.h mibenvironmentdiskcache_test.cpp)
+    target_compile_definitions(snmpb_mib_environment_disk_cache_test PRIVATE
+        SNMPB_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+    target_link_libraries(snmpb_mib_environment_disk_cache_test PRIVATE Qt6::Core snmpb_libsmi)
+    add_test(NAME snmpb.mib-environment-disk-cache COMMAND $<TARGET_FILE:snmpb_mib_environment_disk_cache_test>)
+    set_tests_properties(snmpb.mib-environment-disk-cache PROPERTIES TIMEOUT 300)
     if(WIN32)
         add_test(NAME snmpb.mib-effective-plan COMMAND ${CMAKE_COMMAND} -E env
             "PATH=$<TARGET_FILE_DIR:Qt6::Core>;$ENV{PATH}"

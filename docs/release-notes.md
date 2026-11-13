@@ -17,6 +17,13 @@ source has completed Windows/macOS CI or owner desktop acceptance.
 - Watch polls are written to the request Log.
 - SNMPv3 traps and informs: every saved credential with the same user name is tried.
 - Installation instructions for Windows, macOS and Linux in the README.
+- **Saved MIB environments.** A large profile used to take about a minute to load every time
+  MIB Navigator started (for example 396 Extreme Networks Fabric Engine modules). The first load of
+  a profile is unchanged, but it is now saved and the next start loads it in about a second. A
+  saved copy is used only if every MIB file, the profile and the application are exactly the
+  same; otherwise it is rebuilt. Saved copies are in the application data folder
+  (`SnmpB/mibs/environments`) and are safe to delete.
+- The request **Log** is now its own tab; Output and Problems stay in the bottom panel.
 
 ## Highlights
 
