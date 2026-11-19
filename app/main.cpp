@@ -3294,10 +3294,17 @@ int main( int argc, char ** argv )
         if (snmpb.MibModuleObj()->CurrentEnvironment())
             QTimer::singleShot(0, &app, runSmoke);
         else {
+            // The failure handler only covers the wait for the first Environment. Once the smoke
+            // run starts it must be disconnected: scenarios deliberately add and remove MIB files,
+            // and a background build that loses a file mid-read fails legitimately. That is not a
+            // startup failure, and the handler would overwrite the smoke log and exit with code 1.
+            auto startupFailure = std::make_shared<QMetaObject::Connection>();
             QObject::connect(snmpb.MibModuleObj(), &MibModule::profileRuntimeReady, &app,
-                [runSmoke](const QString &,const MibEffectivePlan &,MibEnvironmentPtr,
-                           const QStringList &,bool,bool){runSmoke();},Qt::SingleShotConnection);
-            QObject::connect(snmpb.MibModuleObj(), &MibModule::profileRuntimeFailed, &app,
+                [runSmoke, startupFailure](const QString &,const MibEffectivePlan &,MibEnvironmentPtr,
+                           const QStringList &,bool,bool){
+                    QObject::disconnect(*startupFailure);
+                    runSmoke();},Qt::SingleShotConnection);
+            *startupFailure = QObject::connect(snmpb.MibModuleObj(), &MibModule::profileRuntimeFailed, &app,
                 [&app, smoke_config_dir](const QString &profileId, const QString &error) {
                     QFile smokeLog(QDir(smoke_config_dir).filePath("launch-smoke.log"));
                     if (smokeLog.open(QIODevice::WriteOnly | QIODevice::Text)) {

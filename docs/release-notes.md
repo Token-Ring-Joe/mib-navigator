@@ -1,8 +1,9 @@
 # MIB Navigator release notes (current release candidate)
 
-Current redesign checkpoint: 2026-11-07. The application is in final usability
-and release validation. The RC label does not imply that the current uncommitted
-source has completed Windows/macOS CI or owner desktop acceptance.
+Current release candidate: 1.0.0-rc2 (2026-11-12, with later changes listed below). The
+application is in final release validation. The RC label does not imply that Windows and
+macOS desktop acceptance or real-device SNMPv3 acceptance is complete; see
+[outstanding-tasks.md](outstanding-tasks.md) for what remains before 1.0.0.
 
 ## Changes since 1.0.0-rc1
 

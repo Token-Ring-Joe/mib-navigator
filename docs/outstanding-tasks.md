@@ -1,5 +1,13 @@
 # Outstanding work after owner approval — 2026-11-07
 
+**Status as of 2026-11-15 (documentation reconciliation).** `v1.0.0-rc.1` and
+`v1.0.0-rc.2` are published; Query Macros milestones 1–4 are implemented and
+committed; the remaining work is GA readiness, not new features. The entries below
+keep their original numbering. Where a later owner ruling or commit changed an
+entry, the entry says so; items 26–28 hold the latest rulings and findings. The
+sections "Release work still outstanding" and "Maintenance and known limitations"
+list what still blocks or follows GA; everything else is done or deferred.
+
 The owner approved the accumulated work and authorized a local commit on
 2026-11-07. This closes the finishing pass's owner-approval checkpoint; it does
 not claim a new desktop test run, native-platform validation or real-device test.
@@ -21,6 +29,12 @@ does not authorize a commit, push, tag or publication.
    that does not establish current Windows/macOS results. The CI configuration
    uses Qt 6.10.3 while the VM uses 6.11.2; review that version difference and
    the existing headless-launch-test exclusion when preparing the release.
+   **Update 2026-11-15:** CI runs on every push and builds all three platforms. Of the
+   runs for the last five commits, the 2026-11-12 failures were a release-tree-policy
+   fixture on Windows/macOS and a disk-cache test on Windows, both fixed by later commits.
+   The newest run for `9166449` passed on `main` and failed on `modernize/qt6-cmake` in
+   `snmpb.tolerance-scenarios` on Linux; the cause was a smoke-harness defect, fixed (item
+   28). A green run of the fixed source on all three platforms is still needed before GA.
 2. **Native desktop acceptance.** Check Windows/macOS deployment, themes/Follow
    System, fonts, scaling, keyboard/menu behavior and platform integration on
    the actual packaged builds. Owner approval of the Linux work is recorded;
@@ -43,6 +57,10 @@ does not authorize a commit, push, tag or publication.
    become a real obstacle. Still to do: a release workflow that attaches the archives to
    a GitHub Release when a tag is pushed (the tag and the Release need owner
    instruction), the naming/trademark check, and version labels.
+   **Update 2026-11-15:** the release workflow, the single-source version label
+   (`cmake/ReleaseLabel.cmake`), the Qt/LGPL notices and the stable release notes are done
+   (items 26–27). What remains is the owner's naming/trademark decision and, for GA, the
+   label change, tag and Release, which need owner instruction.
 
 ## Planned features and refinements
 
@@ -51,7 +69,8 @@ does not authorize a commit, push, tag or publication.
    Captured scalar/exact runs, grouped Results, Stop and logging are the active
    workstream ([milestone 2](query-macros-milestone-2.md)). Table retrieval is
    implemented ([milestone 3](query-macros-milestone-3.md)); legacy dialog
-   retirement remains milestone 4. The four working
+   retirement was milestone 4 (done, below). **All four milestones are implemented and shipped
+   in `v1.0.0-rc.1`; this item is closed.** The four working
    milestones are definition model/repository/editor; captured scalar/exact
    runs and grouped Results; table groups with all/prompt/fixed instances; then
    regressions, old Multiple Varbinds retirement and release validation.
@@ -66,7 +85,8 @@ does not authorize a commit, push, tag or publication.
 7. **Watch persistence and interval editing — implemented 2026-11-07.**
    Definitions save without secrets/results, return paused after restart, and
    support selected-row interval edits. Port/context remain captured.
-8. **Watch columns/tables.** Settle the all-instances/table design before work:
+8. **Watch columns/tables.** **Deferred by the owner (2026-11-11, item 26).** Settle the
+   all-instances/table design before work:
    discovery, polling, membership changes, persistence and presentation remain
    undecided. This is separate from Query Macros and retains captured endpoints.
 9. **Broader MIB value checks — implemented in the maintenance batch.** Shared
@@ -77,8 +97,8 @@ does not authorize a commit, push, tag or publication.
    rules remain incremental refinements. Tolerant MIB loading is unchanged.
 10. **MIB Problems tools — implemented 2026-11-07.** Text/severity filtering,
     sorting and snapshot-based CSV copy/export are present.
-11. **Logging refinements.** Decide whether/how Watch polls belong in the
-    request log. Raw libsmi/SNMP++ diagnostic timestamp wrapping, redaction and
+11. **Logging refinements.** Watch polls are now recorded in the request Log, one entry
+    per poll (item 26). Raw libsmi/SNMP++ diagnostic timestamp wrapping, redaction and
     shared file/UI delivery are implemented (2026-11-07). Full PDU/packet decoding
     is optional later, not an
     unimplemented requirement of the current request log.
@@ -115,16 +135,18 @@ does not authorize a commit, push, tag or publication.
     in `main.cpp`). Confirm on a real Windows machine with the normal system font
     that the window still shrinks to 1024 px. `SNMPB_SMOKE_FONT_SCALE` emulates
     wide fonts locally; `SNMPB_DUMP_MINWIDTH` lists the widest widgets.
-14. **Same-username SNMPv3 notification variants.** Decide how to improve the
-    unsolicited-notification limitation: the first saved variant supplies the
+14. **Same-username SNMPv3 notification variants.** Partly addressed 2026-11-11 (item 26):
+    incoming notifications now try every saved variant of a user name. The remaining
+    limitation is: the first saved variant supplies the
     default until a successful query teaches a device's engine-specific keys.
     Credential security edits clear learned mappings. See
     [USM credential management](usm-credential-management-v2.md).
-15. **Parser shutdown/cancellation.** Verification is asynchronous, but shutdown
+15. **Parser shutdown/cancellation.** **Deferred by the owner (2026-11-11, item 26).** Verification is asynchronous, but shutdown
     may wait for a running uninterruptible parse. Stronger cancellation/bounds
     require a separate compatibility-conscious design; no parser replacement is
     implied.
-16. **MIB line-ending identity policy.** Decide whether CRLF/LF-only differences
+16. **MIB line-ending identity policy.** **Decided 2026-11-11 (item 26): identity stays raw
+    SHA-256.** Original question: whether CRLF/LF-only differences
     should count as equivalent providers and how old pins/profiles migrate.
     Raw SHA-256 is currently authoritative. Never normalize user/source MIBs as
     a side effect of this decision.
@@ -143,6 +165,7 @@ does not authorize a commit, push, tag or publication.
     device/Graphs/Discovery/transfer designs and earlier credential stages are
     clearly marked historical. Translation completion/native-language review
     remains outstanding. Current redesign/settings/release guides win.
+    **Owner ruling 2026-11-11 (item 26): translations stay English only.**
 
 18. **Library conflict explanations — resolved 2026-11-09.** The Library now judges
     conflicts for the viewed profile, lists the competing files with revisions on the
@@ -157,7 +180,8 @@ does not authorize a commit, push, tag or publication.
     (for example double-click or a context-menu action) that opens that file in the
     Editor at the reported line. **Priority: medium** (owner, 2026-11-11). The
     search results already have "Open in Editor at this definition"; reuse that path.
-    Not started.
+    **Implemented 2026-11-12 (item 26):** an Open in Editor button and right-click menu
+    in Problems, plus a right-click menu on the Library list.
 20. **Line numbers in the Editor (requested 2026-11-11).** Show a line-number gutter
     in the MIB Editor, which also makes the line references in Problems usable. Check
     whether the existing `markerwidget` gutter can carry them. **Priority: high**
@@ -166,8 +190,8 @@ does not authorize a commit, push, tag or publication.
     colours, numbers beside the first row of a wrapped line). Test `snmpb.markerwidget`.
     **Owner confirmed working 2026-11-11.**
 21. **Results readability and layout (requested 2026-11-11). Priority: high**
-    (owner, 2026-11-11; applies to all three parts). Three related changes, none
-    started. **Status 2026-11-11:** Module column, colorized Value and CSV export in
+    (owner, 2026-11-11; applies to all three parts). Three related changes; two are done
+    and the third was dropped. **Status 2026-11-11:** Module column, colorized Value and CSV export in
     display order are implemented and **owner confirmed** ("I see module and I like
     the blue", "Copy as CSV works"). The Results/Log swap is **dropped**: the owner
     likes the current layout (2026-11-11).
@@ -276,15 +300,38 @@ does not authorize a commit, push, tag or publication.
     bundled Qt modules and the three non-Qt Windows DLLs. Owner USPTO search found no exact
     "MIB Navigator" mark (not a clearance; still the owner's item).
 
+28. **CI failure analysis, 2026-11-15.** All failed workflow runs from 2026-11-12 to 2026-11-13
+    were examined (logs, not guesses):
+    - `snmpb.release-tree-policy` on Windows and macOS (runs for `9d0c4f6`): the test fixture
+      lacked the Qt inventories; fixed in `5115b2f`.
+    - `snmpb.mib-environment-disk-cache` on Windows (runs for `80f4d92`): an open cache file
+      could not be deleted on Windows; fixed in `9166449`.
+    - `snmpb.tolerance-scenarios` on Linux (the `modernize/qt6-cmake` run for `9166449`; the
+      `main` run of the same commit passed): a **smoke-harness defect**. The startup
+      `profileRuntimeFailed` handler in `app/main.cpp` stayed connected after the smoke run began.
+      The "late MIB" scenario adds and then removes a MIB file; a background Environment build
+      that loses the file mid-read legitimately reports "Profile member file is no longer
+      readable", and the leftover handler turned that into a launch failure (it truncated
+      `launch-smoke.log` and exited with code 1). The handler is now disconnected when the first
+      Environment is ready. The product behavior (the build fails closed and is superseded by
+      the next build) is unchanged. The test is slow (about 14–15 minutes on the CI Linux runner)
+      and passes in that time; its duration is not the failure.
+    - One macOS job was cancelled (2026-11-12) and two runs from 2026-11-11 never left the
+      queue; neither produced a test result, so they say nothing about the code.
+    Not independently reproduced locally: the race is timing dependent, so the evidence is the
+    CI log and the code path, not a failing local run.
+
 ## Optional or conditional decisions, not scheduled commitments
 
-- **Compiled/persisted MIB data and Environment cache policy (step 15):** pursue
+- **Compiled/persisted MIB data and Environment cache policy (step 15):** the on-disk
+  Environment cache was added in `80f4d92` (2026-11-13; see the release notes). Further
   persistence/LRU work only if measured startup/search/memory behavior needs it.
 - **Implementation check (step 19):** compare a live device with its selected
   profile; optional and separately authorized.
-- **Additional UI decisions:** a general compact-density setting; moving Log
-  to a top-level workspace; a provider-pin editor (the resolver already supports
-  pins); and removal of unused legacy tree/dialog code after a call-path audit.
+- **Additional UI decisions:** a general compact-density setting (deferred until after GA
+  and user feedback); a provider-pin editor (the resolver already supports pins; not
+  scheduled); and removal of unused legacy tree/dialog code after a call-path audit (not
+  yet, owner 2026-11-12). Moving Log to a top-level workspace is done (item 27).
 - **Trap history extensions:** history is in memory and record-bounded, not
   persisted or byte-budgeted. Additional retention controls need a product
   decision; current retained traps intentionally follow the active MIB Profile.
