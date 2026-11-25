@@ -2260,7 +2260,7 @@ smiCheckModuleIdentityRegistration(Parser *parser, Object *object)
  *
  *----------------------------------------------------------------------
  */
-void smiyyerror(char *msg, Parser *parserPtr)
+void smiyyerror(const char *msg, Parser *parserPtr)
 {
     if (parserPtr->line == parserPtr->lcline &&
 	parserPtr->modulePtr &&

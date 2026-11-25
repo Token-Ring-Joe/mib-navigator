@@ -1,4 +1,5 @@
 #include "usmcredentialservice.h"
+#include "usmengineid.h"
 
 #include <QHash>
 #include <QSet>
@@ -65,16 +66,21 @@ UsmCredentialRecord UsmCredentialService::createWorkingRecord(
 bool UsmCredentialService::validateWorkingCopy(
     const QList<UsmCredentialRecord> &records) const
 {
-    QSet<QString> ids;
+    QSet<QString> ids, boundDevices;
     for (const UsmCredentialRecord &record : records)
     {
         const QString name = record.securityName.trimmed();
         if (record.identity.credentialId.isEmpty() || name.isEmpty() ||
-            !requirementsSatisfied(record) ||
+            !requirementsSatisfied(record) || !UsmEngineId::isValid(record.engineId) ||
             record.displayName.trimmed().isEmpty() || ids.contains(record.identity.credentialId))
             return false;
         ids.insert(record.identity.credentialId);
-
+        // Two credentials for the same user on the same device would be ambiguous.
+        if (!record.engineId.isEmpty()) {
+            const QString device = name + QLatin1Char('\n') + UsmEngineId::format(record.engineId);
+            if (boundDevices.contains(device)) return false;
+            boundDevices.insert(device);
+        }
     }
     return true;
 }
@@ -119,7 +125,7 @@ void UsmCredentialService::applyCommitted(
             if (old.securityName != record.securityName ||
                 old.displayName != record.displayName ||
                 old.authProtocol != record.authProtocol ||
-                old.privacyProtocol != record.privacyProtocol ||
+                old.privacyProtocol != record.privacyProtocol || old.engineId != record.engineId ||
                 old.authSecret.bytes() != record.authSecret.bytes() ||
                 old.privacySecret.bytes() != record.privacySecret.bytes())
                 emit credentialUpdated(id);

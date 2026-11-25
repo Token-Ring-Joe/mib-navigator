@@ -5,6 +5,18 @@ application is in final release validation. The RC label does not imply that Win
 macOS desktop acceptance or real-device SNMPv3 acceptance is complete; see
 [outstanding-tasks.md](outstanding-tasks.md) for what remains before 1.0.0.
 
+## Changes since 1.0.0-rc2 (not yet in a published release)
+
+- **Device engine ID for SNMPv3 credentials.** A credential can carry an optional engine ID
+  of one device (Credentials > Device engine ID). Traps and informs from that device then use
+  that credential from the first message, even when several credentials share a user name.
+  Leave it empty for a credential that applies to any device.
+- **Quitting never waits long for a MIB parse.** If a very slow MIB is still being parsed when
+  you close MIB Navigator, it now waits at most 5 seconds and then exits instead of staying open.
+- **Less memory is held across MIB reloads**, and the SNMP++ and libsmi sources build without
+  compiler warnings. MIB parsing results are unchanged.
+- Test-only fix: a timing race in the launch smoke test that failed one CI run.
+
 ## Changes since 1.0.0-rc1
 
 - **Copy as Command.** Right-click an object in the tree and copy the equivalent

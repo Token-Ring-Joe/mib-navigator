@@ -174,6 +174,40 @@ int runTests()
               "a variant with the right protocols but the wrong passphrase cannot authenticate");
     }
     {
+        // A credential bound to a device's engine ID is exact for that sender: it verifies from the
+        // first message without being a registered variant, and it shadows the generic credential
+        // for that device only. (Both test senders report the engine ID "credential-test-engine".)
+        int receiverStatus;
+        v3MP receiver(OctetStr("bound-receiver-engine"), 3, receiverStatus, false);
+        check(receiverStatus == SNMPv3_MP_OK, "bound receiver initializes");
+        receiver.get_usm()->set_discovery_mode();
+        const auto secret = [](const CredentialSecret &s) { return OctetStr(
+            reinterpret_cast<const unsigned char *>(s.bytes().constData()), s.bytes().size()); };
+        const auto &ra = *a.usmCredential; const auto &rb = *b.usmCredential;
+        // Generic default is credential A; nothing else is registered.
+        receiver.get_usm()->add_usm_user(OctetStr("shared-user"), ra.authProtocol, ra.privacyProtocol,
+                                         secret(ra.authSecret), secret(ra.privacySecret));
+        check(decode(&receiver, encode(firstModel, SNMP_SECURITY_LEVEL_AUTH_NOPRIV, 710, sNMP_PDU_TRAP)),
+              "the generic credential verifies its own notification");
+        check(!decode(&receiver, encode(secondModel, SNMP_SECURITY_LEVEL_AUTH_PRIV, 711, sNMP_PDU_TRAP)),
+              "a notification from credential B fails when B is not bound and not a variant");
+        const OctetStr device("credential-test-engine");
+        check(receiver.get_usm()->add_usm_user(OctetStr("shared-user"), OctetStr("shared-user"), rb.authProtocol,
+                  rb.privacyProtocol, secret(rb.authSecret), secret(rb.privacySecret), device) == SNMPv3_USM_OK,
+              "a device-bound credential installs as a localized entry");
+        check(decode(&receiver, encode(secondModel, SNMP_SECURITY_LEVEL_AUTH_PRIV, 712, sNMP_PDU_TRAP)),
+              "a notification from the bound device verifies with the bound credential from the first message");
+        check(!decode(&receiver, encode(firstModel, SNMP_SECURITY_LEVEL_AUTH_NOPRIV, 713, sNMP_PDU_TRAP)),
+              "the bound credential is exact for its device: the generic credential no longer applies to it");
+        check(receiver.get_usm()->delete_localized_user(device, OctetStr("shared-user")) == SNMPv3_USM_OK,
+              "a device-bound entry can be removed");
+        check(decode(&receiver, encode(firstModel, SNMP_SECURITY_LEVEL_AUTH_NOPRIV, 714, sNMP_PDU_TRAP)),
+              "removing the bound entry restores the generic credential for that device");
+        check(receiver.get_usm()->add_usm_user(OctetStr("plain-user"), OctetStr("plain-user"), SNMP_AUTHPROTOCOL_NONE,
+                  SNMP_PRIVPROTOCOL_NONE, OctetStr(""), OctetStr(""), device) == SNMPv3_USM_OK,
+              "a device-bound noAuthNoPriv credential installs");
+    }
+    {
         LoopbackAgent agentA(a, 111, false), agentB(b, 222, true);
         check(agentA.port && agentB.port, "synthetic v3 agents bind loopback ports");
         if (agentA.port && agentB.port) {

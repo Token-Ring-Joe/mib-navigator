@@ -1,4 +1,5 @@
 #include "usmcredentialrepository.h"
+#include "usmengineid.h"
 
 #include <QFile>
 #include <QSettings>
@@ -97,6 +98,10 @@ QList<UsmCredentialRecord> UsmCredentialRepository::loadRecords(QString *error) 
             }
             auth = all.value(authKey).toBase64(); priv = all.value(privKey).toBase64();
         }
+        // Optional and absent in files written before the field existed. A present but unusable
+        // value is a damaged file: refuse it (the file is left untouched) rather than guess.
+        QString engineError;
+        if (!UsmEngineId::parse(o.value("engineId").toString(), &record.engineId, &engineError)) return fail();
         const auto authBytes = QByteArray::fromBase64(auth), privBytes = QByteArray::fromBase64(priv);
         if (record.identity.credentialId.isEmpty() || ids.contains(record.identity.credentialId) ||
             record.displayName.trimmed().isEmpty() || record.securityName.trimmed().isEmpty() ||
@@ -126,11 +131,17 @@ bool UsmCredentialRepository::saveRecords(const QList<UsmCredentialRecord> &reco
 bool UsmCredentialRepository::writeRecords(const QList<UsmCredentialRecord> &records, bool withoutSecrets) const
 {
     QJsonArray entries;
-    for (const auto &r : records) entries.append(QJsonObject{
-        {"id", r.identity.credentialId}, {"name", r.displayName}, {"user", r.securityName},
-        {"authProtocol", r.authProtocol}, {"privacyProtocol", r.privacyProtocol},
-        {"authSecret", withoutSecrets ? QString() : QString::fromLatin1(r.authSecret.bytes().toBase64())},
-        {"privacySecret", withoutSecrets ? QString() : QString::fromLatin1(r.privacySecret.bytes().toBase64())}});
+    for (const auto &r : records) {
+        QJsonObject entry{
+            {"id", r.identity.credentialId}, {"name", r.displayName}, {"user", r.securityName},
+            {"authProtocol", r.authProtocol}, {"privacyProtocol", r.privacyProtocol},
+            {"authSecret", withoutSecrets ? QString() : QString::fromLatin1(r.authSecret.bytes().toBase64())},
+            {"privacySecret", withoutSecrets ? QString() : QString::fromLatin1(r.privacySecret.bytes().toBase64())}};
+        // Written only when set, so files without an engine ID stay byte-for-byte what older
+        // versions wrote. The engine ID is not a secret and is never moved to the secret store.
+        if (!r.engineId.isEmpty()) entry.insert("engineId", UsmEngineId::format(r.engineId));
+        entries.append(entry);
+    }
     QJsonObject root{{"schema", 2}, {"credentials", entries}};
     if (withoutSecrets) root.insert("protected", true);
     const QByteArray data = QJsonDocument(root).toJson();

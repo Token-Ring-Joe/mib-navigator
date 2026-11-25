@@ -68,6 +68,6 @@ extern void smiCheckUniqueness(Parser *parser, Object *object);
 
 extern void smiCheckModuleIdentityRegistration(Parser *parser, Object *object);
 
-extern void smiyyerror(char *msg, Parser *parserPtr);
+extern void smiyyerror(const char *msg, Parser *parserPtr);
 
 #endif /* _CHECK_H */

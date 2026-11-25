@@ -1606,11 +1606,22 @@ void Snmpb::ShowEditorDocument()
 
 void Snmpb::Shutdown()
 {
+    // A MIB parse cannot be interrupted, and a very slow or pathological MIB must not keep the
+    // application from closing. Wait for the parser for a bounded time only.
+    constexpr std::chrono::milliseconds parserShutdownBudget{5000};
+    auto &engine = MibEngine::instance();
+    engine.armShutdownDeadline(parserShutdownBudget);
     if (startup) startup->cancel();
     if (modules) modules->StopBackgroundWork();
     DiagnosticLogger::log("Shutdown", "trap listener shutdown begin", false);
     if (agent) agent->Shutdown();
     DiagnosticLogger::log("Shutdown", "trap listener shutdown end", false);
+    if (engine.shutdownTimedOut())
+        DiagnosticLogger::log("Shutdown",
+            QStringLiteral("a MIB parse was still running after %1 ms; the process will exit without waiting for it")
+                .arg(parserShutdownBudget.count()), false);
+    // main() acts on shutdownTimedOut() after the event loop returns, once every aboutToQuit
+    // handler (window geometry and layout saves) has run. Nothing is destroyed in between.
 }
 
 USMProfileManager* Snmpb::UPManagerObj(void)

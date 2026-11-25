@@ -101,7 +101,10 @@ const char *TimeTicks::get_printable() const
   }
 
   unsigned long hseconds, seconds, minutes, hours, days;
-  unsigned long tt = smival.value.uNumber;
+  // TimeTicks is an unsigned 32-bit value on the wire. uNumber is a 64-bit unsigned long on LP64
+  // platforms but 32 bits on Windows; keeping the low 32 bits makes both format identically and
+  // keeps the day count short enough for output_buffer.
+  unsigned long tt = smival.value.uNumber & 0xFFFFFFFFUL;
 
   days = tt / 8640000;
   tt %= 8640000;
@@ -117,14 +120,16 @@ const char *TimeTicks::get_printable() const
 
   hseconds = tt;
 
+  // snprintf as a second safeguard: with the value limited to 32 bits above, the text always fits
+  // in the 30-byte buffer, and the bound keeps it that way if the buffer or value rules change.
   if (days == 0)
-    sprintf(nc_this->output_buffer, "%lu:%02lu:%02lu.%02lu",
+    snprintf(nc_this->output_buffer, sizeof(nc_this->output_buffer), "%lu:%02lu:%02lu.%02lu",
             hours, minutes, seconds, hseconds);
   else if (days == 1)
-    sprintf(nc_this->output_buffer, "1 day %lu:%02lu:%02lu.%02lu",
+    snprintf(nc_this->output_buffer, sizeof(nc_this->output_buffer), "1 day %lu:%02lu:%02lu.%02lu",
 	    hours, minutes, seconds, hseconds);
   else
-    sprintf(nc_this->output_buffer, "%lu days, %lu:%02lu:%02lu.%02lu",
+    snprintf(nc_this->output_buffer, sizeof(nc_this->output_buffer), "%lu days, %lu:%02lu:%02lu.%02lu",
 	    days, hours, minutes, seconds, hseconds);
 
   nc_this->m_changed = false;

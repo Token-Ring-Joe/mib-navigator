@@ -41,8 +41,8 @@ void MibEngine::initialize(const QString &searchPath,bool restart)
     smiInit(nullptr);
     if(!searchPath.isEmpty())smiSetPath(searchPath.toLocal8Bit().constData());
 }
-void MibEngine::shutdown(){if(!isWorkerThread()){std::mutex mutex;std::condition_variable done;bool complete=false;
-    submit([&]{shutdown();std::lock_guard lock(mutex);complete=true;done.notify_one();});std::unique_lock lock(mutex);done.wait(lock,[&]{return complete;});return;}
+void MibEngine::shutdown(){if(!isWorkerThread()){
+    waitForQueuedMarker([this](std::function<void()> marker){submit([this,marker]{shutdown();marker();});});return;}
     auto operation=beginOperation(QStringLiteral("shutdown"));smiExit();}
 
 MibEngineValidationResult MibEngine::validateSource(const QByteArray &content,

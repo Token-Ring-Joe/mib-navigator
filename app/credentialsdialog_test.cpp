@@ -88,6 +88,51 @@ int main(int argc, char **argv)
     dialog.findChild<QPushButton *>("CredentialDelete")->click();
     check(dialog.applyChanges() && !users.find(first) && users.find(second), "Delete removes the selected ID only");
 
+    // Optional device engine ID: only incoming notifications use it.
+    {
+        const auto select = [&](const QString &id) {
+            for (int row = 0; row < dialog.credentialList()->count(); ++row)
+                if (dialog.credentialList()->item(row)->data(Qt::UserRole).toString() == id) { dialog.credentialList()->setCurrentRow(row); return; }
+        };
+        const QString recordFile = usmFile + ".v2.json";
+        check(!bytes(recordFile).contains("engineId"), "a credential without an engine ID writes no engineId key");
+        dialog.prepare(CredentialsDialog::Users); select(second);
+        auto *engine = dialog.findChild<QLineEdit *>("CredentialEngineId");
+        check(engine && engine->text().isEmpty(), "the engine ID field is empty for an existing credential");
+        field(dialog, "CredentialEngineId", "0x80:00:1F:88:80:AB:CD:EF:01:02");
+        check(dialog.applyChanges() && users.find(second)->engineId == QByteArray::fromHex("80001f8880abcdef0102"),
+              "an engine ID typed with 0x and colons is saved as raw bytes");
+        UsmCredentialService restarted({}, UsmCredentialRepository(usmFile));
+        check(restarted.find(second) && restarted.find(second)->engineId == users.find(second)->engineId &&
+              restarted.records() == users.records(), "the engine ID survives a restart");
+        check(bytes(recordFile).contains("80001f8880abcdef0102"), "the engine ID is stored as lower-case hex");
+        dialog.prepare(CredentialsDialog::Users); select(second);
+        check(dialog.findChild<QLineEdit *>("CredentialEngineId")->text() == "80001f8880abcdef0102",
+              "a saved engine ID is shown in canonical form");
+        const QList<UsmCredentialRecord> savedRecords = users.records();
+        const QByteArray savedFile = bytes(recordFile);
+        const QStringList unusable{"xyz", "800", "8000", "80001f88 80ab cdef 010", QString(66, QLatin1Char('a'))};
+        for (const QString &bad : unusable) {
+            field(dialog, "CredentialEngineId", bad);
+            check(!dialog.applyChanges() && users.records() == savedRecords && bytes(recordFile) == savedFile &&
+                  dialog.findChild<QLabel *>("CredentialStatus")->text().contains("engine ID"),
+                  "an unusable engine ID is refused by name and nothing is written");
+        }
+        field(dialog, "CredentialEngineId", "");
+        check(dialog.applyChanges() && users.find(second)->engineId.isEmpty() && !bytes(recordFile).contains("engineId"),
+              "clearing the field returns to a credential without an engine ID");
+        // Duplicate starts unbound, so a copy cannot collide; a hand-made collision is refused.
+        dialog.prepare(CredentialsDialog::Users); select(second);
+        field(dialog, "CredentialEngineId", "8000000903001122334455");
+        dialog.findChild<QPushButton *>("CredentialDuplicate")->click();
+        check(dialog.findChild<QLineEdit *>("CredentialEngineId")->text().isEmpty(), "Duplicate starts without an engine ID");
+        field(dialog, "CredentialEngineId", "8000000903001122334455");
+        check(!dialog.applyChanges(), "two credentials with the same username and engine ID are refused");
+        field(dialog, "CredentialEngineId", "8000000903001122334466");
+        check(dialog.applyChanges() && users.records().size() == 2, "the same username on a different engine ID is allowed");
+        dialog.prepare();
+    }
+
     // The second atomic writer fails: restore the first file, publish neither service, keep edits open.
     CommunityCredentialService failingCommunity(dir.filePath("missing/communities.ini"));
     UsmCredentialService rollbackUsers({}, UsmCredentialRepository(dir.filePath("rollback.ini")));

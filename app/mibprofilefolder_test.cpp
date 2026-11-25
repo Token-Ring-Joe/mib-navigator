@@ -311,7 +311,9 @@ int main(int argc, char **argv)
         // A helper file with a MIB extension is called out; a real MIB with a parse error is not.
         QTemporaryDir files; ok &= check(files.isValid(), "temporary directory for bootstrap-file notes");
         const auto write = [&files](const char *name, const char *text) {
-            QFile file(files.filePath(name)); file.open(QIODevice::WriteOnly); file.write(text); return files.filePath(name);
+            QFile file(files.filePath(name));
+            if (!file.open(QIODevice::WriteOnly) || file.write(text) < 0) return QString();
+            return files.filePath(name);
         };
         const QString helper = write("def.my", "-- DEFINITIONS ::= BEGIN is only a comment here\nproduct = 5\n");
         const QString real = write("real.my", "REAL-MIB DEFINITIONS ::= BEGIN\n x OBJECT IDENTIFIER ::= { iso 3 }\nEND\n");

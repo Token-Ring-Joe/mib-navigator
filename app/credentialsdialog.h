@@ -2,6 +2,8 @@
 #define CREDENTIALSDIALOG_H
 
 #include <QDialog>
+#include <QHash>
+#include <QString>
 #include <functional>
 #include "credentialrecords.h"
 
@@ -45,9 +47,12 @@ private:
     QList<UsmCredentialRecord> users;
     QString currentId;
     CredentialKind currentKind = CredentialKind::Community;
+    // Engine ID text the owner typed that is not a usable engine ID, by credential id. Kept so the
+    // text is shown again if the credential is reselected, and so Save can refuse it by name.
+    QHash<QString, QString> invalidEngineIds;
     QListWidget *list;
     QWidget *editor;
-    QLineEdit *displayName, *readCommunity, *writeCommunity, *securityName, *authSecret, *privacySecret;
+    QLineEdit *displayName, *readCommunity, *writeCommunity, *securityName, *authSecret, *privacySecret, *engineId;
     QComboBox *authProtocol, *privacyProtocol;
     QLabel *versionLabel, *status;
     QStackedWidget *pages;

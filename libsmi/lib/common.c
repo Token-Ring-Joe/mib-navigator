@@ -172,10 +172,13 @@ SmiLanguage smiGuessModuleLanguage(const char *modulename)
     
     file = fopen(path, "r");
     if (! file) {
+        smiFree(path);
         return SMI_LANGUAGE_UNKNOWN;
     }
 
     lang = smiGuessFileLanguage(file);
     fclose(file);
+    /* smiGetModulePath() returns a newly allocated string that this function owns. */
+    smiFree(path);
     return lang;
 }

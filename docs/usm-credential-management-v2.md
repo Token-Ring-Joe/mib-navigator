@@ -80,6 +80,38 @@ Limitation: variants are told apart by their authentication digest. Two variants
 the same authentication protocol and passphrase but different privacy settings are
 not distinguished, because decryption happens after authentication.
 
+### Optional device engine ID (2026-11-19)
+
+A saved SNMPv3 credential may carry an optional **Device engine ID** (Credentials > the
+credential > "Device engine ID"). It removes the limitation above for any device whose
+engine ID the owner knows: the credential is then *exact* for that sender instead of one
+candidate among same-name credentials.
+
+- **Format.** 5 to 32 bytes (RFC 3411), typed or pasted as hexadecimal. `0x`, colons, dashes,
+  dots and spaces are accepted. It is stored and shown as lower-case hex without separators.
+  Empty means "any device" and is the default; nothing changes for credentials without one.
+- **Effect.** Only incoming notifications use it. At runtime the credential is installed in the
+  notification USM as the localized entry for (engine ID, user name) via
+  `USM::add_usm_user(..., engine_id)`. SNMP++ looks that exact entry up before anything
+  else, so a trap or inform from that device authenticates with this credential from the first
+  message, whatever other credentials share the user name. A device-bound credential is not
+  the per-name default and not a variant tried for other devices; for other senders the
+  generic credentials behave as before. Requests are unaffected: each request builds its own
+  isolated security context from the selected credential.
+- **Rules.** Two credentials may not have the same user name *and* the same engine ID (the
+  dialog refuses the save and names the problem). An unusable value is refused by name and
+  nothing is written. **Duplicate** starts a copy without an engine ID. A saved file that holds
+  an unusable value is treated like any other damaged credential file: reported and left
+  untouched.
+- **Storage.** `engineId` is an optional key in the existing schema-2 credential file, written
+  only when set, so files without engine IDs are byte-for-byte what earlier versions wrote.
+  It is not a secret and never goes into the protected secret store. A version that predates
+  the field ignores it on load and drops it the next time it saves.
+- **Tests.** `snmpb.snmpv3-credentials` (device-bound entry verifies from the first message,
+  shadows the generic credential for that device only, removal restores it),
+  `snmpb.credential-architecture` (parsing, validation, restart, damaged value),
+  `snmpb.credentials-dialog` (edit, save, refusals) and the application smoke test (live USM).
+
 ## Validation findings (2026-11-02)
 
 The focused credential/dialog/connection/wire tests pass with leak detection

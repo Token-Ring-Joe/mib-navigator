@@ -105,7 +105,10 @@ does not authorize a commit, push, tag or publication.
 
 ## Maintenance and known limitations requiring separate work
 
-12. **Residual parser leaks.** Diagnostic-message and application/UI ownership
+12. **Residual parser leaks.** **Worked on 2026-11-19 (owner go-ahead; item 29): the safe
+    part is done, and about 90% of what remains is generated-scanner token strings. The
+    compiler warnings below are fixed (Release build: 0 warnings).** Earlier text follows.
+    Diagnostic-message and application/UI ownership
     leaks were reduced by about 84% in the same headless workflow (92,179 to
     14,567 bytes). Unsuppressed residual stacks are historical scanner strings and
     pending nodes. Their compatibility-sensitive cleanup remains separate work;
@@ -136,12 +139,16 @@ does not authorize a commit, push, tag or publication.
     that the window still shrinks to 1024 px. `SNMPB_SMOKE_FONT_SCALE` emulates
     wide fonts locally; `SNMPB_DUMP_MINWIDTH` lists the widest widgets.
 14. **Same-username SNMPv3 notification variants.** Partly addressed 2026-11-11 (item 26):
-    incoming notifications now try every saved variant of a user name. The remaining
-    limitation is: the first saved variant supplies the
+    incoming notifications now try every saved variant of a user name. **Resolved for known
+    devices 2026-11-19 (item 29): a credential may carry an optional Device engine ID that
+    makes it exact for that sender.** For a device whose engine ID is not entered, the
+    remaining limitation is: the first saved variant supplies the
     default until a successful query teaches a device's engine-specific keys.
     Credential security edits clear learned mappings. See
     [USM credential management](usm-credential-management-v2.md).
-15. **Parser shutdown/cancellation.** **Deferred by the owner (2026-11-11, item 26).** Verification is asynchronous, but shutdown
+15. **Parser shutdown/cancellation.** **Bounded shutdown implemented 2026-11-19 (owner choice,
+    item 29): quitting waits at most 5 seconds for a running parse, then exits. True
+    cancellation inside libsmi remains deferred (owner, 2026-11-11, item 26).** Verification is asynchronous, but shutdown
     may wait for a running uninterruptible parse. Stronger cancellation/bounds
     require a separate compatibility-conscious design; no parser replacement is
     implied.
@@ -320,6 +327,65 @@ does not authorize a commit, push, tag or publication.
       queue; neither produced a test result, so they say nothing about the code.
     Not independently reproduced locally: the race is timing dependent, so the evidence is the
     CI log and the code path, not a failing local run.
+
+29. **Owner-directed batch, 2026-11-19.** Owner go-ahead for: parser leaks, compiler warnings,
+    bounded shutdown, an optional engine-ID field, and a real-collection check using the
+    owner's Extreme MIBs (`.../Extreme Networks/5520.9.4.1.0_mib/mibs`, 98 files, read only;
+    all work used a byte-identical copy, SHA-256 verified, with an isolated settings folder).
+    - **Compiler warnings: 0.** A clean Release build reported five distinct warnings; all are
+      fixed. SNMP++ `UdpAddress::format_output` and `TimeTicks::get_printable` now use bounded
+      `snprintf` (address text limited to 64 characters; the TimeTicks value is masked to its
+      32 wire bits, so LP64 and Windows format identically and the day count fits the buffer).
+      libsmi's `smiyyerror` takes `const char *` (the generated parser is untouched). A test
+      ignored the result of `QFile::open`; it now checks it. Output for valid values is
+      unchanged. Not changed: SNMP++ still renders the largest unsigned IPv6 scope IDs as
+      signed in printable text (item 12).
+    - **Parser leaks: reduced 78%, not eliminated.** Measured with a scratch harness that loads
+      the 98 Extreme MIBs, calls `smiExit`, and does it again (a parser reset): 293,694 bytes in
+      7,032 allocations before, 64,408 bytes in 2,910 after, no crash or double free. Two safe
+      changes: `smiGuessModuleLanguage` freed nothing it allocated, and the pending
+      (forward-referenced) node trees that `loadModule` deliberately leaves alive for the
+      session (Objects still point into them; see the comment in `smi-data.c`) are now
+      recorded on the handle and freed by `smiExit` after everything that could refer to them.
+      Nothing is freed earlier than before. Identical results: the full node/OID/type dump
+      (19,816 lines) and all diagnostics are byte-identical before and after. What remains:
+      about 90% is token strings the generated scanner/parser allocate and some grammar paths
+      never free (`scanner-smi.l` identifiers), and about 6 KB of range lists in
+      `parser-smi.y`. Fixing those means per-rule edits to the generated parser, which the
+      project rules reserve for a deliberate, separately reviewed change; they were not made.
+    - **Bounded shutdown.** The MIB engine can now be given a deadline
+      (`MibEngine::armShutdownDeadline`). `Snmpb::Shutdown` arms 5 seconds; every wait for the
+      parser (`drain`, `shutdown`) then stops waiting at the deadline. If a parse is still
+      running, `main()` flushes settings and the log after every `aboutToQuit` handler has run
+      and ends the process (`_Exit`), because normal teardown would free state the parse is
+      using. Tests: `snmpb.mib-engine` covers the timed drain and a child process whose parse
+      never finishes. The forced-exit step in `main()` is a few lines and is covered by that
+      child-process mechanism, not by launching the whole application with a stuck parse.
+    - **Optional Device engine ID** on SNMPv3 credentials: see
+      [usm-credential-management-v2.md](usm-credential-management-v2.md).
+    - **Real-collection check (closes the "not done" in item 25).** The application itself,
+      offscreen with isolated settings, against the copy of the Extreme MIBs, with the
+      Extreme automatic profile selected: environment **Complete, 110 modules loaded, 0
+      failed, 0 errors, 2 warnings, 514 notes**; 249 smoke checks passed, 0 failed; 72 s and
+      392 MB peak on a Debug build. The two warnings are vendor data the app tolerates:
+      `def.my` (a helper file that is not a MIB) and a parse error at `rfc4293.mib` line 2548.
+      A first run that left the default Standards profile selected reported Partial
+      (7 loaded, 7 not in the Library), because the copy deliberately holds no Standards
+      folder; that says nothing about the Extreme MIBs.
+    - **Sanitizer limits (environment, not defects).** Debug suite 77/77, five libsmi goldens
+      5/5, `git diff --check` clean. Under AddressSanitizer (leak detection off, as documented)
+      the whole suite passed except four tests that timed out: `launch-smoke` and two
+      `startup-close-*` timed out while a Release build shared the 4 cores and passed when
+      rerun alone; `tolerance-scenarios` exceeds its 1800 s cap under the sanitizer even
+      alone (21 scenarios passed first, with no sanitizer error). The live scenario alone
+      has a hardcoded 120 s cap: with the cap raised it passes in 156 s on this change and in
+      159 s on the previous commit (292 checks vs 297, the difference being the five new
+      engine-ID checks), so the overrun is not new. Not done: the scenarios after the live one
+      have not run to completion under the sanitizer (they pass in Debug); the sanitizer caps
+      in `app/CMakeLists.txt` and `RunSnmpbToleranceScenarios.cmake` are tuned for a faster
+      machine and would need raising to make that run routine. Strict leak detection still
+      fails the five smilint goldens (they leak scanner strings, 631 bytes for IF-MIB now,
+      1,173 before), as before.
 
 ## Optional or conditional decisions, not scheduled commitments
 

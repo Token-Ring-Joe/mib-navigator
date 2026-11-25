@@ -32,6 +32,7 @@
 #include <QDir>
 #include <QFile>
 #include <QSettings>
+#include <cstdlib>
 #include <QTextStream>
 #include <QTimer>
 #include <QClipboard>
@@ -3089,6 +3090,33 @@ int main( int argc, char ** argv )
                           remaining->privProtocol == SNMP_PRIVPROTOCOL_NONE,
                           "deleting a secondary variant removes its learned notification keys");
                     notificationUsm->free_user(remaining); added.removeAll(second);
+                    {
+                        // A credential with a device engine ID becomes that device's exact entry in the
+                        // live notification USM, and is removed again with the credential.
+                        auto *usmService = snmpb.UsmCredentials();
+                        const auto committed = usmService->records();
+                        UsmCredentialRecord bound = usmService->createWorkingRecord("engine-bound-user");
+                        bound.displayName = "Engine bound"; bound.authProtocol = SNMP_AUTHPROTOCOL_HMACSHA;
+                        bound.authSecret = CredentialSecret("bound-auth-secret");
+                        bound.engineId = QByteArray::fromHex("80001f8880aabbccdd");
+                        auto withBound = committed; withBound.append(bound);
+                        const OctetStr boundEngine(reinterpret_cast<const unsigned char *>(bound.engineId.constData()),
+                                                   bound.engineId.size());
+                        check(usmService->saveWorkingCopy(withBound), "a credential with an engine ID saves");
+                        usmService->applyCommitted(withBound);
+                        auto *exact = notificationUsm->get_user(boundEngine, OctetStr("engine-bound-user"));
+                        check(exact && exact->authProtocol == SNMP_AUTHPROTOCOL_HMACSHA,
+                              "a device-bound credential is the exact notification entry for its device");
+                        if (exact) notificationUsm->free_user(exact);
+                        auto *stranger = notificationUsm->get_user(OctetStr("some-other-engine-id"), OctetStr("engine-bound-user"));
+                        check(!stranger, "a device-bound credential is not offered to other devices");
+                        if (stranger) notificationUsm->free_user(stranger);
+                        check(usmService->saveWorkingCopy(committed), "the engine-bound test credential is removed");
+                        usmService->applyCommitted(committed);
+                        auto *gone = notificationUsm->get_user(boundEngine, OctetStr("engine-bound-user"));
+                        check(!gone, "removing a device-bound credential removes its notification entry");
+                        if (gone) notificationUsm->free_user(gone);
+                    }
                     // Restore the fixture through the same Delete and OK workflow.
                     for (const auto &id : added) {
                         for (int row = 0; row < list->count(); ++row)
@@ -3321,6 +3349,15 @@ int main( int argc, char ** argv )
     const int result = app.exec();
     DiagnosticLogger::log("Shutdown",
                           QStringLiteral("event loop returned code=%1").arg(result), false);
+    if (MibEngine::instance().shutdownTimedOut()) {
+        // A MIB parse is still running and cannot be interrupted. Normal teardown would free the
+        // parser state it is using (and the destructors wait for it), so leave now: every
+        // aboutToQuit save has run, so flush the settings and the log and exit.
+        // The operating system reclaims everything else.
+        QSettings().sync();
+        DiagnosticLogger::shutdown();
+        std::_Exit(result);
+    }
     DiagnosticLogger::shutdown();
     return result;
 }

@@ -2,6 +2,7 @@
 #include "snmprequestconfig.h"
 #include "usmcredentialservice.h"
 #include "usmcredentialcoordinator.h"
+#include "usmengineid.h"
 
 #include <QCoreApplication>
 #include <QFile>
@@ -264,6 +265,56 @@ int main(int argc, char **argv)
                     !corrupt.saveWorkingCopy(records), "corrupt store is reported and cannot be overwritten");
         UsmCredentialRepository missingParent(dir.filePath("missing/path/identities.ini"));
         ok &= check(!missingParent.saveRecords(records), "persistence failure is surfaced");
+    }
+
+    // Optional device engine ID: validated, persisted, and never able to damage an older-format file.
+    {
+        UsmCredentialRepository repository(dir.filePath("engine.ini"));
+        UsmCredentialService service({}, repository);
+        auto first = service.createWorkingRecord("lab-user"); first.displayName = "Device A";
+        first.authProtocol = 2; first.authSecret = CredentialSecret("auth-a");
+        auto second = service.createWorkingRecord("lab-user"); second.displayName = "Device B";
+        second.authProtocol = 2; second.authSecret = CredentialSecret("auth-b");
+        ok &= check(UsmEngineId::isValid(QByteArray()) && !UsmEngineId::isValid(QByteArray(4, 'x')) &&
+                    UsmEngineId::isValid(QByteArray(5, 'x')) && UsmEngineId::isValid(QByteArray(32, 'x')) &&
+                    !UsmEngineId::isValid(QByteArray(33, 'x')), "engine ID length rule is 5 to 32 bytes, or none");
+        QByteArray parsed; QString why;
+        ok &= check(UsmEngineId::parse(" 0x80:00-1F 88.80ab ", &parsed, &why) && parsed == QByteArray::fromHex("80001f8880ab") &&
+                    UsmEngineId::parse("", &parsed) && parsed.isEmpty() &&
+                    !UsmEngineId::parse("80001g8880", &parsed, &why) && !why.isEmpty() && parsed.isEmpty() &&
+                    !UsmEngineId::parse("8000", &parsed, &why) && !UsmEngineId::parse("80001f888", &parsed, &why),
+                    "engine ID text accepts common spellings and rejects digits, odd length and bad size");
+        ok &= check(UsmEngineId::format(QByteArray::fromHex("80001F88")) == "80001f88", "engine ID is displayed in lower-case hex");
+        // Unbound pair is fine; an identical bound pair is ambiguous; a different device is fine.
+        QList<UsmCredentialRecord> records{first, second};
+        ok &= check(service.validateWorkingCopy(records), "same username without engine IDs stays valid");
+        records[0].engineId = QByteArray::fromHex("8000000903001122334455");
+        records[1].engineId = records[0].engineId;
+        ok &= check(!service.validateWorkingCopy(records), "same username and same engine ID is ambiguous and refused");
+        records[1].engineId = QByteArray::fromHex("8000000903001122334466");
+        ok &= check(service.validateWorkingCopy(records), "same username on different engine IDs is valid");
+        records[1].engineId = QByteArray(3, 'x');
+        ok &= check(!service.validateWorkingCopy(records), "an engine ID of the wrong size is refused");
+        records[1].engineId = QByteArray::fromHex("8000000903001122334466");
+        ok &= check(service.saveWorkingCopy(records), "engine IDs save");
+        UsmCredentialService restart({}, repository);
+        ok &= check(restart.records() == records && restart.records()[0].engineId == records[0].engineId,
+                    "engine IDs survive a restart and take part in record equality");
+        auto changed = records; changed[0].engineId.clear();
+        ok &= check(!(changed == records), "records that differ only by engine ID are different");
+        // A damaged value in the file is refused and the file is left alone, like any other damage.
+        QFile file(repository.recordPath());
+        ok &= check(file.open(QIODevice::ReadOnly), "engine fixture opens");
+        const QByteArray text = file.readAll(); file.close();
+        ok &= check(text.contains("8000000903001122334455"), "the file carries the engine ID as hex");
+        QByteArray damaged = text; damaged.replace("8000000903001122334455", "not-hex");
+        ok &= check(file.open(QIODevice::WriteOnly) && file.write(damaged) == damaged.size(), "damage fixture written");
+        file.close();
+        UsmCredentialService damagedService({}, repository);
+        ok &= check(!damagedService.storageError().isEmpty() && damagedService.records().isEmpty(),
+                    "a file with an unusable engine ID is reported, not guessed at");
+        ok &= check(file.open(QIODevice::ReadOnly) && file.readAll() == damaged, "the damaged file was left untouched");
+        file.close();
     }
 
     return ok ? 0 : 1;

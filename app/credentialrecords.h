@@ -49,6 +49,10 @@ struct UsmCredentialRecord
     CredentialSecret authSecret;
     int privacyProtocol = UsmProtocolNone;
     CredentialSecret privacySecret;
+    // Optional. The raw SnmpEngineID (5-32 bytes) of the one device this credential is for. Empty
+    // means "any device". Only incoming notifications use it: it makes this credential exact for
+    // that sender instead of one candidate among same-name credentials. Not a secret.
+    QByteArray engineId;
 };
 
 inline bool operator==(const CommunityCredentialRecord &a, const CommunityCredentialRecord &b)
@@ -60,7 +64,8 @@ inline bool operator==(const UsmCredentialRecord &a, const UsmCredentialRecord &
 {
     return a.identity.credentialId == b.identity.credentialId && a.displayName == b.displayName &&
         a.securityName == b.securityName && a.authProtocol == b.authProtocol &&
-        a.privacyProtocol == b.privacyProtocol && a.authSecret == b.authSecret && a.privacySecret == b.privacySecret;
+        a.privacyProtocol == b.privacyProtocol && a.authSecret == b.authSecret && a.privacySecret == b.privacySecret &&
+        a.engineId == b.engineId;
 }
 
 struct EffectiveCredentialValues

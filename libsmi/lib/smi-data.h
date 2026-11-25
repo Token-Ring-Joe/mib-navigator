@@ -324,6 +324,9 @@ typedef struct Handle {
     Module   	    *lastModulePtr;
     _YangNode       *firstYangModulePtr; /* List of YANG modules*/
     Node     	    *rootNodePtr;
+    /* Roots of the pending (forward referenced) node trees left by loaded modules, chained
+     * through their nextPtr. They stay alive while the handle lives and are freed with it. */
+    Node     	    *retainedPendingRootsPtr;
     Type     	    *typeOctetStringPtr;
     Type     	    *typeObjectIdentifierPtr;
     Type     	    *typeInteger32Ptr;

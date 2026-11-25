@@ -4579,7 +4579,24 @@ void smiFreeData()
 
     freeNodeTree(smiHandle->rootNodePtr);
     smiFree(smiHandle->rootNodePtr);
-    
+
+    /*
+     * Pending node trees left by loaded modules (see loadModule()). Everything that could
+     * reference their nodes (modules, objects, the main node tree) has been freed above, so it
+     * is safe to release them now.
+     */
+    {
+	Node *pendingRootPtr, *nextPendingRootPtr;
+
+	for (pendingRootPtr = smiHandle->retainedPendingRootsPtr; pendingRootPtr;
+	     pendingRootPtr = nextPendingRootPtr) {
+	    nextPendingRootPtr = pendingRootPtr->nextPtr;
+	    freeNodeTree(pendingRootPtr);
+	    smiFree(pendingRootPtr);
+	}
+	smiHandle->retainedPendingRootsPtr = NULL;
+    }
+
     return;
 }
 
@@ -4678,6 +4695,12 @@ Module *loadModule(const char *modulename, Parser *parserPtr)
 	freeNodeTree(parser.pendingNodePtr);
 	smiFree(parser.pendingNodePtr);
 #endif
+	/*
+	 * Objects may still reference these nodes, so they cannot be freed here. Keep the root on
+	 * the handle instead; smiFreeData() releases it after everything that could refer to it.
+	 */
+	parser.pendingNodePtr->nextPtr = smiHandle->retainedPendingRootsPtr;
+	smiHandle->retainedPendingRootsPtr = parser.pendingNodePtr;
 	smiLeaveLexRecursion();
 	smiDepth--;
 	fclose(parser.file);
@@ -4733,6 +4756,9 @@ Module *loadModule(const char *modulename, Parser *parserPtr)
 	freeNodeTree(parser.pendingNodePtr);
 	smiFree(parser.pendingNodePtr);
 #endif
+	/* See the SMIv2 branch above: keep the pending root until the handle is freed. */
+	parser.pendingNodePtr->nextPtr = smiHandle->retainedPendingRootsPtr;
+	smiHandle->retainedPendingRootsPtr = parser.pendingNodePtr;
 	smingLeaveLexRecursion();
 	smiDepth--;
 	fclose(parser.file);

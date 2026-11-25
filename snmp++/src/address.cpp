@@ -1830,12 +1830,14 @@ void UdpAddress::format_output() const
   if (valid_flag)
   {
     if (ip_version == version_ipv4)
-      sprintf((char *) output_buffer,"%s%c%d",
+      // The address text is limited to 64 characters (the longest IPv6 address with a scope is
+      // about 55), so address, separator and a 5-digit port always fit in output_buffer.
+      snprintf((char *) output_buffer, sizeof(output_buffer), "%.64s%c%d",
                IpAddress::get_printable(),
                '/',//TODO:look for problems in old code and change to "sep"
                get_port() );
       else
-        sprintf((char *) output_buffer,"[%s]%c%d",
+        snprintf((char *) output_buffer, sizeof(output_buffer), "[%.64s]%c%d",
                  IpAddress::get_printable(),
                  '/',//TODO:look for problems in old code and change to "sep"
                  get_port() );

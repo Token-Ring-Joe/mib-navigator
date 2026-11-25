@@ -2,6 +2,7 @@
 #include "credentialsdialog.h"
 #include "communitycredentialservice.h"
 #include "usmcredentialservice.h"
+#include "usmengineid.h"
 #include "snmp_pp/snmp_pp.h"
 #include <QListWidget>
 #include <QApplication>
@@ -131,7 +132,13 @@ CredentialsDialog::CredentialsDialog(CommunityCredentialService *community,
     userForm->addRow(tr("USM username"), securityName);
     userForm->addRow(tr("Authentication"), authProtocol); userForm->addRow(tr("Authentication secret"), authSecret);
     userForm->addRow(tr("Privacy"), privacyProtocol); userForm->addRow(tr("Privacy secret"), privacySecret);
-    auto *hint = new QLabel(tr("The display name identifies this saved credential. The USM username is sent to the device and may be shared by several credentials."), userPage);
+    engineId = new QLineEdit(userPage); engineId->setObjectName("CredentialEngineId");
+    engineId->setPlaceholderText(tr("Optional, for notifications from one device"));
+    engineId->setToolTip(tr("The SNMP engine ID of one device, in hexadecimal (5 to 32 bytes; 0x, colons and spaces are accepted). "
+                            "Leave empty for a credential that applies to any device. When several credentials share a USM username, "
+                            "setting this makes incoming traps and informs from that device use this credential from the first message."));
+    userForm->addRow(tr("Device engine ID"), engineId);
+    auto *hint = new QLabel(tr("The display name identifies this saved credential. The USM username is sent to the device and may be shared by several credentials. The device engine ID is optional and only affects incoming notifications."), userPage);
     hint->setWordWrap(true); userForm->addRow(hint); pages->addWidget(userPage);
     for (auto *form : {common, communityForm, userForm}) {
         form->setContentsMargins(0, 0, 0, 0);
@@ -163,7 +170,8 @@ CredentialsDialog::CredentialsDialog(CommunityCredentialService *community,
 
 void CredentialsDialog::prepare(Tab preferred)
 {
-    currentId.clear(); communities = communityService->records(); users = userService->records();
+    currentId.clear(); invalidEngineIds.clear();
+    communities = communityService->records(); users = userService->records();
     QString selected;
     if (preferred == Users && !users.isEmpty()) selected = users.first().identity.credentialId;
     else if (!communities.isEmpty()) selected = communities.first().identity.credentialId;
@@ -199,6 +207,9 @@ void CredentialsDialog::storeFields()
         r.authProtocol = authProtocol->currentData().toInt(); r.privacyProtocol = privacyProtocol->currentData().toInt();
         r.authSecret = CredentialSecret(authSecret->text().toLatin1());
         r.privacySecret = CredentialSecret(privacySecret->text().toLatin1());
+        QByteArray parsed;
+        if (UsmEngineId::parse(engineId->text(), &parsed)) { r.engineId = parsed; invalidEngineIds.remove(currentId); }
+        else invalidEngineIds.insert(currentId, engineId->text());
     }
     for (int row = 0; row < list->count(); ++row) {
         auto *item = list->item(row);
@@ -236,6 +247,8 @@ void CredentialsDialog::selectRow()
             select(authProtocol, r.authProtocol); select(privacyProtocol, r.privacyProtocol);
             authSecret->setText(QString::fromLatin1(r.authSecret.bytes()));
             privacySecret->setText(QString::fromLatin1(r.privacySecret.bytes())); versionLabel->setText(tr("SNMPv3"));
+            engineId->setText(invalidEngineIds.contains(currentId) ? invalidEngineIds.value(currentId)
+                                                                    : UsmEngineId::format(r.engineId));
         }
         updateSecurityFields();
     }
@@ -300,6 +313,8 @@ void CredentialsDialog::duplicateCredential()
         }
     } else for (auto r : users) if (r.identity.credentialId == currentId) {
         r.identity.credentialId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        // Two credentials for one user on one device would be ambiguous, so a copy starts unbound.
+        r.engineId.clear();
         r.displayName = uniqueName(r.displayName + tr(" copy")); id = r.identity.credentialId; users.append(r); break;
     }
     rebuildList(id, currentKind);
@@ -310,6 +325,7 @@ void CredentialsDialog::deleteCredential()
         for (int i = communities.size()-1; i >= 0; --i) if (communities[i].identity.credentialId == currentId) communities.removeAt(i);
     if (currentKind == CredentialKind::Usm)
         for (int i = users.size()-1; i >= 0; --i) if (users[i].identity.credentialId == currentId) users.removeAt(i);
+    invalidEngineIds.remove(currentId);
     rebuildList();
 }
 
@@ -318,12 +334,18 @@ bool CredentialsDialog::applyChanges()
     storeFields(); auto *service = userService;
     if (!service->storageError().isEmpty() || !communityService->storageError().isEmpty()) return false;
     const auto beforeUsers = service->records(); const auto beforeCommunities = communityService->records();
-    const bool usersChanged = users != beforeUsers || userService->needsMigration();
+    // An engine ID the owner typed that is not usable is not stored in the record, so it must
+    // count as a pending change or Save would report success and silently drop it.
+    const bool usersChanged = users != beforeUsers || userService->needsMigration() || !invalidEngineIds.isEmpty();
     const bool communitiesChanged = communities != beforeCommunities;
     if (!usersChanged && !communitiesChanged) return true;
     const auto error = [this](const QString &text) { status->setText(text); return false; };
+    if (usersChanged) for (const auto &r : users)
+        if (invalidEngineIds.contains(r.identity.credentialId))
+            return error(tr("The device engine ID of \"%1\" is not valid. Use 5 to 32 bytes in hexadecimal, or leave it empty.")
+                             .arg(r.displayName));
     if (usersChanged && !service->validateWorkingCopy(users))
-        return error(tr("Each SNMPv3 credential needs a display name and USM username. Authentication and privacy require their secrets; privacy also requires authentication."));
+        return error(tr("Each SNMPv3 credential needs a display name and USM username. Authentication and privacy require their secrets; privacy also requires authentication. Two credentials cannot have the same USM username and device engine ID."));
     for (const auto &r : communities) {
         bool changed = true;
         for (const auto &old : beforeCommunities) if (old == r) { changed = false; break; }
